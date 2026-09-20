@@ -8,7 +8,9 @@ import { cmdDelete } from "../scripts/lib/commands/delete.ts";
 // Bâti comme `fleetCtx` dans tests/containers.test.ts : un seul `lxc list`,
 // puis les quatre clés user.forge.{repo,mode,role,task} par container.
 function fleetCtx(opts: {
-  tasks?: Record<string, string>; template?: string; dirty?: boolean; extra?: ExecRule[];
+  tasks?: Record<string, string>; template?: string; dirty?: boolean;
+  legacy?: string;               // statut d'un container hérité (aucun user.forge.role)
+  extra?: ExecRule[];
 }) {
   const ownerRepo = "o/r";
   const containers: { name: string; status: string; role: string; task: string }[] = [];
@@ -17,6 +19,9 @@ function fleetCtx(opts: {
   }
   if (opts.template) {
     containers.push({ name: "agent-o-r", status: opts.template, role: "template", task: "" });
+  }
+  if (opts.legacy) {
+    containers.push({ name: "agent-o-r", status: opts.legacy, role: "", task: "" });
   }
 
   const list = JSON.stringify(containers.map((c) => ({ name: c.name, status: c.status })));
@@ -81,6 +86,31 @@ test("delete runs the WIP pre-flight across every worktree unless forced", async
   const ctx = fleetCtx({ tasks: { feat: "Running" }, dirty: true });
   await assert.rejects(() => cmdDelete(ctx, "o/r", false), /uncommitted changes/);
   assert.ok(!ctx.calls.some((c) => c[1] === "delete"));
+});
+
+// Le pré-vol WIP (wip.ts) veut une branche agent/* propre ; ici seul le choix
+// du git host est testé, donc on répond une branche plausible.
+const BRANCH_OK: ExecRule[] = [{ match: "rev-parse --abbrev-ref HEAD", stdout: "agent/cli\n" }];
+
+// La migration documentée (README, message de `forge list`) est « forge token
+// import → forge delete → forge start ». Son étape du milieu passait par
+// acquireGitHost, qui ne savait sélectionner qu'un task ou un template : sur
+// un repo pas encore migré, `forge delete` échouait donc sur « no running
+// container and no template » — deux commandes se contredisant.
+test("delete runs its WIP pre-flight inside a legacy container", async () => {
+  const ctx = fleetCtx({ legacy: "Running", extra: BRANCH_OK });
+  assert.equal(await cmdDelete(ctx, "o/r", false), 0);
+  const joined = ctx.calls.map((c) => c.join(" "));
+  assert.ok(joined.some((s) => s.includes("agent-o-r") && s.includes("status --porcelain")));
+  assert.ok(joined.includes("lxc delete agent-o-r --force"));
+});
+
+test("a stopped legacy container is woken for the pre-flight, then stopped again", async () => {
+  const ctx = fleetCtx({ legacy: "Stopped", extra: BRANCH_OK });
+  assert.equal(await cmdDelete(ctx, "o/r", false), 0);
+  const joined = ctx.calls.map((c) => c.join(" "));
+  assert.ok(joined.includes("lxc start agent-o-r"));
+  assert.ok(joined.includes("lxc stop agent-o-r"));
 });
 
 test("delete says the host mount survives", async () => {

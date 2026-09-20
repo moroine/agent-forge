@@ -64,6 +64,32 @@ test("checkNameCollision refuses a container belonging to another repo", async (
   await assert.rejects(() => checkNameCollision(ctx, "agent-x", "o/r"), /different repo/);
 });
 
+// Le repo correspond, donc les deux garde-fous précédents laissaient passer —
+// et `lxc launch` mourait ensuite sur un « instance already exists » brut, qui
+// ne dit rien de la migration à faire.
+test("checkNameCollision refuses a legacy container squatting the name", async () => {
+  const ctx = fakeContext({
+    rules: [
+      { match: "lxc info", code: 0 },
+      { match: "user.forge.repo", stdout: "o/r" },
+      { match: "user.forge.role", stdout: "" },
+    ],
+  });
+  await assert.rejects(() => checkNameCollision(ctx, "agent-o-r", "o/r"), /legacy forge container/);
+  await assert.rejects(() => checkNameCollision(ctx, "agent-o-r", "o/r"), /forge delete/);
+});
+
+test("checkNameCollision accepts a container of the same repo that carries a role", async () => {
+  const ctx = fakeContext({
+    rules: [
+      { match: "lxc info", code: 0 },
+      { match: "user.forge.repo", stdout: "o/r" },
+      { match: "user.forge.role", stdout: "task" },
+    ],
+  });
+  await checkNameCollision(ctx, "agent-o-r-feat", "o/r");
+});
+
 test("checkNameCollision accepts a not-yet-existing container", async () => {
   const ctx = fakeContext({ rules: [{ match: "lxc info", code: 1 }] });
   await checkNameCollision(ctx, "agent-x", "o/r");

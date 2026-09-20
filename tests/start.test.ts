@@ -194,6 +194,25 @@ test("a task name that collapses onto the template's own name is refused", async
   assert.ok(!ctx.calls.some((c) => c.join(" ").includes("lxc copy")));
 });
 
+// Container HÉRITÉ occupant déjà le nom du template : checkNameCollision
+// laissait passer (le repo correspond) et `lxc launch` mourait ensuite sur un
+// « instance already exists » brut, sans un mot sur la migration à faire.
+test("a legacy container holding the template's name is refused with a migration hint", async () => {
+  const ctx = fakeContext({
+    rules: [
+      { match: "lxc list", stdout: JSON.stringify([{ name: TEMPLATE, status: "Stopped" }]) },
+      { match: `config get ${TEMPLATE} user.forge.repo`, stdout: OWNER_REPO },
+      { match: `config get ${TEMPLATE} user.forge.mode`, stdout: "autonomous" },
+      { match: `config get ${TEMPLATE} user.forge.role`, stdout: "" },
+      { match: `config get ${TEMPLATE} user.forge.task`, stdout: "" },
+      { match: "lxc info", code: 0 },
+    ],
+  });
+  await assert.rejects(() => cmdStart(ctx, OWNER_REPO, "feat"), /legacy forge container/);
+  await assert.rejects(() => cmdStart(ctx, OWNER_REPO, "feat"), /forge delete/);
+  assert.ok(!ctx.calls.some((c) => c.join(" ").startsWith("lxc launch")));
+});
+
 // --- Comportements conservés de l'ancien modèle, adaptés au nouveau ---
 
 test("a supervised container skips the fetch", async () => {

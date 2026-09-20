@@ -74,7 +74,10 @@ export async function describeContainers(ctx: Context): Promise<ForgeContainer[]
   return out;
 }
 
-const sameRepo = (c: ForgeContainer, ownerRepo: string) =>
+// Exporté : la comparaison repo est insensible à la casse PARTOUT (githost,
+// list, delete, stop, token). Elle était réécrite à la main à chaque site,
+// dont un — `forge list` — l'avait perdue au passage.
+export const sameRepo = (c: ForgeContainer, ownerRepo: string): boolean =>
   c.repo.toLowerCase() === ownerRepo.toLowerCase();
 
 export async function templateForRepo(ctx: Context, ownerRepo: string): Promise<ForgeContainer | null> {
@@ -147,6 +150,17 @@ export async function checkNameCollision(ctx: Context, container: string, ownerR
   if (existing.toLowerCase() !== ownerRepo.toLowerCase()) {
     throw new ForgeError(
       `container ${container} already exists for a different repo (${existing}), refusing to reuse it for ${ownerRepo}.`,
+    );
+  }
+  // Même repo, mais container du modèle d'avant (aucun user.forge.role) : le
+  // nom que le template réclame est déjà pris. Sans ce garde-fou, `forge
+  // start` passait ici (le repo correspond bien) pour mourir ensuite dans
+  // `lxc launch` sur un « instance already exists » brut, qui ne dit rien de
+  // la migration à faire.
+  if (!(await configGet(ctx, container, "user.forge.role"))) {
+    throw new ForgeError(
+      `container ${container} is a legacy forge container for ${ownerRepo} (no user.forge.role) and already holds the name the template needs. ` +
+      `Migrate it first: forge token import ${ownerRepo}, then forge delete ${ownerRepo}, then forge start again.`,
     );
   }
 }

@@ -62,6 +62,38 @@ test("a running template is used without being stopped afterwards", async () => 
   assert.ok(!ctx.calls.some((c) => c[1] === "stop"));
 });
 
+// Un container HÉRITÉ (user.forge.repo, pas de user.forge.role) monte le même
+// /workspace : il fait tourner git pour ce repo aussi bien qu'un autre.
+// acquireGitHost ne le sélectionnait jamais, si bien que `forge delete` — la
+// commande que README et `forge list` prescrivent pour migrer un tel
+// container — mourait sur son propre pré-vol WIP.
+test("a running legacy container runs git when nothing else can", async () => {
+  const ctx = ctxFor([{ name: "agent-o-r", status: "Running", role: "", task: "" }]);
+  const host = await acquireGitHost(ctx, "o/r");
+  assert.equal(host.name, "agent-o-r");
+  await host.release();
+  assert.ok(!ctx.calls.some((c) => c[1] === "start"));
+  assert.ok(!ctx.calls.some((c) => c[1] === "stop"));
+});
+
+test("a stopped legacy container is woken, then stopped again on release", async () => {
+  const ctx = ctxFor([{ name: "agent-o-r", status: "Stopped", role: "", task: "" }]);
+  const host = await acquireGitHost(ctx, "o/r");
+  assert.equal(host.name, "agent-o-r");
+  assert.ok(ctx.calls.some((c) => c.join(" ") === "lxc start agent-o-r"));
+  await host.release();
+  assert.ok(ctx.calls.some((c) => c.join(" ") === "lxc stop agent-o-r"));
+});
+
+test("the template is preferred over a legacy container when both are stopped", async () => {
+  const ctx = ctxFor([
+    { name: "agent-o-r-old", status: "Stopped", role: "", task: "" },
+    { name: "agent-o-r", status: "Stopped", role: "template", task: "" },
+  ]);
+  const host = await acquireGitHost(ctx, "o/r");
+  assert.equal(host.name, "agent-o-r");
+});
+
 test("a repo with no container at all is a ForgeError", async () => {
   await assert.rejects(() => acquireGitHost(ctxFor([]), "o/r"), ForgeError);
 });
