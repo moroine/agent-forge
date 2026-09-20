@@ -3,8 +3,11 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import { ForgeError } from "../scripts/lib/context.ts";
 import {
-  listForgeContainers, forgeRepos, containerForRepo, requireContainerForRepo,
+  listForgeContainers, forgeRepos,
   checkNameCollision, isRunning, buildStatus, baseImageFor, latestImageCommitFor,
+  ROLE_TASK, ROLE_TEMPLATE, templateContainerName, taskContainerName,
+  describeContainers, templateForRepo, requireTemplateForRepo,
+  taskContainersForRepo, containerForTask, requireContainerForTask, isLegacy,
 } from "../scripts/lib/containers.ts";
 
 const LIST = JSON.stringify([
@@ -45,17 +48,6 @@ test("forgeRepos reads config keys only, never lxc exec", async () => {
 test("forgeRepos skips a container with no repo metadata", async () => {
   const ctx = ctxWith({ "agent-moroine-agent-forge": "moroine/agent-forge" });
   assert.deepEqual(await forgeRepos(ctx), ["moroine/agent-forge"]);
-});
-
-test("containerForRepo matches case-insensitively", async () => {
-  const ctx = ctxWith({ "agent-moroine-agent-forge": "moroine/agent-forge" });
-  assert.equal(await containerForRepo(ctx, "Moroine/Agent-Forge"), "agent-moroine-agent-forge");
-});
-
-test("requireContainerForRepo throws a ForgeError naming the repo", async () => {
-  const ctx = ctxWith({});
-  await assert.rejects(() => requireContainerForRepo(ctx, "nobody/nothing"), ForgeError);
-  await assert.rejects(() => requireContainerForRepo(ctx, "nobody/nothing"), /nobody\/nothing/);
 });
 
 test("checkNameCollision refuses a container with no forge metadata", async () => {
@@ -107,4 +99,111 @@ test("latestImageCommitFor reads the commit of the mode's base image", async () 
   });
   assert.equal(await latestImageCommitFor(ctx, "super"), "SUPERSHA");
   assert.equal(await latestImageCommitFor(ctx, "autonomous"), "BASESHA");
+});
+
+const FLEET = JSON.stringify([
+  { name: "agent-moroine-agent-forge", status: "Stopped" },
+  { name: "agent-moroine-agent-forge-cli", status: "Running" },
+  { name: "agent-moroine-agent-forge-api", status: "Stopped" },
+  { name: "agent-acme-widgets", status: "Stopped" },
+  { name: "agent-legacy-thing", status: "Running" },
+  { name: "unrelated-container", status: "Running" },
+]);
+
+function fleetCtx() {
+  const meta: Record<string, Record<string, string>> = {
+    "agent-moroine-agent-forge":     { repo: "moroine/agent-forge", mode: "super",      role: "template", task: "" },
+    "agent-moroine-agent-forge-cli": { repo: "moroine/agent-forge", mode: "super",      role: "task",     task: "cli" },
+    "agent-moroine-agent-forge-api": { repo: "moroine/agent-forge", mode: "super",      role: "task",     task: "api" },
+    "agent-acme-widgets":            { repo: "acme/widgets",        mode: "supervised", role: "template", task: "" },
+    "agent-legacy-thing":            { repo: "legacy/thing",        mode: "autonomous", role: "",         task: "" },
+  };
+  return fakeContext({
+    rules: [
+      { match: "lxc list", stdout: FLEET },
+      ...Object.entries(meta).flatMap(([name, m]) => [
+        { match: `config get ${name} user.forge.repo`, stdout: m.repo },
+        { match: `config get ${name} user.forge.mode`, stdout: m.mode },
+        { match: `config get ${name} user.forge.role`, stdout: m.role },
+        { match: `config get ${name} user.forge.task`, stdout: m.task },
+      ]),
+    ],
+  });
+}
+
+test("templateContainerName keeps today's repo-container name", () => {
+  assert.equal(templateContainerName("moroine/agent-forge"), "agent-moroine-agent-forge");
+});
+
+test("taskContainerName suffixes the task and sanitizes it", () => {
+  assert.equal(taskContainerName("moroine/agent-forge", "cli"), "agent-moroine-agent-forge-cli");
+  assert.equal(taskContainerName("Moroine/Agent_Forge", "Feat.A"), "agent-moroine-agent-forge-feat-a");
+});
+
+test("taskContainerName stays within LXD's 63 chars and never ends in a hyphen", () => {
+  const name = taskContainerName("someorg/a-very-long-repository-name-here", "an-extremely-long-task-name-again");
+  assert.ok(name.length <= 63, `got ${name.length}: ${name}`);
+  assert.ok(!name.endsWith("-"), name);
+  assert.match(name, /^[a-z0-9][a-z0-9-]*$/);
+});
+
+test("taskContainerName is deterministic and collision-resistant when truncated", () => {
+  const a = taskContainerName("someorg/a-very-long-repository-name-here", "an-extremely-long-task-name-again");
+  const b = taskContainerName("someorg/a-very-long-repository-name-here", "an-extremely-long-task-name-again");
+  const c = taskContainerName("someorg/a-very-long-repository-name-here", "an-extremely-long-task-name-agaix");
+  assert.equal(a, b);
+  assert.notEqual(a, c);
+});
+
+test("describeContainers reads the fleet with a single lxc list", async () => {
+  const ctx = fleetCtx();
+  const all = await describeContainers(ctx);
+  assert.deepEqual(all.map((c) => c.name), [
+    "agent-moroine-agent-forge", "agent-moroine-agent-forge-cli",
+    "agent-moroine-agent-forge-api", "agent-acme-widgets", "agent-legacy-thing",
+  ]);
+  assert.equal(ctx.calls.filter((c) => c[1] === "list").length, 1);
+});
+
+test("templateForRepo finds the role=template container, case-insensitively", async () => {
+  const ctx = fleetCtx();
+  const t = await templateForRepo(ctx, "Moroine/Agent-Forge");
+  assert.equal(t?.name, "agent-moroine-agent-forge");
+  assert.equal(t?.role, ROLE_TEMPLATE);
+  assert.equal(t?.mode, "super");
+});
+
+test("templateForRepo ignores a legacy container with no role", async () => {
+  assert.equal(await templateForRepo(fleetCtx(), "legacy/thing"), null);
+});
+
+test("requireTemplateForRepo names the repo and the fix", async () => {
+  await assert.rejects(() => requireTemplateForRepo(fleetCtx(), "nobody/nothing"), /nobody\/nothing/);
+  await assert.rejects(() => requireTemplateForRepo(fleetCtx(), "nobody/nothing"), /forge start/);
+});
+
+test("taskContainersForRepo returns only role=task, for that repo", async () => {
+  const tasks = await taskContainersForRepo(fleetCtx(), "moroine/agent-forge");
+  assert.deepEqual(tasks.map((c) => c.task), ["cli", "api"]);
+  assert.deepEqual(tasks.map((c) => c.status), ["Running", "Stopped"]);
+});
+
+test("containerForTask matches on user.forge.task, not on the name", async () => {
+  const c = await containerForTask(fleetCtx(), "moroine/agent-forge", "api");
+  assert.equal(c?.name, "agent-moroine-agent-forge-api");
+  assert.equal(await containerForTask(fleetCtx(), "moroine/agent-forge", "absent"), null);
+});
+
+test("requireContainerForTask throws a ForgeError naming the task", async () => {
+  await assert.rejects(() => requireContainerForTask(fleetCtx(), "moroine/agent-forge", "absent"), ForgeError);
+  await assert.rejects(() => requireContainerForTask(fleetCtx(), "moroine/agent-forge", "absent"), /absent/);
+});
+
+test("isLegacy flags a forge container with no role", async () => {
+  const all = await describeContainers(fleetCtx());
+  assert.deepEqual(all.filter(isLegacy).map((c) => c.name), ["agent-legacy-thing"]);
+});
+
+test("forgeRepos de-duplicates repos shared by several containers", async () => {
+  assert.deepEqual(await forgeRepos(fleetCtx()), ["moroine/agent-forge", "acme/widgets", "legacy/thing"]);
 });
