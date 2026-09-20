@@ -8,10 +8,7 @@ import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { configSet, execAsAgent } from "../lxd.ts";
 import { baseImageFor, latestImageCommitFor } from "../containers.ts";
-
-const home = () => process.env.FORGE_HOME ?? "/home/moroine";
-const repoDir = () => process.env.FORGE_REPO_DIR ?? join(home(), "agent-forge");
-const workspaces = () => process.env.FORGE_WORKSPACES ?? join(home(), "workspaces");
+import { home, repoDir, workspaces } from "../hostpaths.ts";
 
 export async function provisionContainer(ctx: Context, container: string, ownerRepo: string): Promise<void> {
   const credentials = join(home(), ".claude", ".credentials.json");
