@@ -27,12 +27,13 @@ Tu travailles sur `agent-forge`, un repo d'infrastructure pour déployer des age
 - En dehors du mode autonome (session interactive), demander confirmation avant tout push, même vers `agent/<branche>`
 
 ### Modèle container par tâche
-Depuis `specs/2026-09-20-container-per-task-design.md`, un container = une
-tâche. Le montage hôte reste par repo (clone et `.git` partagés) ; chaque
-tâche est une copie du container **template** (`user.forge.role=template`),
-toujours stoppé. Les caches npm/pnpm vivent dans `/workspace/.forge-cache/` —
-dans le montage du repo, seul endroit où les hardlinks pnpm survivent
-(`EXDEV`) : ne pas les déplacer vers un device dédié.
+Depuis `docs/superpowers/specs/2026-09-20-container-per-task-design.md`, un
+container = une tâche. Le montage hôte reste par repo (clone et `.git`
+partagés) ; chaque tâche est une copie du container **template**
+(`user.forge.role=template`), toujours stoppé. Les caches npm/pnpm vivent
+dans `/workspace/.forge-cache/` — dans le montage du repo, seul endroit où
+les hardlinks pnpm survivent (`EXDEV`) : ne pas les déplacer vers un device
+dédié.
 
 ### Mode super (self-hosting)
 `super` est un troisième mode container (à côté d'`autonomous`/`supervised`),
