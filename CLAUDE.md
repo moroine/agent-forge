@@ -26,6 +26,14 @@ Tu travailles sur `agent-forge`, un repo d'infrastructure pour déployer des age
 - En mode autonome (permission-mode `auto` — que ce soit cette session ou un container provisionné par `forge start`) : push autorisé uniquement vers `agent/<branche>` (`git push -u origin agent/<branche>`), puis ouverture d'une PR avec `gh pr create --base main`. Jamais de merge automatique de la PR — elle est revue et mergée par un humain. C'est le même flux que le "Autonomous PR flow" documenté dans `README.md`.
 - En dehors du mode autonome (session interactive), demander confirmation avant tout push, même vers `agent/<branche>`
 
+### Modèle container par tâche
+Depuis `specs/2026-09-20-container-per-task-design.md`, un container = une
+tâche. Le montage hôte reste par repo (clone et `.git` partagés) ; chaque
+tâche est une copie du container **template** (`user.forge.role=template`),
+toujours stoppé. Les caches npm/pnpm vivent dans `/workspace/.forge-cache/` —
+dans le montage du repo, seul endroit où les hardlinks pnpm survivent
+(`EXDEV`) : ne pas les déplacer vers un device dédié.
+
 ### Mode super (self-hosting)
 `super` est un troisième mode container (à côté d'`autonomous`/`supervised`),
 sélectionnable au `forge start` via `[u]`. Il embarque un LXD imbriqué pour

@@ -55,6 +55,12 @@ assert_not_contains 'fetch-only credential'
 assert_contains 'forge image build super'
 assert_contains 'agent-super'
 assert_contains 'nested LXD'
+assert_contains 'forge template rebuild'
+assert_contains 'forge token'
+assert_contains 'forge claude update'
+assert_contains '.forge-cache'
+assert_contains 'user.forge.role'
+assert_not_contains 'forge stop <owner/repo> [--force]'
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

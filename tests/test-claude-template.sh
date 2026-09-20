@@ -61,6 +61,9 @@ assert_line_before '## Navigateur' '## Périmètre'
 assert_not_contains 'next-task'
 assert_contains '.trees/'
 assert_contains 'worktree'
+assert_contains 'ton propre container'
+assert_contains '/workspace/.forge-cache'
+assert_not_contains 'Plusieurs tâches peuvent tourner en parallèle, chacune dans son worktree'
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
