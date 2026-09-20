@@ -1,9 +1,8 @@
 // scripts/lib/commands/claude.ts
 // forge claude update [<version>] | list
-import { mkdirSync } from "node:fs";
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
-import { currentVersion, installArgv, listVersions, switchCurrent, versionDir } from "../claude-dist.ts";
+import { currentVersion, installArgv, listVersions, switchCurrent } from "../claude-dist.ts";
 
 const USAGE = "Usage: forge claude update [<version>] | list";
 const PACKAGE = "@anthropic-ai/claude-code";
@@ -30,11 +29,6 @@ export async function cmdClaude(ctx: Context, sub: string | undefined, version?:
   // Interpolée dans un chemin et dans un spec npm : même discipline que
   // validate.ts pour les noms de tâche.
   if (!VERSION.test(target)) throw new ForgeError(`version must look like a semver, got: ${target}`);
-
-  // npm crée --prefix récursivement en usage réel ; on le fait nous-mêmes ici
-  // pour que le répertoire existe déjà au moment du switchCurrent qui suit
-  // (le contexte scripté des tests ne lance jamais réellement npm).
-  mkdirSync(versionDir(target), { recursive: true });
 
   ctx.out(`Installing ${PACKAGE}@${target}...`);
   await mustSucceed("npm install", ctx.exec(installArgv(target)));
