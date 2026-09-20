@@ -4,8 +4,9 @@
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
-import { requireContainerForRepo } from "../containers.ts";
-import { execAsAgent } from "../lxd.ts";
+import { containerForTask } from "../containers.ts";
+import { acquireGitHost } from "../githost.ts";
+import { deleteInstance, execAsAgent } from "../lxd.ts";
 import { worktreeAbsPath } from "../worktrees.ts";
 import { checkWorktree } from "../wip.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
@@ -13,32 +14,41 @@ import { resolveRepo, resolveTask } from "./resolve.ts";
 const USAGE = "Usage: forge finish <owner/repo> <task> [--force]";
 
 export async function cmdFinish(
-  ctx: Context,
-  repo: string | undefined,
-  task: string | undefined,
-  force: boolean,
+  ctx: Context, repo: string | undefined, task: string | undefined, force: boolean,
 ): Promise<number> {
   const ownerRepo = await resolveRepo(ctx, repo, USAGE);
   validateRepo(ownerRepo);
-  const container = await requireContainerForRepo(ctx, ownerRepo);
-
-  const taskName = await resolveTask(ctx, container, task, USAGE);
+  const taskName = await resolveTask(ctx, ownerRepo, task, USAGE);
   validateTaskName(taskName);
 
-  const dir = worktreeAbsPath(taskName);
-  if ((await execAsAgent(ctx, container, `test -e ${dir}`)).code !== 0) {
-    throw new ForgeError(`no worktree .trees/${taskName} in ${container}.`);
+  const container = await containerForTask(ctx, ownerRepo, taskName);
+  const host = await acquireGitHost(ctx, ownerRepo, container?.name);
+  try {
+    const dir = worktreeAbsPath(taskName);
+    if ((await execAsAgent(ctx, host.name, `test -e ${dir}`)).code !== 0 && !container) {
+      throw new ForgeError(`no worktree .trees/${taskName} and no container for task '${taskName}' in ${ownerRepo}.`);
+    }
+
+    if (!force) await checkWorktree(ctx, host.name, dir);
+
+    if (container && container.status === "Running") {
+      await execAsAgent(ctx, container.name, `tmux kill-session -t ${taskName} 2>/dev/null || true`);
+    }
+
+    ctx.out(`Removing worktree .trees/${taskName}...`);
+    const flag = force ? "--force " : "";
+    await mustSucceed("git worktree remove", execAsAgent(ctx, host.name,
+      `git -C /workspace worktree remove ${flag}.trees/${taskName}`));
+  } finally {
+    await host.release();
   }
 
-  if (!force) await checkWorktree(ctx, container, dir);
-
-  ctx.out(`Removing worktree .trees/${taskName}...`);
-  const flag = force ? "--force " : "";
-  await mustSucceed("git worktree remove",
-    execAsAgent(ctx, container, `git -C /workspace worktree remove ${flag}.trees/${taskName}`));
-
-  // Au mieux : on démonte la session si elle traîne encore.
-  await execAsAgent(ctx, container, `tmux kill-session -t ${taskName} 2>/dev/null || true`);
+  // Après la worktree, jamais avant : supprimer le container d'abord
+  // laisserait .git/worktrees/<task> orpheline dans le montage partagé.
+  if (container) {
+    ctx.out(`Deleting container ${container.name}...`);
+    await mustSucceed("lxc delete", deleteInstance(ctx, container.name));
+  }
 
   ctx.out(`Finished task ${taskName} (branch agent/${taskName} retained).`);
   return 0;

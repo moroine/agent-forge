@@ -7,8 +7,7 @@
 // code 1, jamais un blocage sur une invite que personne ne lira.
 import type { Context } from "../context.ts";
 import { ForgeError } from "../context.ts";
-import { forgeRepos, isRunning } from "../containers.ts";
-import { taskNames } from "../worktrees.ts";
+import { forgeRepos, taskContainersForRepo } from "../containers.ts";
 
 export async function resolveRepo(
   ctx: Context,
@@ -30,24 +29,16 @@ export async function resolveRepo(
 // Ne sert qu'aux commandes qui agissent sur une tâche *déjà là* (resume,
 // finish) ; `forge start` a son propre menu, qui propose aussi de créer.
 export async function resolveTask(
-  ctx: Context,
-  container: string,
-  task: string | undefined,
-  usage: string,
+  ctx: Context, ownerRepo: string, task: string | undefined, usage: string,
 ): Promise<string> {
   if (task) return task;
 
-  if (!(await isRunning(ctx, container))) {
-    throw new ForgeError(
-      `container ${container} is stopped, so its tasks can't be listed. Name the task explicitly, or start it.`,
-    );
-  }
-
-  const tasks = await taskNames(ctx, container);
+  // Uniquement des lectures de clés de config : un menu sous TAB ou une
+  // invite interactive ne doit jamais attendre un `lxc exec`.
+  const tasks = (await taskContainersForRepo(ctx, ownerRepo)).map((c) => c.task).filter(Boolean);
   if (tasks.length === 0) {
-    throw new ForgeError(`no task worktree in ${container}. Create one with 'forge start'.`);
+    throw new ForgeError(`no task container in ${ownerRepo}. Create one with 'forge start ${ownerRepo} <task>'.`);
   }
-
   const idx = await ctx.prompt.pick("Task", tasks);
   if (idx === null) throw new ForgeError(usage);
   return tasks[idx - 1];
