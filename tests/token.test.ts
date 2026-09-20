@@ -35,6 +35,12 @@ test("token set refuses an empty token", async () => {
   await assert.rejects(() => cmdToken(ctx, "set", "o/r"), /empty token/);
 });
 
+test("token set refuses a whitespace-only token", async () => {
+  sandbox();
+  const ctx = fakeContext({ rules: META, answers: ["   "] });
+  await assert.rejects(() => cmdToken(ctx, "set", "o/r"), /empty token/);
+});
+
 test("token rm says so when there was nothing stored", async () => {
   sandbox();
   const ctx = fakeContext({ rules: META });
@@ -61,6 +67,16 @@ test("token import starts a stopped container and stops it again", async () => {
   assert.ok(joined.includes("lxc start agent-o-r"));
   assert.ok(joined.includes("lxc stop agent-o-r"));
   assert.ok(joined.indexOf("lxc start agent-o-r") < joined.indexOf("lxc stop agent-o-r"));
+});
+
+test("token import warns but does not throw when re-stopping fails", async () => {
+  sandbox();
+  const ctx = fakeContext({
+    rules: [...META, { match: "gh auth token", stdout: "ghp_x\n" }, { match: "lxc stop", code: 1, stderr: "device busy" }],
+  });
+  assert.equal(await cmdToken(ctx, "import", "o/r"), 0);
+  assert.equal(readToken("o/r"), "ghp_x");
+  assert.match(ctx.err_lines.join("\n"), /WARNING: could not stop agent-o-r again: device busy/);
 });
 
 test("token import fails loudly when gh has no token", async () => {

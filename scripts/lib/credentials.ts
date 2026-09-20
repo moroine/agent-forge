@@ -30,6 +30,9 @@ export function writeToken(ownerRepo: string, token: string): void {
   chmodSync(credentialsDir(), 0o700);
   const file = credentialPath(ownerRepo);
   writeFileSync(file, token.trim(), { mode: 0o600 });
+  // Même piège que pour le répertoire : `mode` de writeFileSync est ignoré si
+  // le fichier existe déjà, donc un écrasement garderait les permissions de
+  // l'ancien fichier sans ce chmod explicite.
   chmodSync(file, 0o600);
 }
 

@@ -23,7 +23,7 @@ export async function cmdToken(ctx: Context, sub: string | undefined, repo?: str
   if (sub === "set") {
     ctx.err(`Fine-grained PAT for ${ownerRepo} (Contents RW, Pull requests RW, Metadata R).`);
     const token = await ctx.prompt.askSecret("Paste the token (input hidden)");
-    if (!token) throw new ForgeError("empty token.");
+    if (!token || !token.trim()) throw new ForgeError("empty token.");
     writeToken(ownerRepo, token);
     ctx.out(`Stored a token for ${ownerRepo}.`);
     return 0;
@@ -48,7 +48,18 @@ export async function cmdToken(ctx: Context, sub: string | undefined, repo?: str
   } finally {
     // On rend la machine dans l'état où on l'a trouvée, y compris en cas
     // d'échec : `import` ne doit pas laisser un container allumé derrière lui.
-    if (!wasRunning) await stopInstance(ctx, source.name);
+    //
+    // Volontairement NON fatal : on est dans un `finally`, où lever masquerait
+    // l'erreur déjà en vol. Mais le silence n'est pas acceptable non plus — un
+    // container resté allumé doit se voir. Même compromis que l'étape des hooks
+    // git-lfs dans provision.ts.
+    if (!wasRunning) {
+      const stopped = await stopInstance(ctx, source.name);
+      if (stopped.code !== 0) {
+        ctx.err(`WARNING: could not stop ${source.name} again: ${stopped.stderr.trim() || `exit code ${stopped.code}`}`);
+        ctx.err("It was started only to read the token — stop it by hand with 'forge stop'.");
+      }
+    }
   }
   return 0;
 }
