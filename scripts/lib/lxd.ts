@@ -72,8 +72,17 @@ export function deleteInstance(ctx: Context, name: string): Promise<ExecResult> 
 // rootfs copié en cours d'écriture emporte un containerd/dqlite incohérent).
 // Le device `workspace` fait partie de la config d'instance, donc la copie
 // pointe sur le même répertoire hôte : c'est exactement ce qu'on veut.
-export function copyInstance(ctx: Context, source: string, target: string): Promise<ExecResult> {
-  return ctx.exec(["lxc", "copy", source, target]);
+//
+// `config` est posé PAR la copie (`-c key=value`) et non par des `lxc config
+// set` qui suivraient : la copie hérite des clés de la source, donc une
+// interruption entre les deux laisserait un container de tâche se déclarant
+// template — invisible de `forge list` comme de `forge finish`.
+export function copyInstance(
+  ctx: Context, source: string, target: string, config: Record<string, string> = {},
+): Promise<ExecResult> {
+  const argv = ["lxc", "copy", source, target];
+  for (const [key, value] of Object.entries(config)) argv.push("-c", `${key}=${value}`);
+  return ctx.exec(argv);
 }
 
 export function addDiskDevice(

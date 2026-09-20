@@ -12,6 +12,10 @@ import { cmdStart } from "../scripts/lib/commands/start.ts";
 // assertions, sans rien changer au comportement testé.
 const OWNER_REPO = "o/r";
 const TEMPLATE = "agent-o-r";
+// Les deux stamps voyagent DANS la copie : une interruption entre un `lxc
+// copy` nu et des `lxc config set` laisserait un container de tâche portant
+// le role=template hérité de la source, invisible de list comme de finish.
+const COPY = "lxc copy agent-o-r agent-o-r-feat -c user.forge.role=task -c user.forge.task=feat";
 
 type StartOpts = {
   template?: string | null;      // nom du container template, ou null s'il n'existe pas encore
@@ -100,7 +104,7 @@ test("a repo with no template is provisioned, then copied", async () => {
   await cmdStart(ctx, OWNER_REPO, "feat");
   const joined = ctx.calls.map((c) => c.join(" "));
   assert.ok(joined.some((s) => s.startsWith("lxc launch")), "provisioning a fresh template");
-  assert.ok(joined.some((s) => s === "lxc copy agent-o-r agent-o-r-feat"));
+  assert.ok(joined.includes(COPY));
 });
 
 test("an existing template is copied, never re-provisioned", async () => {
@@ -108,17 +112,18 @@ test("an existing template is copied, never re-provisioned", async () => {
   await cmdStart(ctx, OWNER_REPO, "feat");
   const joined = ctx.calls.map((c) => c.join(" "));
   assert.ok(!joined.some((s) => s.startsWith("lxc launch")));
-  assert.ok(joined.some((s) => s === "lxc copy agent-o-r agent-o-r-feat"));
+  assert.ok(joined.includes(COPY));
 });
 
 test("the copy is stamped with role=task and its task name, then started", async () => {
   const ctx = startCtx({ template: TEMPLATE });
   await cmdStart(ctx, OWNER_REPO, "feat");
   const joined = ctx.calls.map((c) => c.join(" "));
-  assert.ok(joined.includes("lxc config set agent-o-r-feat user.forge.role task"));
-  assert.ok(joined.includes("lxc config set agent-o-r-feat user.forge.task feat"));
+  assert.ok(joined.includes(COPY));
+  assert.ok(!joined.some((s) => s.startsWith("lxc config set agent-o-r-feat user.forge.role")),
+    "plus de config set séparé : la fenêtre d'interruption disparaît");
   assert.ok(joined.includes("lxc start agent-o-r-feat"));
-  assert.ok(joined.indexOf("lxc copy agent-o-r agent-o-r-feat") < joined.indexOf("lxc start agent-o-r-feat"));
+  assert.ok(joined.indexOf(COPY) < joined.indexOf("lxc start agent-o-r-feat"));
 });
 
 // Fix round 1 : `lxc copy` ne refuse pas une instance démarrée — il copie un
@@ -132,7 +137,7 @@ test("a template reported Running at copy time is stopped first", async () => {
   const joined = ctx.calls.map((c) => c.join(" "));
   assert.ok(joined.includes(`lxc stop ${TEMPLATE}`), joined.join("\n"));
   assert.ok(
-    joined.indexOf(`lxc stop ${TEMPLATE}`) < joined.indexOf("lxc copy agent-o-r agent-o-r-feat"),
+    joined.indexOf(`lxc stop ${TEMPLATE}`) < joined.indexOf(COPY),
     "le template doit être arrêté avant d'être copié",
   );
 });

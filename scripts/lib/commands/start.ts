@@ -18,7 +18,7 @@ import {
   templateContainerName, templateForRepo, forgeRepos,
 } from "../containers.ts";
 import type { ForgeContainer } from "../containers.ts";
-import { attachArgv, configSet, copyInstance, execAsAgent, startInstance, stopInstance } from "../lxd.ts";
+import { attachArgv, copyInstance, execAsAgent, startInstance, stopInstance } from "../lxd.ts";
 import { agentBranches, branchExists } from "../worktrees.ts";
 import { provisionTemplate } from "./provision.ts";
 
@@ -122,9 +122,16 @@ async function ensureTaskContainer(
   }
   await checkNameCollision(ctx, name, ownerRepo);
   ctx.out(`Copying ${template.name} into ${name}...`);
-  await mustSucceed("lxc copy", copyInstance(ctx, template.name, name));
-  await mustSucceed("record forge role", configSet(ctx, name, "user.forge.role", ROLE_TASK));
-  await mustSucceed("record forge task", configSet(ctx, name, "user.forge.task", task));
+  // Les deux clés sont posées PAR la copie, pas par des `lxc config set` qui
+  // suivraient : la copie hérite de user.forge.role=template de la source, et
+  // une interruption dans cette fenêtre laissait un container de tâche se
+  // déclarant template — invisible de `forge list` (pas une ligne de tâche) et
+  // de `forge finish` (containerForTask exige role=task), effaçable seulement
+  // par un `forge delete` du repo entier.
+  await mustSucceed("lxc copy", copyInstance(ctx, template.name, name, {
+    "user.forge.role": ROLE_TASK,
+    "user.forge.task": task,
+  }));
   ctx.out(`Starting container ${name}...`);
   await mustSucceed("lxc start", startInstance(ctx, name));
   return name;

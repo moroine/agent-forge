@@ -94,6 +94,21 @@ test("copyInstance shells out to lxc copy", async () => {
   assert.deepEqual(ctx.calls[0], ["lxc", "copy", "agent-o-r", "agent-o-r-task"]);
 });
 
+// Les clés doivent pouvoir être posées PAR la copie : un `lxc config set` qui
+// suit ouvre une fenêtre où le container copié porte encore le role de sa
+// source (voir ensureTaskContainer).
+test("copyInstance passes each config pair as its own -c flag", async () => {
+  const ctx = fakeContext({});
+  await copyInstance(ctx, "agent-o-r", "agent-o-r-feat", {
+    "user.forge.role": "task",
+    "user.forge.task": "feat",
+  });
+  assert.deepEqual(ctx.calls[0], [
+    "lxc", "copy", "agent-o-r", "agent-o-r-feat",
+    "-c", "user.forge.role=task", "-c", "user.forge.task=feat",
+  ]);
+});
+
 test("addDiskDevice passes source and path, and readonly only when asked", async () => {
   const ctx = fakeContext({});
   await addDiskDevice(ctx, "agent-x", "workspace", "/h/w/agent-x", "/workspace");
