@@ -3,65 +3,77 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import type { ExecRule } from "./lib/fake-context.ts";
 import { cmdFinish } from "../scripts/lib/commands/finish.ts";
+import { cmdResume } from "../scripts/lib/commands/resume.ts";
 
-// resume.ts référence encore containerForRepo/requireContainerForRepo,
-// supprimés d'un container par repo — sa migration est une tâche ultérieure
-// (voir task-9-brief.md, point 4). Un `import` statique de ce module ferait
-// planter TOUT ce fichier de test au chargement (SyntaxError sur l'export
-// manquant), y compris les tests de `finish` qui n'ont rien à voir avec lui.
-// L'import dynamique isole le crash à l'intérieur de chaque test resume, où
-// il est attendu — et donc rapporté comme un échec de CE test, pas de
-// l'ensemble du fichier.
-let cmdResume: (ctx: Parameters<typeof cmdFinish>[0], repo?: string, task?: string) => Promise<number>;
-try {
-  ({ cmdResume } = await import("../scripts/lib/commands/resume.ts"));
-} catch (e) {
-  cmdResume = async () => { throw e; };
+// --- resume -------------------------------------------------------------
+//
+// Un container par tâche : `resume` n'a plus de worktree à sonder, il
+// cherche directement le container de la tâche (containerForTask). Bâti
+// comme fleetCtx dans tests/containers.test.ts : un `lxc list` unique puis
+// les clés de config par container.
+const RESUME_FLEET = JSON.stringify([
+  { name: "agent-moroine-agent-forge", status: "Stopped" },
+  { name: "agent-moroine-agent-forge-cli", status: "Running" },
+  { name: "agent-moroine-agent-forge-docs", status: "Stopped" },
+]);
+
+function resumeCtx(opts: { extraRules?: ExecRule[]; answers?: (number | string | null)[] } = {}) {
+  const meta: Record<string, Record<string, string>> = {
+    "agent-moroine-agent-forge":      { repo: "moroine/agent-forge", mode: "autonomous", role: "template", task: "" },
+    "agent-moroine-agent-forge-cli":  { repo: "moroine/agent-forge", mode: "autonomous", role: "task", task: "cli" },
+    "agent-moroine-agent-forge-docs": { repo: "moroine/agent-forge", mode: "autonomous", role: "task", task: "docs" },
+  };
+  return fakeContext({
+    rules: [
+      ...(opts.extraRules ?? []),
+      { match: "lxc list", stdout: RESUME_FLEET },
+      ...Object.entries(meta).flatMap(([name, m]) => [
+        { match: `config get ${name} user.forge.repo`, stdout: m.repo },
+        { match: `config get ${name} user.forge.mode`, stdout: m.mode },
+        { match: `config get ${name} user.forge.role`, stdout: m.role },
+        { match: `config get ${name} user.forge.task`, stdout: m.task },
+      ]),
+    ],
+    answers: opts.answers,
+  });
 }
 
-const BASE = [
-  { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
-  { match: "lxc list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Running" }]) },
-  { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\n" },
-];
-
 test("resume attaches the task's tmux session", async () => {
-  const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
+  const c = resumeCtx();
   assert.equal(await cmdResume(c, "moroine/agent-forge", "cli"), 0);
   const attach = c.calls.find((call) => call.includes("tmux"));
   assert.ok(attach, "no attach happened");
   assert.ok(attach.includes("new-session") && attach.includes("cli"));
+  assert.ok(!c.calls.some((call) => call.join(" ") === "lxc start agent-moroine-agent-forge-cli"),
+    "cli tourne déjà, pas de démarrage attendu");
 });
 
-test("resume never creates a worktree", async () => {
-  const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
+test("resume never touches a worktree", async () => {
+  const c = resumeCtx();
   await cmdResume(c, "moroine/agent-forge", "cli");
-  assert.ok(!c.calls.some((call) => call.join(" ").includes("worktree add")));
+  assert.ok(!c.calls.some((call) => call.join(" ").includes("worktree")));
 });
 
-test("resume errors when the worktree is absent, pointing at start", async () => {
-  const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 1 }] });
-  await assert.rejects(() => cmdResume(c, "moroine/agent-forge", "nope"), /forge start/);
+test("resume errors when the task has no container, pointing at start", async () => {
+  const c = resumeCtx();
+  await assert.rejects(() => cmdResume(c, "moroine/agent-forge", "nope"), /forge start moroine\/agent-forge nope/);
 });
 
 test("resume asks for repo then task when both are missing", async () => {
-  const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }], answers: [1, 2] });
+  const c = resumeCtx({ answers: [1, 2] });
   await cmdResume(c, undefined, undefined);
   const attach = c.calls.find((call) => call.includes("tmux"));
   assert.ok(attach?.includes("docs"), `attached to the wrong session: ${attach?.join(" ")}`);
+  // docs est éteint dans la flotte : resume doit le réveiller avant d'attacher.
+  assert.ok(c.calls.some((call) => call.join(" ") === "lxc start agent-moroine-agent-forge-docs"));
 });
 
 test("resume fails when the container refuses to start", async () => {
-  const c = fakeContext({
-    rules: [
-      { match: "lxc start", code: 1, stderr: "Error: Failed to start device\n" },
-      { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
-      { match: "lxc list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
-      { match: "test -e", code: 0 },
-    ],
+  const c = resumeCtx({
+    extraRules: [{ match: "lxc start", code: 1, stderr: "Error: Failed to start device\n" }],
   });
   await assert.rejects(
-    () => cmdResume(c, "moroine/agent-forge", "cli"),
+    () => cmdResume(c, "moroine/agent-forge", "docs"),
     /lxc start failed: Error: Failed to start device/,
   );
   assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec du démarrage");
