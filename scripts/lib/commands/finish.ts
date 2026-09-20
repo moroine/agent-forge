@@ -29,6 +29,10 @@ export async function cmdFinish(
       throw new ForgeError(`no worktree .trees/${taskName} and no container for task '${taskName}' in ${ownerRepo}.`);
     }
 
+    // checkWorktree lit le mode du container qu'on lui passe. Ici c'est le git
+    // host, qui peut être le template plutôt que le container de la tâche — et
+    // c'est correct : toute tâche est une copie du template, donc porte le même
+    // user.forge.mode. Si ça cessait d'être vrai, ce contrôle mentirait.
     if (!force) await checkWorktree(ctx, host.name, dir);
 
     if (container && container.status === "Running") {

@@ -168,6 +168,18 @@ test("finish runs the WIP pre-flight and refuses a dirty worktree", async () => 
   assert.ok(!ctx.calls.some((c) => c[1] === "delete"));
 });
 
+// Tous les autres tests d'échec utilisent un container de tâche EN COURS
+// D'EXÉCUTION comme git host : release() y prend la branche no-op, donc le
+// chemin "on rendort le template" du `finally` n'est jamais exercé par un
+// échec. Ici le container est arrêté (le template est réveillé) et la
+// worktree est sale : cmdFinish rejette, mais le template doit quand même
+// être rendormi.
+test("finish stops a woken template even when the pre-flight rejects", async () => {
+  const ctx = finishCtx({ task: "feat", status: "Stopped", dirty: true });
+  await assert.rejects(() => cmdFinish(ctx, "o/r", "feat", false), /uncommitted changes/);
+  assert.ok(ctx.calls.some((c) => c.join(" ") === "lxc stop agent-o-r"));
+});
+
 test("finish retains the branch and says so", async () => {
   const ctx = finishCtx({ task: "feat", status: "Running" });
   await cmdFinish(ctx, "o/r", "feat", true);

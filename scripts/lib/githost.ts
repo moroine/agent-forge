@@ -35,6 +35,17 @@ export async function acquireGitHost(
   await mustSucceed("lxc start", startInstance(ctx, template.name));
   return {
     name: template.name,
-    release: async () => { await stopInstance(ctx, template.name); },
+    release: async () => {
+      // Volontairement NON fatal : on est dans le chemin de libération, où
+      // lever masquerait l'erreur déjà en vol. Mais le silence n'est pas
+      // acceptable — un template réveillé puis resté allumé doit se voir, et
+      // c'est `forge start` qui en paierait le prix (il devra l'arrêter avant
+      // de copier). Même compromis que le `finally` de token.ts.
+      const stopped = await stopInstance(ctx, template.name);
+      if (stopped.code !== 0) {
+        ctx.err(`WARNING: could not stop the template ${template.name} again: ${stopped.stderr.trim() || `exit code ${stopped.code}`}`);
+        ctx.err("It was started only to run git for this repo — stop it by hand with 'lxc stop'.");
+      }
+    },
   };
 }

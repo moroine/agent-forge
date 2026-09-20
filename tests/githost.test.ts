@@ -4,9 +4,13 @@ import { fakeContext } from "./lib/fake-context.ts";
 import { ForgeError } from "../scripts/lib/context.ts";
 import { acquireGitHost } from "../scripts/lib/githost.ts";
 
-function ctxFor(fleet: { name: string; status: string; role: string; task: string }[]) {
+function ctxFor(
+  fleet: { name: string; status: string; role: string; task: string }[],
+  extraRules: { match: string; code?: number; stdout?: string; stderr?: string }[] = [],
+) {
   return fakeContext({
     rules: [
+      ...extraRules,
       { match: "lxc list", stdout: JSON.stringify(fleet.map((c) => ({ name: c.name, status: c.status }))) },
       ...fleet.flatMap((c) => [
         { match: `config get ${c.name} user.forge.repo`, stdout: "o/r" },
@@ -60,4 +64,18 @@ test("a running template is used without being stopped afterwards", async () => 
 
 test("a repo with no container at all is a ForgeError", async () => {
   await assert.rejects(() => acquireGitHost(ctxFor([]), "o/r"), ForgeError);
+});
+
+// release() est volontairement non fatal (voir le commentaire dans
+// githost.ts) : un `lxc stop` qui échoue au réveil du template ne doit
+// jamais faire planter release(), mais il ne doit pas non plus rester
+// silencieux — l'opérateur doit voir le container resté allumé.
+test("a template that fails to stop again warns instead of throwing", async () => {
+  const ctx = ctxFor(
+    [{ name: "agent-o-r", status: "Stopped", role: "template", task: "" }],
+    [{ match: "lxc stop", code: 1, stderr: "Error: Failed to stop instance\n" }],
+  );
+  const host = await acquireGitHost(ctx, "o/r");
+  await assert.doesNotReject(() => host.release());
+  assert.ok(ctx.err_lines.some((l) => l.includes("WARNING") && l.includes("agent-o-r")));
 });
