@@ -14,11 +14,11 @@ import { ForgeError, mustSucceed } from "../context.ts";
 import { validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
 import {
   baseImageFor, buildStatus, checkNameCollision, containerForTask, containerImageCommit,
-  latestImageCommitFor, ROLE_TASK, taskContainerName, taskContainersForRepo,
+  isRunning, latestImageCommitFor, ROLE_TASK, taskContainerName, taskContainersForRepo,
   templateContainerName, templateForRepo, forgeRepos,
 } from "../containers.ts";
 import type { ForgeContainer } from "../containers.ts";
-import { attachArgv, configSet, copyInstance, execAsAgent, startInstance } from "../lxd.ts";
+import { attachArgv, configSet, copyInstance, execAsAgent, startInstance, stopInstance } from "../lxd.ts";
 import { agentBranches, branchExists } from "../worktrees.ts";
 import { provisionTemplate } from "./provision.ts";
 
@@ -107,6 +107,18 @@ async function ensureTaskContainer(
     throw new ForgeError(
       `task name '${task}' sanitizes to the template container's own name (${template.name}); pick another task name.`,
     );
+  }
+  // Le template DOIT être arrêté au moment de la copie : `lxc copy` ne refuse
+  // pas une instance démarrée, il en copie un rootfs en cours d'écriture — la
+  // corruption même que le template existe pour éviter. Le statut qu'on tient
+  // vient d'un `describeContainers` antérieur et peut être périmé : on le
+  // relit ici. Arrêter est sans risque, un template n'héberge jamais de
+  // travail ; et si un `acquireGitHost` concurrent s'en servait vraiment, sa
+  // commande échoue bruyamment, ce qui vaut mieux qu'une copie corrompue en
+  // silence.
+  if (await isRunning(ctx, template.name)) {
+    ctx.out(`Template ${template.name} is running — stopping it so the copy is consistent...`);
+    await mustSucceed("lxc stop", stopInstance(ctx, template.name));
   }
   await checkNameCollision(ctx, name, ownerRepo);
   ctx.out(`Copying ${template.name} into ${name}...`);

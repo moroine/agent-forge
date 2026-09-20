@@ -121,6 +121,28 @@ test("the copy is stamped with role=task and its task name, then started", async
   assert.ok(joined.indexOf("lxc copy agent-o-r agent-o-r-feat") < joined.indexOf("lxc start agent-o-r-feat"));
 });
 
+// Fix round 1 : `lxc copy` ne refuse pas une instance démarrée — il copie un
+// rootfs en cours d'écriture, exactement la corruption que le template existe
+// pour éviter. `ensureTaskContainer` doit donc re-vérifier le statut juste
+// avant la copie (le ForgeContainer tenu depuis templateForRepo est un
+// instantané qui peut être périmé) et l'arrêter si besoin.
+test("a template reported Running at copy time is stopped first", async () => {
+  const ctx = startCtx({ template: TEMPLATE, templateStatus: "Running" });
+  await cmdStart(ctx, OWNER_REPO, "feat");
+  const joined = ctx.calls.map((c) => c.join(" "));
+  assert.ok(joined.includes(`lxc stop ${TEMPLATE}`), joined.join("\n"));
+  assert.ok(
+    joined.indexOf(`lxc stop ${TEMPLATE}`) < joined.indexOf("lxc copy agent-o-r agent-o-r-feat"),
+    "le template doit être arrêté avant d'être copié",
+  );
+});
+
+test("a template already Stopped is not stopped again", async () => {
+  const ctx = startCtx({ template: TEMPLATE, templateStatus: "Stopped" });
+  await cmdStart(ctx, OWNER_REPO, "feat");
+  assert.ok(!ctx.calls.some((c) => c.join(" ") === `lxc stop ${TEMPLATE}`));
+});
+
 test("an already-running task container is attached, not copied again", async () => {
   const ctx = startCtx({ template: TEMPLATE, tasks: { feat: "Running" } });
   await cmdStart(ctx, OWNER_REPO, "feat");
