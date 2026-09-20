@@ -39,4 +39,14 @@ devices:
     pool: default
     size: 100GB
     type: disk
+  # claude-code vient de l'hôte, en lecture seule : installs versionnées +
+  # symlink `current` (voir docs/superpowers/specs/2026-09-20-container-per-task-design.md §4).
+  # Le shim /usr/local/bin/claude résout `current` une fois, au lancement, donc
+  # une bascule de version côté hôte ne touche jamais une session en cours.
+  # readonly=true : durcissement, l'agent ne peut pas modifier le CLI.
+  forge-claude:
+    source: /home/moroine/.local/share/agent-forge/claude
+    path: /opt/forge-claude
+    readonly: "true"
+    type: disk
 project: default

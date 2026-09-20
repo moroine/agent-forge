@@ -38,6 +38,14 @@ assert_contains 'lxc.cap.drop = sys_module sys_rawio sys_boot sys_ptrace sys_pac
 assert_contains 'lxc.cap.drop = mac_override mac_admin'
 assert_contains 'lxc.cap.drop = bpf perfmon'
 
+# claude-code arrive par un montage read-only depuis l'hôte (spec §4) :
+# l'agent ne peut pas modifier le CLI, et une mise à jour hôte profite à
+# tous les containers sans en recréer aucun.
+assert_contains 'forge-claude:'
+assert_contains 'path: /opt/forge-claude'
+assert_contains 'readonly: "true"'
+assert_contains 'source: /home/moroine/.local/share/agent-forge/claude'
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

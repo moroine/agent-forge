@@ -48,7 +48,22 @@ _forge_image_build() {
   lxc exec "$setup" -- bash -c "curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -"
   lxc exec "$setup" -- apt install -y nodejs
   lxc exec "$setup" -- npm install -g pnpm
-  lxc exec "$setup" -- npm install -g @anthropic-ai/claude-code
+  # claude-code n'est plus installé dans l'image : il est monté en lecture
+  # seule depuis l'hôte (device forge-claude). Le shim résout la version UNE
+  # fois, au lancement, puis exec le chemin versionné absolu — un `forge claude
+  # update` pendant une session ne peut donc pas retirer un module sous les
+  # pieds d'un process déjà démarré.
+  lxc exec "$setup" -- bash -c 'cat > /usr/local/bin/claude <<"SHIM"
+#!/bin/sh
+set -e
+if [ ! -e /opt/forge-claude/current ]; then
+  echo "claude-code is not installed on the host. Run: forge claude update" >&2
+  exit 1
+fi
+V=$(readlink -f /opt/forge-claude/current)
+exec "$V/node_modules/.bin/claude" "$@"
+SHIM
+chmod 755 /usr/local/bin/claude'
   lxc exec "$setup" -- bash -c 'mkdir -p -m 755 /etc/apt/keyrings && wget -qO /etc/apt/keyrings/githubcli-archive-keyring.gpg https://cli.github.com/packages/githubcli-archive-keyring.gpg && chmod go+r /etc/apt/keyrings/githubcli-archive-keyring.gpg'
   lxc exec "$setup" -- bash -c 'echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list'
   lxc exec "$setup" -- bash -c 'apt update && apt install -y gh'

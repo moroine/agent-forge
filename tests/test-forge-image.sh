@@ -85,6 +85,10 @@ assert_contains "$LIB" 'git -C "$FORGE_REPO_DIR" rev-parse HEAD'
 # next-task is gone
 assert_not_contains "$LIB" 'next-task'
 
+assert_contains "$LIB" '/usr/local/bin/claude'
+assert_contains "$LIB" 'readlink -f /opt/forge-claude/current'
+assert_not_contains "$LIB" 'npm install -g @anthropic-ai/claude-code'
+
 # --- garde source vs execution directe (voir le fix "safely sourceable") ---
 # Le guard `if [ "${BASH_SOURCE[0]}" = "$0" ]; then cmd_forge_image "$@"; fi`
 # a un mode d'echec silencieux : s'il evalue mal, `forge image build` devient
