@@ -6,7 +6,7 @@
 import type { Context } from "../context.ts";
 import { mustSucceed, ForgeError } from "../context.ts";
 import { validateRepo } from "../validate.ts";
-import { describeContainers, ROLE_TASK } from "../containers.ts";
+import { describeContainers, sameRepo, ROLE_TASK } from "../containers.ts";
 import { deleteInstance } from "../lxd.ts";
 import { checkAllWorktrees } from "../wip.ts";
 import { acquireGitHost } from "../githost.ts";
@@ -18,8 +18,7 @@ export async function cmdDelete(ctx: Context, repo: string | undefined, force: b
   const ownerRepo = await resolveRepo(ctx, repo, USAGE);
   validateRepo(ownerRepo);
 
-  const mine = (await describeContainers(ctx))
-    .filter((c) => c.repo.toLowerCase() === ownerRepo.toLowerCase());
+  const mine = (await describeContainers(ctx)).filter((c) => sameRepo(c, ownerRepo));
   if (mine.length === 0) throw new ForgeError(`no container for ${ownerRepo}.`);
 
   if (!force) {

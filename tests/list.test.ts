@@ -72,6 +72,37 @@ function legacyCtx() {
   });
 }
 
+// Le même repo écrit avec deux casses sur deux containers (une clé de config
+// posée à la main lors d'une migration suffit). `forge list` était le seul
+// site à comparer la casse : la tâche tombait dans un second groupe, orpheline
+// de son template. Tous les autres sites passent par sameRepo.
+function mixedCaseCtx() {
+  return fakeContext({
+    rules: [
+      { match: "lxc list", stdout: JSON.stringify([
+        { name: "agent-o-r", status: "Stopped" },
+        { name: "agent-o-r-cli", status: "Stopped" },
+      ]) },
+      { match: "agent-o-r-cli user.forge.repo", stdout: "O/R" },
+      { match: "agent-o-r-cli user.forge.mode", stdout: "autonomous" },
+      { match: "agent-o-r-cli user.forge.role", stdout: "task" },
+      { match: "agent-o-r-cli user.forge.task", stdout: "cli" },
+      { match: "agent-o-r user.forge.repo", stdout: "o/r" },
+      { match: "agent-o-r user.forge.mode", stdout: "autonomous" },
+      { match: "agent-o-r user.forge.role", stdout: "template" },
+      { match: "agent-o-r user.forge.task", stdout: "" },
+    ],
+  });
+}
+
+test("a repo spelled with two casings is still one group", async () => {
+  const ctx = mixedCaseCtx();
+  await cmdList(ctx);
+  const repoRows = ctx.out_lines.filter((l) => /^[oO]\/[rR]\s/.test(l));
+  assert.equal(repoRows.length, 1, ctx.out_lines.join("\n"));
+  assert.ok(ctx.out_lines.some((l) => l.startsWith("  cli")), ctx.out_lines.join("\n"));
+});
+
 test("list groups tasks under their repo and shows the template's build state", async () => {
   const ctx = fleetCtx({ tasks: { cli: "Running", api: "Stopped" }, template: "Stopped", stamp: "aaa", latest: "aaa" });
   await cmdList(ctx);

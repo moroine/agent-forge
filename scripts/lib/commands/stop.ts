@@ -7,7 +7,7 @@
 import type { Context } from "../context.ts";
 import { mustSucceed } from "../context.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
-import { describeContainers, requireContainerForTask } from "../containers.ts";
+import { describeContainers, requireContainerForTask, sameRepo } from "../containers.ts";
 import { stopInstance } from "../lxd.ts";
 import { resolveRepo } from "./resolve.ts";
 
@@ -30,7 +30,7 @@ export async function cmdStop(ctx: Context, repo?: string, task?: string): Promi
   }
 
   const running = (await describeContainers(ctx))
-    .filter((c) => c.repo.toLowerCase() === ownerRepo.toLowerCase() && c.status === "Running");
+    .filter((c) => sameRepo(c, ownerRepo) && c.status === "Running");
   if (running.length === 0) {
     ctx.out(`Nothing running for ${ownerRepo}.`);
     return 0;

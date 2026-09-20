@@ -7,7 +7,7 @@ import type { Context } from "../context.ts";
 import { columnWidths, formatRow } from "../table.ts";
 import {
   ROLE_TASK, ROLE_TEMPLATE, baseImageFor, buildStatus, containerImageCommit,
-  describeContainers, isLegacy, latestImageCommitFor,
+  describeContainers, distinctRepos, isLegacy, latestImageCommitFor, sameRepo,
 } from "../containers.ts";
 import { sessionStates } from "../worktrees.ts";
 
@@ -34,14 +34,13 @@ export async function cmdList(ctx: Context): Promise<number> {
   // entier par container, soit N+1 listings complets là où un index par nom
   // suffit. `forge list` est la commande la plus lancée.
   const all = await describeContainers(ctx);
-  const repos: string[] = [];
-  for (const c of all) if (c.repo && !repos.includes(c.repo)) repos.push(c.repo);
+  const repos = distinctRepos(all);
 
   const entries: Entry[] = [];
   const legacy: string[] = [];
 
   for (const repo of repos) {
-    const mine = all.filter((c) => c.repo === repo);
+    const mine = all.filter((c) => sameRepo(c, repo));
     for (const c of mine.filter(isLegacy)) legacy.push(c.name);
 
     const template = mine.find((c) => c.role === ROLE_TEMPLATE);

@@ -121,17 +121,25 @@ export function isLegacy(c: ForgeContainer): boolean {
   return c.repo !== "" && c.role === "";
 }
 
-// Ne lit que des clés de config : aucun `lxc exec`, pour rester assez rapide
-// à alimenter une complétion sous TAB ou un menu interactif.
-export async function forgeRepos(ctx: Context): Promise<string[]> {
+// Chaque repo une fois, à la casse du premier container rencontré. Le
+// dédoublonnage est insensible à la casse comme sameRepo : sans quoi un repo
+// orthographié différemment sur deux containers donnerait deux groupes qui se
+// recouvrent (`forge list` listerait chaque container deux fois).
+export function distinctRepos(containers: ForgeContainer[]): string[] {
   const seen = new Set<string>();
   const repos: string[] = [];
-  for (const c of await describeContainers(ctx)) {
+  for (const c of containers) {
     if (!c.repo || seen.has(c.repo.toLowerCase())) continue;
     seen.add(c.repo.toLowerCase());
     repos.push(c.repo);
   }
   return repos;
+}
+
+// Ne lit que des clés de config : aucun `lxc exec`, pour rester assez rapide
+// à alimenter une complétion sous TAB ou un menu interactif.
+export async function forgeRepos(ctx: Context): Promise<string[]> {
+  return distinctRepos(await describeContainers(ctx));
 }
 
 // Échoue bruyamment si un container existe déjà sous le nom dérivé mais pour

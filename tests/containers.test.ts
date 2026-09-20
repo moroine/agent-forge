@@ -8,6 +8,7 @@ import {
   ROLE_TASK, ROLE_TEMPLATE, templateContainerName, taskContainerName,
   describeContainers, templateForRepo, requireTemplateForRepo,
   taskContainersForRepo, containerForTask, requireContainerForTask, isLegacy,
+  sameRepo, distinctRepos,
 } from "../scripts/lib/containers.ts";
 
 const LIST = JSON.stringify([
@@ -232,4 +233,14 @@ test("isLegacy flags a forge container with no role", async () => {
 
 test("forgeRepos de-duplicates repos shared by several containers", async () => {
   assert.deepEqual(await forgeRepos(fleetCtx()), ["moroine/agent-forge", "acme/widgets", "legacy/thing"]);
+});
+
+// La comparaison repo est insensible à la casse partout (githost, list,
+// delete, stop, token) : une seule définition, un seul comportement.
+test("sameRepo and distinctRepos ignore the casing of user.forge.repo", () => {
+  const c = (name: string, repo: string) =>
+    ({ name, status: "Stopped", repo, mode: "autonomous", role: "task", task: name });
+  assert.equal(sameRepo(c("a", "O/R"), "o/r"), true);
+  assert.equal(sameRepo(c("a", "o/r"), "o/other"), false);
+  assert.deepEqual(distinctRepos([c("a", "o/r"), c("b", "O/R"), c("c", "")]), ["o/r"]);
 });

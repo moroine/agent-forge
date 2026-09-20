@@ -4,7 +4,7 @@ import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { validateRepo } from "../validate.ts";
 import { readToken, removeToken, writeToken } from "../credentials.ts";
-import { describeContainers, isRunning } from "../containers.ts";
+import { describeContainers, isRunning, sameRepo } from "../containers.ts";
 import { execAsAgent, startInstance, stopInstance } from "../lxd.ts";
 import { resolveRepo } from "./resolve.ts";
 
@@ -32,7 +32,7 @@ export async function cmdToken(ctx: Context, sub: string | undefined, repo?: str
   // import : récupère le token du container existant du repo, pour migrer sans
   // ressortir un PAT. `gh auth token` n'existe que dans un container démarré.
   const all = await describeContainers(ctx);
-  const source = all.find((c) => c.repo.toLowerCase() === ownerRepo.toLowerCase());
+  const source = all.find((c) => sameRepo(c, ownerRepo));
   if (!source) throw new ForgeError(`no container for ${ownerRepo} to import a token from.`);
 
   const wasRunning = await isRunning(ctx, source.name);
