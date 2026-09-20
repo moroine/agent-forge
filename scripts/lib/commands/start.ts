@@ -4,13 +4,23 @@
 // origin/main : c'est ce qui permet de reprendre une tâche existante — branche
 // laissée par `forge finish`, ou branche déjà poussée depuis un autre
 // container, typiquement une PR ouverte.
+//
+// Le container d'une tâche n'est jamais provisionné de zéro : il est copié
+// depuis le TEMPLATE du repo (voir §1 de la spec container-per-task), lui-même
+// provisionné une seule fois puis toujours stoppé. `lxc copy` sur une source
+// stoppée est la seule façon d'obtenir une copie cohérente.
 import type { Context, ExecResult } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
-import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
-import { checkNameCollision, containerMode, forgeRepos, isRunning } from "../containers.ts";
-import { attachArgv, execAsAgent, instanceExists, startInstance } from "../lxd.ts";
-import { agentBranches, branchExists, taskNames } from "../worktrees.ts";
-import { provisionContainer } from "./provision.ts";
+import { validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
+import {
+  baseImageFor, buildStatus, checkNameCollision, containerForTask, containerImageCommit,
+  latestImageCommitFor, ROLE_TASK, taskContainerName, taskContainersForRepo,
+  templateContainerName, templateForRepo, forgeRepos,
+} from "../containers.ts";
+import type { ForgeContainer } from "../containers.ts";
+import { attachArgv, configSet, copyInstance, execAsAgent, startInstance } from "../lxd.ts";
+import { agentBranches, branchExists } from "../worktrees.ts";
+import { provisionTemplate } from "./provision.ts";
 
 const USAGE = "Usage: forge start <owner/repo> [<task>]";
 
@@ -20,40 +30,34 @@ export async function cmdStart(ctx: Context, repo?: string, task?: string): Prom
   const ownerRepo = await startResolveRepo(ctx, repo);
   validateRepo(ownerRepo);
 
-  const container = sanitizeContainerName(ownerRepo);
-  await checkNameCollision(ctx, container, ownerRepo);
+  let template = await templateForRepo(ctx, ownerRepo);
 
   let taskName = task ?? "";
   let ref = "";
-
-  if (!(await instanceExists(ctx, container))) {
-    // Un container neuf n'a ni worktree ni branche à proposer : le menu
-    // n'aurait rien à montrer, on demande simplement un nom.
-    if (!taskName) {
+  if (!taskName) {
+    if (!template) {
       const asked = await ctx.prompt.ask("New task name");
       if (!asked) throw new ForgeError(USAGE);
       taskName = asked;
+    } else {
+      const choice = await pickStartTask(ctx, ownerRepo, template);
+      taskName = choice.task;
+      ref = choice.ref;
     }
-    validateTaskName(taskName);
-    await provisionContainer(ctx, container, ownerRepo);
   }
-
-  ctx.out(`Starting container ${container}...`);
-  if (!(await isRunning(ctx, container))) await mustSucceed("lxc start", startInstance(ctx, container));
-
-  // Avant le menu, pas après : les branches d'origin qu'il propose doivent
-  // être à jour.
-  await refreshMain(ctx, container);
-
-  if (!taskName) {
-    const choice = await pickStartTask(ctx, container);
-    taskName = choice.task;
-    ref = choice.ref;
-  }
-
   validateTaskName(taskName);
   if (ref) validateGitRef(ref);
 
+  if (!template) {
+    await checkNameCollision(ctx, templateContainerName(ownerRepo), ownerRepo);
+    template = await provisionTemplate(ctx, ownerRepo);
+  } else {
+    await warnIfTemplateBehind(ctx, template);
+  }
+
+  const container = await ensureTaskContainer(ctx, ownerRepo, taskName, template);
+
+  await refreshMain(ctx, container, template.mode);
   await addWorktree(ctx, container, taskName, ref);
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
@@ -78,10 +82,56 @@ async function startResolveRepo(ctx: Context, repo?: string): Promise<string> {
   return repos[idx - 1];
 }
 
+// Copie le template si la tâche n'a pas encore de container ; sinon réutilise
+// celui qui est là. Le template est stoppé par construction (provision.ts), ce
+// qui rend la copie cohérente — c'est la raison d'être du template.
+async function ensureTaskContainer(
+  ctx: Context, ownerRepo: string, task: string, template: ForgeContainer,
+): Promise<string> {
+  const existing = await containerForTask(ctx, ownerRepo, task);
+  if (existing) {
+    if (existing.status !== "Running") {
+      ctx.out(`Starting container ${existing.name}...`);
+      await mustSucceed("lxc start", startInstance(ctx, existing.name));
+    }
+    return existing.name;
+  }
+
+  const name = taskContainerName(ownerRepo, task);
+  // Garde-fou : un nom de tâche fait uniquement de séparateurs ("---", "...")
+  // est légal pour validate.ts mais s'effondre, une fois slugifié et débarrassé
+  // de ses tirets de fin, sur le nom du template lui-même. checkNameCollision
+  // laisserait passer (le repo correspond bien), et `lxc copy X X` échouerait
+  // avec un message qui ne dit rien de la vraie cause.
+  if (name === template.name) {
+    throw new ForgeError(
+      `task name '${task}' sanitizes to the template container's own name (${template.name}); pick another task name.`,
+    );
+  }
+  await checkNameCollision(ctx, name, ownerRepo);
+  ctx.out(`Copying ${template.name} into ${name}...`);
+  await mustSucceed("lxc copy", copyInstance(ctx, template.name, name));
+  await mustSucceed("record forge role", configSet(ctx, name, "user.forge.role", ROLE_TASK));
+  await mustSucceed("record forge task", configSet(ctx, name, "user.forge.task", task));
+  ctx.out(`Starting container ${name}...`);
+  await mustSucceed("lxc start", startInstance(ctx, name));
+  return name;
+}
+
+// Non bloquant, comme le flag `behind` de `forge list` : l'outil expose, et
+// l'opérateur décide quand reconstruire.
+async function warnIfTemplateBehind(ctx: Context, template: ForgeContainer): Promise<void> {
+  const stamp = await containerImageCommit(ctx, template.name);
+  const latest = await latestImageCommitFor(ctx, template.mode);
+  if (buildStatus(stamp, latest) !== "behind") return;
+  ctx.err(`WARNING: template ${template.name} is behind ${baseImageFor(template.mode)} (@${stamp} vs @${latest}).`);
+  ctx.err(`Refresh it when convenient: forge template rebuild ${template.repo}`);
+}
+
 // Un container supervised n'a aucune credential pour joindre origin : on reste
 // sur les refs déjà connues localement.
-async function refreshMain(ctx: Context, container: string): Promise<void> {
-  if ((await containerMode(ctx, container)) === "supervised") {
+async function refreshMain(ctx: Context, container: string, mode: string): Promise<void> {
+  if (mode === "supervised") {
     ctx.err("Supervised container: skipping origin fetch (no credential); working from the last-known origin refs.");
     return;
   }
@@ -135,30 +185,37 @@ async function advanceMain(ctx: Context, container: string): Promise<ExecResult>
   return execAsAgent(ctx, container, "git -C /workspace fetch origin main:main");
 }
 
-// Menu mélangeant worktrees déjà là, branches agent/* sans worktree (locales
-// ou seulement sur origin), plus "new task" et "other branch…".
-async function pickStartTask(ctx: Context, container: string): Promise<Choice> {
+// Menu mélangeant les containers de tâche déjà provisionnés (une entrée par
+// container, quel que soit son statut) et, seulement si le template tourne
+// (les probes git ci-dessous ont besoin d'un /workspace vivant pour
+// répondre), les branches agent/* qui n'ont pas encore de container — locales
+// ou seulement sur origin —, plus "new task" et "other branch…".
+async function pickStartTask(ctx: Context, ownerRepo: string, template: ForgeContainer): Promise<Choice> {
   const labels: string[] = ["new task"];
   const values: string[] = ["new"];
   const seen = new Set<string>();
 
-  for (const name of await taskNames(ctx, container)) {
-    seen.add(name);
-    labels.push(`${name} (existing worktree — attach)`);
-    values.push(`task:${name}`);
+  for (const c of await taskContainersForRepo(ctx, ownerRepo)) {
+    seen.add(c.task);
+    labels.push(`${c.task} (existing container — attach)`);
+    values.push(`task:${c.task}`);
   }
-  for (const name of await agentBranches(ctx, container, "refs/heads/agent")) {
-    if (seen.has(name)) continue;
-    seen.add(name);
-    labels.push(`${name} (local branch)`);
-    values.push(`task:${name}`);
+
+  if (template.status === "Running") {
+    for (const name of await agentBranches(ctx, template.name, "refs/heads/agent")) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      labels.push(`${name} (local branch)`);
+      values.push(`task:${name}`);
+    }
+    for (const name of await agentBranches(ctx, template.name, "refs/remotes/origin/agent")) {
+      if (seen.has(name)) continue;
+      seen.add(name);
+      labels.push(`${name} (branch on origin)`);
+      values.push(`task:${name}`);
+    }
   }
-  for (const name of await agentBranches(ctx, container, "refs/remotes/origin/agent")) {
-    if (seen.has(name)) continue;
-    seen.add(name);
-    labels.push(`${name} (branch on origin)`);
-    values.push(`task:${name}`);
-  }
+
   labels.push("other branch…");
   values.push("other");
 
