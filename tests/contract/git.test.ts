@@ -3,7 +3,7 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseWorktreeDirs, parseAgentBranches } from "../../scripts/lib/worktrees.ts";
@@ -47,4 +47,32 @@ test("show-ref --verify --quiet is a usable boolean probe", () => {
   };
   assert.equal(exists("refs/heads/agent/cli"), true);
   assert.equal(exists("refs/heads/agent/nope"), false);
+});
+
+// Le mécanisme NOUVEAU du modèle container-par-tâche : `finish` retire la
+// worktree depuis le git host (souvent le template), c'est-à-dire depuis un
+// processus dont le cwd n'est ni la worktree ni le clone principal. Le
+// montage hôte est partagé, donc git voit les mêmes fichiers — mais rien ne
+// le prouvait contre un vrai git. La commande exacte de finish.ts est
+// `git -C /workspace worktree remove .trees/<task>` : le chemin est RELATIF
+// et ne doit se résoudre que grâce à `-C`.
+test("worktree remove works driven from a third directory, with a -C-relative path", () => {
+  const outside = mkdtempSync(join(tmpdir(), "forge-contract-outside-"));
+  try {
+    git(["worktree", "add", "-q", ".trees/api", "-b", "agent/api"]);
+    const tree = join(repo, ".trees", "api");
+    const admin = join(repo, ".git", "worktrees", "api");
+    assert.ok(existsSync(tree));
+    assert.ok(existsSync(admin));
+
+    // cwd = ni la worktree, ni le clone : exactement la position du template.
+    execFileSync("git", ["-C", repo, "worktree", "remove", ".trees/api"], { cwd: outside });
+
+    assert.equal(existsSync(tree), false, "le répertoire de la worktree doit disparaître");
+    assert.equal(existsSync(admin), false, ".git/worktrees/api doit disparaître, sans prune");
+    // La branche survit : `finish` la conserve délibérément.
+    assert.ok(git(["for-each-ref", "--format=%(refname:short)", "refs/heads/agent"]).includes("agent/api"));
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
 });
