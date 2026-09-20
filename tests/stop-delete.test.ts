@@ -7,7 +7,9 @@ import { cmdDelete } from "../scripts/lib/commands/delete.ts";
 
 // Bâti comme `fleetCtx` dans tests/containers.test.ts : un seul `lxc list`,
 // puis les quatre clés user.forge.{repo,mode,role,task} par container.
-function fleetCtx(opts: { tasks?: Record<string, string>; template?: string; dirty?: boolean }) {
+function fleetCtx(opts: {
+  tasks?: Record<string, string>; template?: string; dirty?: boolean; extra?: ExecRule[];
+}) {
   const ownerRepo = "o/r";
   const containers: { name: string; status: string; role: string; task: string }[] = [];
   for (const [task, status] of Object.entries(opts.tasks ?? {})) {
@@ -19,6 +21,9 @@ function fleetCtx(opts: { tasks?: Record<string, string>; template?: string; dir
 
   const list = JSON.stringify(containers.map((c) => ({ name: c.name, status: c.status })));
   const rules: ExecRule[] = [
+    // Les règles spécifiques à un test (ex: faire échouer un `lxc stop`/`lxc
+    // delete` précis) passent en premier : la première correspondance gagne.
+    ...(opts.extra ?? []),
     { match: "lxc list", stdout: list },
     ...containers.flatMap((c) => [
       { match: `config get ${c.name} user.forge.repo`, stdout: ownerRepo },
@@ -82,4 +87,42 @@ test("delete says the host mount survives", async () => {
   const ctx = fleetCtx({ tasks: {}, template: "Stopped" });
   await cmdDelete(ctx, "o/r", true);
   assert.match(ctx.out_lines.join("\n"), /workspace|mount/i);
+});
+
+test("stop says a task is already stopped and issues no lxc stop", async () => {
+  const ctx = fleetCtx({ tasks: { feat: "Stopped" } });
+  assert.equal(await cmdStop(ctx, "o/r", "feat"), 0);
+  assert.ok(ctx.out_lines.some((l) => l.includes("already stopped")));
+  assert.ok(!ctx.calls.some((c) => c.join(" ").includes("lxc stop")));
+});
+
+test("delete refuses when there is no container for the repo, naming it", async () => {
+  const ctx = fleetCtx({});
+  await assert.rejects(() => cmdDelete(ctx, "o/r", true), /o\/r/);
+});
+
+// Fail-fast : `ctx.exec` capture stderr là où bash en héritait. Sans
+// mustSucceed, un `lxc stop`/`lxc delete` en échec rendait 0 et n'affichait
+// rien du tout — pire que le bash d'origine sous `set -e`.
+test("stop fails loudly when lxc stop fails, surfacing its stderr", async () => {
+  const ctx = fleetCtx({
+    tasks: { feat: "Running" },
+    extra: [{ match: "lxc stop agent-o-r-feat", code: 1, stderr: "Error: The instance is currently in use\n" }],
+  });
+  await assert.rejects(
+    () => cmdStop(ctx, "o/r", "feat"),
+    /lxc stop failed: Error: The instance is currently in use/,
+  );
+});
+
+test("delete fails loudly when lxc delete fails, surfacing its stderr", async () => {
+  const ctx = fleetCtx({
+    tasks: { feat: "Stopped" },
+    template: "Stopped",
+    extra: [{ match: "lxc delete agent-o-r-feat", code: 1, stderr: "Error: Instance is protected\n" }],
+  });
+  await assert.rejects(
+    () => cmdDelete(ctx, "o/r", true),
+    /lxc delete failed: Error: Instance is protected/,
+  );
 });
