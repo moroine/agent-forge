@@ -350,6 +350,38 @@ test("a token typed at the prompt is persisted to the host store", async () => {
   } finally { teardown(); }
 });
 
+// Fix round 1 : le PAT était écrit dès que le prompt renvoyait une valeur non
+// vide, AVANT que `gh auth status` ne le valide. Un token refusé par GitHub
+// se retrouvait donc déjà sur disque : le prochain `forge start` le relisait,
+// sautait l'invite, et échouait à l'identique — le store s'auto-empoisonnait.
+test("a typed token rejected by GitHub is never written to the store", async () => {
+  setup();
+  try {
+    const c = fakeContext({
+      rules: [IMAGE_OK, { match: "gh auth status", code: 1 }],
+      answers: ["a", "ghp_bad"],
+    });
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /pasted token was rejected/);
+    assert.equal(readToken("o/r"), null);
+  } finally { teardown(); }
+});
+
+// Un token déjà stocké et rejeté n'est PAS supprimé par ce fix (ce n'est pas
+// son rôle) : le message doit nommer 'forge token set' pour que l'opérateur
+// sache comment le remplacer.
+test("a stored token rejected by GitHub is left in place and names 'forge token set'", async () => {
+  setup();
+  try {
+    writeToken("o/r", "ghp_stale");
+    const c = fakeContext({
+      rules: [IMAGE_OK, { match: "gh auth status", code: 1 }],
+      answers: ["a"],
+    });
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /forge token set/);
+    assert.equal(readToken("o/r"), "ghp_stale");
+  } finally { teardown(); }
+});
+
 test("provisioning configures the shared caches inside the repo mount", async () => {
   setup();
   try {

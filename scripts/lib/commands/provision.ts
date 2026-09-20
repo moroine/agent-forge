@@ -125,7 +125,8 @@ export async function provisionTemplate(ctx: Context, ownerRepo: string): Promis
     : `https://github.com/${ownerRepo}.git`;
 
   if (mode === "autonomous" || mode === "super") {
-    let token = readToken(ownerRepo);
+    const stored = readToken(ownerRepo);
+    let token = stored;
     if (!token) {
       ctx.err("");
       ctx.err("==============================================================");
@@ -133,15 +134,16 @@ export async function provisionTemplate(ctx: Context, ownerRepo: string): Promis
       ctx.err(`  Scoped to: ${ownerRepo} only`);
       ctx.err("  Permissions: Contents RW, Pull requests RW, Metadata R");
       ctx.err(`  It will be stored on the host at ${credentialPath(ownerRepo)}`);
-      ctx.err("  (chmod 600), so this is asked once per repo.");
+      ctx.err("  (chmod 600) once GitHub has accepted it, so this is asked");
+      ctx.err("  once per repo.");
       ctx.err("==============================================================");
       const typed = await ctx.prompt.askSecret("Paste the token (input hidden)");
-      if (!typed) throw new ForgeError("empty token.");
+      if (!typed || !typed.trim()) throw new ForgeError("empty token.");
       token = typed;
-      writeToken(ownerRepo, token);
     } else {
       ctx.out(`Using the stored token for ${ownerRepo}.`);
     }
+
     ctx.out("Authenticating gh inside the container...");
     // Le token passe par stdin, jamais par argv : argv est visible dans ps.
     await mustSucceed("gh auth login", ctx.exec(
@@ -149,7 +151,17 @@ export async function provisionTemplate(ctx: Context, ownerRepo: string): Promis
       { input: token },
     ));
     const status = await execAsAgent(ctx, container, "gh auth status --hostname github.com");
-    if (status.code !== 0) throw new ForgeError("the stored token was rejected by GitHub. Fix it with 'forge token set'.");
+    if (status.code !== 0) {
+      throw new ForgeError(stored
+        ? `the stored token for ${ownerRepo} was rejected by GitHub. Replace it with 'forge token set ${ownerRepo}'.`
+        : "the pasted token was rejected by GitHub.");
+    }
+
+    // Écrit APRÈS validation, et seulement si le token vient d'être saisi :
+    // un token refusé ne doit pas rester dans le store, sinon le prochain
+    // provisioning le relit, saute l'invite, et échoue à l'identique.
+    if (!stored) writeToken(ownerRepo, token);
+
     await mustSucceed("gh auth setup-git", execAsAgent(ctx, container, "gh auth setup-git"));
   }
 
