@@ -50,6 +50,10 @@ export async function checkWorktree(ctx: Context, container: string, dir: string
 
 // Le clone principal (/workspace, sur main) ne reçoit jamais de commit : seuls
 // les worktrees .trees/* sont vérifiés.
+//
+// `container` est un git host (voir githost.ts), pas forcément le container
+// visé par l'opération : les worktrees qu'on y liste appartiennent au montage
+// hôte partagé, pas à ce container en particulier.
 export async function checkAllWorktrees(ctx: Context, container: string): Promise<void> {
   for (const dir of await worktreeDirs(ctx, container)) {
     await checkWorktree(ctx, container, dir);
