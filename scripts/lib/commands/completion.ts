@@ -5,8 +5,7 @@ import { fileURLToPath } from "node:url";
 import type { Context } from "../context.ts";
 import { ForgeError } from "../context.ts";
 import { validateRepo } from "../validate.ts";
-import { forgeRepos, isRunning, requireContainerForRepo } from "../containers.ts";
-import { taskNames } from "../worktrees.ts";
+import { forgeRepos, taskContainersForRepo } from "../containers.ts";
 
 const USAGE = "Usage: forge completion bash|repos|tasks <owner/repo>";
 
@@ -28,7 +27,7 @@ export function completionScript(forgeBin: string): string {
   cmd="\${COMP_WORDS[1]}"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "start resume finish stop delete list image completion" -- "$cur"))
+    COMPREPLY=($(compgen -W "start resume finish stop delete list template token claude image completion" -- "$cur"))
     return
   fi
 
@@ -38,15 +37,18 @@ export function completionScript(forgeBin: string): string {
         2) COMPREPLY=($(compgen -W "$(${forgeBin} completion repos 2>/dev/null)" -- "$cur")) ;;
         3)
           case "$cmd" in
-            start|resume|finish)
+            start|resume|finish|stop)
               COMPREPLY=($(compgen -W "$(${forgeBin} completion tasks "\${COMP_WORDS[2]}" 2>/dev/null)" -- "$cur")) ;;
-            stop|delete)
+            delete)
               COMPREPLY=($(compgen -W "--force" -- "$cur")) ;;
           esac
           ;;
         4) [ "$cmd" = "finish" ] && COMPREPLY=($(compgen -W "--force" -- "$cur")) ;;
       esac
       ;;
+    template)   [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "rebuild" -- "$cur")) ;;
+    token)      [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "set rm import" -- "$cur")) ;;
+    claude)     [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "update list" -- "$cur")) ;;
     image)      [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "build update" -- "$cur")) ;;
     completion) [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "bash repos tasks" -- "$cur")) ;;
   esac
@@ -73,11 +75,9 @@ export async function cmdCompletion(
   if (sub === "tasks") {
     if (!repo) throw new ForgeError(USAGE);
     validateRepo(repo);
-    const container = await requireContainerForRepo(ctx, repo);
-    // Container arrêté : rien à lister, mais ce n'est pas une erreur — on ne
-    // peut simplement pas l'inspecter.
-    if (!(await isRunning(ctx, container))) return 0;
-    for (const t of await taskNames(ctx, container)) ctx.out(t);
+    // Aucune erreur pour un repo inconnu : la complétion ne doit jamais
+    // interrompre une frappe, et aucune tâche est une réponse valide.
+    for (const c of await taskContainersForRepo(ctx, repo)) if (c.task) ctx.out(c.task);
     return 0;
   }
 

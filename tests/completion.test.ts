@@ -1,7 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { ForgeError } from "../scripts/lib/context.ts";
 import { cmdCompletion, completionScript, FORGE_BIN } from "../scripts/lib/commands/completion.ts";
 
 const LIST = JSON.stringify([
@@ -32,20 +31,48 @@ test("repos never shells into a container, so TAB stays fast", async () => {
   assert.ok(!c.calls.some((call) => call[1] === "exec"));
 });
 
-test("tasks prints one task per line for a running container", async () => {
-  const c = ctx();
-  await cmdCompletion(c, "tasks", "moroine/agent-forge");
-  assert.deepEqual(c.out_lines, ["cli", "docs"]);
+// Une tâche est désormais son propre container (user.forge.role=task), pas
+// une entrée `git worktree list` sondée dans le container du repo — même
+// construction que fleetCtx dans tests/list.test.ts.
+function fleetCtx(opts: { repo?: string; tasks?: Record<string, string> } = {}) {
+  const repo = opts.repo ?? "o/r";
+  const tasks = opts.tasks ?? {};
+  const slug = repo.replace(/\//g, "-");
+  const templateName = `agent-${slug}`;
+  const instances: { name: string; status: string }[] = [{ name: templateName, status: "Stopped" }];
+  const meta: Record<string, Record<string, string>> = {
+    [templateName]: { repo, mode: "autonomous", role: "template", task: "" },
+  };
+  for (const [task, status] of Object.entries(tasks)) {
+    const name = `${templateName}-${task}`;
+    instances.push({ name, status });
+    meta[name] = { repo, mode: "autonomous", role: "task", task };
+  }
+
+  return fakeContext({
+    rules: [
+      { match: "lxc list", stdout: JSON.stringify(instances) },
+      ...Object.entries(meta).flatMap(([name, m]) => [
+        { match: `${name} user.forge.repo`, stdout: m.repo },
+        { match: `${name} user.forge.mode`, stdout: m.mode },
+        { match: `${name} user.forge.role`, stdout: m.role },
+        { match: `${name} user.forge.task`, stdout: m.task },
+      ]),
+    ],
+  });
+}
+
+test("completion tasks lists task containers without any lxc exec", async () => {
+  const c = fleetCtx({ tasks: { cli: "Running", api: "Stopped" } });
+  await cmdCompletion(c, "tasks", "o/r");
+  assert.deepEqual(c.out_lines, ["cli", "api"]);
+  assert.ok(!c.calls.some((call) => call[1] === "exec"));
 });
 
-test("tasks on a stopped container prints nothing and succeeds", async () => {
-  const c = ctx();
-  assert.equal(await cmdCompletion(c, "tasks", "acme/widgets"), 0);
+test("completion tasks on an unknown repo prints nothing and does not throw", async () => {
+  const c = fleetCtx({ tasks: {} });
+  assert.equal(await cmdCompletion(c, "tasks", "nobody/nothing"), 0);
   assert.deepEqual(c.out_lines, []);
-});
-
-test("tasks on an unknown repo fails", async () => {
-  await assert.rejects(() => cmdCompletion(ctx(), "tasks", "nobody/nothing"), ForgeError);
 });
 
 test("tasks without a repo argument fails with usage", async () => {
@@ -86,4 +113,12 @@ test("the emitted script calls forge by absolute path, not by name", async () =>
 test("the completion script offers tasks in third position and --force where it applies", () => {
   assert.ok(completionScript(FORGE_BIN).includes("start|resume|finish"));
   assert.ok(completionScript(FORGE_BIN).includes("--force"));
+});
+
+test("the emitted bash function offers the new top-level commands", () => {
+  const script = completionScript("/abs/forge");
+  assert.match(script, /start resume finish stop delete list template token claude image completion/);
+  assert.match(script, /template\)/);
+  assert.match(script, /token\)/);
+  assert.match(script, /claude\)/);
 });

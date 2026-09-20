@@ -9,22 +9,36 @@ import { cmdFinish } from "./lib/commands/finish.ts";
 import { cmdStop } from "./lib/commands/stop.ts";
 import { cmdDelete } from "./lib/commands/delete.ts";
 import { cmdList } from "./lib/commands/list.ts";
+import { cmdTemplate } from "./lib/commands/template.ts";
+import { cmdToken } from "./lib/commands/token.ts";
+import { cmdClaude } from "./lib/commands/claude.ts";
 import { cmdImage } from "./lib/commands/image.ts";
 import { cmdCompletion } from "./lib/commands/completion.ts";
 
 const USAGE = `Usage: forge <command> [args]
 
 Commands:
-  start [<owner/repo>] [<task>]     Provision (if needed) and start/attach a task session
-  resume [<owner/repo>] [<task>]    Re-attach an existing task's session
-  finish [<owner/repo>] [<task>]    Remove a finished task's worktree
-  stop [<owner/repo>] [--force]     Stop a container (blocked on dirty/unpushed WIP unless --force)
-  delete [<owner/repo>] [--force]   Delete a container (blocked on dirty/unpushed WIP unless --force)
-  list                              Show all containers: repo, mode, state, build
-  image build|update [super]        Rebuild agent-base (or, with super, agent-base-super = base + nested LXD)
-  completion bash                   Print a bash completion function (eval it in ~/.bashrc)
-  completion repos                  List managed owner/repo, one per line (machine-readable)
-  completion tasks <owner/repo>     List a repo's task names, one per line (machine-readable)
+  start [<owner/repo>] [<task>]        Copy the template + worktree + attach
+  resume [<owner/repo>] [<task>]       Re-attach (starts the container if stopped)
+  finish [<owner/repo>] [<task>] [--force]
+                                        WIP pre-flight, then worktree removed and
+                                        container deleted. Branch retained.
+  stop [<owner/repo>] [<task>]         Pause a container, no WIP pre-flight
+                                        (without <task>: every container of the repo)
+  delete [<owner/repo>] [--force]      WIP pre-flight across all worktrees, then
+                                        deletes the tasks AND the template.
+                                        The host mount survives.
+  list                                 Show all containers, grouped by repo: template
+                                        state, then one line per task
+  template rebuild [<owner/repo>]      Rebuild the template from agent-base,
+                                        credentials re-read from the host store
+  token set|rm|import [<owner/repo>]   Manage the host PAT store
+  claude update [<version>] | list     Install a claude-code version on the host,
+                                        switch 'current'
+  image build|update [super]           Rebuild agent-base (or, with super, agent-base-super = base + nested LXD)
+  completion bash                      Print a bash completion function (eval it in ~/.bashrc)
+  completion repos                     List managed owner/repo, one per line (machine-readable)
+  completion tasks <owner/repo>        List a repo's task names, one per line (machine-readable)
 
 A bracketed argument is asked for when you leave it out, as a numbered menu.
 With no terminal on stdin (scripts, CI) nothing is asked and the command
@@ -36,9 +50,12 @@ function dispatch(ctx: Context, positionals: string[], force: boolean): Promise<
     case "start": return cmdStart(ctx, a, b);
     case "resume": return cmdResume(ctx, a, b);
     case "finish": return cmdFinish(ctx, a, b, force);
-    case "stop": return cmdStop(ctx, a, force);
+    case "stop": return cmdStop(ctx, a, b);
     case "delete": return cmdDelete(ctx, a, force);
     case "list": return cmdList(ctx);
+    case "template": return cmdTemplate(ctx, a, b);
+    case "token": return cmdToken(ctx, a, b);
+    case "claude": return cmdClaude(ctx, a, b);
     case "image": return cmdImage(ctx, a, b);
     case "completion": return cmdCompletion(ctx, a, b);
     default: throw new ForgeError(`unknown command '${cmd}'\n${USAGE}`);

@@ -4,18 +4,27 @@
 // machine, et la rejouer casserait les assertions e2e qui vérifient des noms
 // de repo précis.
 const DEFAULT_LIST = [
-  { name: "agent-moroine-agent-forge", status: "Running" },
+  { name: "agent-moroine-agent-forge", status: "Stopped" },
+  { name: "agent-moroine-agent-forge-cli", status: "Running" },
   { name: "agent-acme-widgets", status: "Stopped" },
 ];
 
 const REPOS: Record<string, string> = {
   "agent-moroine-agent-forge": "moroine/agent-forge",
+  "agent-moroine-agent-forge-cli": "moroine/agent-forge",
   "agent-acme-widgets": "acme/widgets",
 };
 const MODES: Record<string, string> = {
   "agent-moroine-agent-forge": "autonomous",
+  "agent-moroine-agent-forge-cli": "autonomous",
   "agent-acme-widgets": "supervised",
 };
+const ROLES: Record<string, string> = {
+  "agent-moroine-agent-forge": "template",
+  "agent-moroine-agent-forge-cli": "task",
+  "agent-acme-widgets": "template",
+};
+const TASKS: Record<string, string> = { "agent-moroine-agent-forge-cli": "cli" };
 
 const argv = process.argv.slice(2);
 const [cmd, ...rest] = argv;
@@ -29,6 +38,8 @@ if (cmd === "config" && rest[0] === "get") {
   const [, name, key] = rest;
   if (key === "user.forge.repo") process.stdout.write((REPOS[name!] ?? "") + "\n");
   else if (key === "user.forge.mode") process.stdout.write((MODES[name!] ?? "") + "\n");
+  else if (key === "user.forge.role") process.stdout.write((ROLES[name!] ?? "") + "\n");
+  else if (key === "user.forge.task") process.stdout.write((TASKS[name!] ?? "") + "\n");
   else process.stdout.write("\n");
   process.exit(0);
 }
