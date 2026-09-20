@@ -1,7 +1,7 @@
 // tests/claude-cmd.test.ts
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
@@ -14,10 +14,17 @@ function sandbox(): string {
   return dir;
 }
 
+// Ce que npm aurait écrit : le répertoire ET node_modules/.bin/claude, le
+// binaire que le shim du container exec. switchCurrent exige le second.
+function installed(dir: string, version: string): void {
+  mkdirSync(join(dir, "versions", version, "node_modules", ".bin"), { recursive: true });
+  writeFileSync(join(dir, "versions", version, "node_modules", ".bin", "claude"), "#!/bin/sh\n");
+}
+
 test("claude list shows each version and marks the current one", async () => {
   const dir = sandbox();
-  mkdirSync(join(dir, "versions", "2.0.9"), { recursive: true });
-  mkdirSync(join(dir, "versions", "2.0.14"), { recursive: true });
+  installed(dir, "2.0.9");
+  installed(dir, "2.0.14");
   const ctx = fakeContext({});
   await cmdClaude(ctx, "list", undefined);
   const out = ctx.out_lines.join("\n");
@@ -33,7 +40,7 @@ test("claude update resolves 'latest' through npm view when no version is given"
   // Simuler un install RÉUSSI impose donc de créer aussi ce que npm aurait
   // créé — sans quoi le garde-fou de switchCurrent (refuser une version
   // absente) se déclenche, et c'est justement lui qu'on veut garder vivant.
-  mkdirSync(join(dir, "versions", "2.0.14"), { recursive: true });
+  installed(dir, "2.0.14");
   assert.equal(await cmdClaude(ctx, "update", undefined), 0);
   assert.ok(ctx.calls.some((c) => c.join(" ") === "npm view @anthropic-ai/claude-code version"));
   assert.ok(ctx.calls.some((c) => c.join(" ").includes("@anthropic-ai/claude-code@2.0.14")));
@@ -47,7 +54,7 @@ test("claude update installs the pinned version and switches current", async () 
   // Simuler un install RÉUSSI impose donc de créer aussi ce que npm aurait
   // créé — sans quoi le garde-fou de switchCurrent (refuser une version
   // absente) se déclenche, et c'est justement lui qu'on veut garder vivant.
-  mkdirSync(join(dir, "versions", "2.0.9"), { recursive: true });
+  installed(dir, "2.0.9");
   assert.equal(await cmdClaude(ctx, "update", "2.0.9"), 0);
   assert.ok(ctx.calls.some((c) => c.join(" ").includes("@anthropic-ai/claude-code@2.0.9")));
   assert.equal(currentVersion(), "2.0.9");

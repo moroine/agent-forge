@@ -86,8 +86,43 @@ assert_contains "$LIB" 'git -C "$FORGE_REPO_DIR" rev-parse HEAD'
 assert_not_contains "$LIB" 'next-task'
 
 assert_contains "$LIB" '/usr/local/bin/claude'
-assert_contains "$LIB" 'readlink -f /opt/forge-claude/current'
+assert_contains "$LIB" 'readlink -f "$D/current"'
 assert_not_contains "$LIB" 'npm install -g @anthropic-ai/claude-code'
+
+# --- le shim claude est EXECUTE, pas seulement grepe ---
+# Le seul test qui existait grepait le texte du heredoc : c-est exactement
+# comme cela qu-un `current` pendouillant (lien absolu vers un chemin hote,
+# inexistant dans le container) est parti en production sans que rien
+# n-echoue. Ici on extrait le shim du heredoc, on lui construit une
+# arborescence jetable identique a celle que pose switchCurrent (lien
+# RELATIF versions/<v>), et on verifie qu-il exec bien le binaire versionne.
+shimdir=$(mktemp -d)
+sed -n '/<<"SHIM"/,/^SHIM$/p' "$LIB" | sed '1d;$d' > "$shimdir/claude"
+chmod +x "$shimdir/claude"
+bin="$shimdir/dist/versions/1.2.3/node_modules/.bin"
+mkdir -p "$bin"
+printf '#!/bin/sh\necho SHIM_EXECED_STUB "$@"\n' > "$bin/claude"
+chmod +x "$bin/claude"
+ln -s versions/1.2.3 "$shimdir/dist/current"
+
+output=$(FORGE_CLAUDE_DIR="$shimdir/dist" "$shimdir/claude" --version 2>&1) && code=0 || code=$?
+if [ "$code" -eq 0 ] && [ "$output" = "SHIM_EXECED_STUB --version" ]; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL (le shim doit exec versions/<v>/node_modules/.bin/claude via un current relatif): code=$code sortie=[$output]"
+fi
+
+# Versant negatif : sans `current`, un message exploitable, pas un
+# "No such file or directory" du shell.
+output=$(FORGE_CLAUDE_DIR="$shimdir/vide" "$shimdir/claude" 2>&1) && code=0 || code=$?
+if [ "$code" -ne 0 ] && echo "$output" | grep -qF 'claude-code is not installed on the host'; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL (shim sans arborescence, attendu message + code non nul): code=$code sortie=[$output]"
+fi
+rm -rf "$shimdir"
 
 # --- garde source vs execution directe (voir le fix "safely sourceable") ---
 # Le guard `if [ "${BASH_SOURCE[0]}" = "$0" ]; then cmd_forge_image "$@"; fi`

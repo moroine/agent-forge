@@ -56,11 +56,17 @@ _forge_image_build() {
   lxc exec "$setup" -- bash -c 'cat > /usr/local/bin/claude <<"SHIM"
 #!/bin/sh
 set -e
-if [ ! -e /opt/forge-claude/current ]; then
+# Repertoire parametrable UNIQUEMENT pour les tests, qui executent ce shim
+# sur une arborescence jetable : sans cela la seule verification possible
+# reste un grep du texte, et un lien `current` casse repart en production.
+# En container, toujours le montage read-only /opt/forge-claude.
+# (Pas de guillemet simple ici : ce heredoc vit dans un bash -c quote.)
+D=${FORGE_CLAUDE_DIR:-/opt/forge-claude}
+if [ ! -e "$D/current" ]; then
   echo "claude-code is not installed on the host. Run: forge claude update" >&2
   exit 1
 fi
-V=$(readlink -f /opt/forge-claude/current)
+V=$(readlink -f "$D/current")
 exec "$V/node_modules/.bin/claude" "$@"
 SHIM
 chmod 755 /usr/local/bin/claude'
