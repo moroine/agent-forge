@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import {
   listInstances, instanceStatus, instanceExists, configGet, configSet,
-  imageProperty, execAsAgent, deleteInstance, attachArgv,
+  imageProperty, execAsAgent, deleteInstance, copyInstance, addDiskDevice, attachArgv,
 } from "../scripts/lib/lxd.ts";
 
 const LIST_JSON = JSON.stringify([
@@ -80,10 +80,41 @@ test("attachArgv keeps tmux the direct target of lxc exec", () => {
     "--cwd", "/workspace/.trees/cli",
     "--env", "TERM=xterm-256color",
     "--", "tmux", "new-session", "-A", "-s", "cli",
-    "exec bash -lc 'claude --permission-mode auto --remote-control agent-x-cli'",
+    "exec bash -lc 'claude --permission-mode auto --remote-control agent-x'",
   ]);
   // Invariant du commit c34a145 : aucun `su` entre lxc exec et tmux, sinon
   // SIGWINCH n'atteint jamais le client tmux au redimensionnement.
   assert.ok(!argv.includes("su"));
   assert.equal(argv[argv.indexOf("--", 3) + 1], "tmux");
+});
+
+test("copyInstance shells out to lxc copy", async () => {
+  const ctx = fakeContext({});
+  await copyInstance(ctx, "agent-o-r", "agent-o-r-task");
+  assert.deepEqual(ctx.calls[0], ["lxc", "copy", "agent-o-r", "agent-o-r-task"]);
+});
+
+test("addDiskDevice passes source and path, and readonly only when asked", async () => {
+  const ctx = fakeContext({});
+  await addDiskDevice(ctx, "agent-x", "workspace", "/h/w/agent-x", "/workspace");
+  assert.deepEqual(ctx.calls[0], [
+    "lxc", "config", "device", "add", "agent-x", "workspace", "disk",
+    "source=/h/w/agent-x", "path=/workspace",
+  ]);
+
+  const ro = fakeContext({});
+  await addDiskDevice(ro, "agent-x", "forge-claude", "/h/claude", "/opt/forge-claude", true);
+  assert.deepEqual(ro.calls[0], [
+    "lxc", "config", "device", "add", "agent-x", "forge-claude", "disk",
+    "source=/h/claude", "path=/opt/forge-claude", "readonly=true",
+  ]);
+});
+
+test("attachArgv names remote-control after the container alone", () => {
+  const argv = attachArgv("agent-moroine-agent-forge-cli", "cli", "xterm-256color");
+  const joined = argv.join(" ");
+  assert.match(joined, /--remote-control agent-moroine-agent-forge-cli'/);
+  assert.ok(!joined.includes("agent-moroine-agent-forge-cli-cli"), "plus de suffixe de tâche");
+  assert.ok(argv.includes("--cwd"));
+  assert.ok(argv.includes("/workspace/.trees/cli"));
 });

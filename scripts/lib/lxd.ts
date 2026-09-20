@@ -68,12 +68,30 @@ export function deleteInstance(ctx: Context, name: string): Promise<ExecResult> 
   return ctx.exec(["lxc", "delete", name, "--force"]);
 }
 
+// Copie d'instance : la source DOIT être stoppée (voir §1 de la spec — un
+// rootfs copié en cours d'écriture emporte un containerd/dqlite incohérent).
+// Le device `workspace` fait partie de la config d'instance, donc la copie
+// pointe sur le même répertoire hôte : c'est exactement ce qu'on veut.
+export function copyInstance(ctx: Context, source: string, target: string): Promise<ExecResult> {
+  return ctx.exec(["lxc", "copy", source, target]);
+}
+
+export function addDiskDevice(
+  ctx: Context, name: string, device: string, source: string, path: string, readonly = false,
+): Promise<ExecResult> {
+  const argv = ["lxc", "config", "device", "add", name, device, "disk",
+    `source=${source}`, `path=${path}`];
+  if (readonly) argv.push("readonly=true");
+  return ctx.exec(argv);
+}
+
 // tmux DOIT rester la cible directe de `lxc exec` : avec un `su - aiuser -c`
 // intermédiaire, SIGWINCH n'atteint jamais le client tmux quand le terminal
 // hôte est redimensionné (diagnostiqué le 2026-08-31, commit c34a145).
 // --user/--group/--cwd remplacent `su - aiuser` + `cd`. HOME vient du profil
 // LXD, mais pas TERM : plus aucun shell de login ne le pose, on le transmet.
 // `exec bash -lc` sous tmux restaure DOCKER_HOST, exporté depuis .bashrc.
+// Le nom du container porte déjà la tâche : plus de suffixe.
 export function attachArgv(container: string, task: string, term: string): string[] {
   return [
     "lxc", "exec", container,
@@ -81,6 +99,6 @@ export function attachArgv(container: string, task: string, term: string): strin
     "--cwd", `/workspace/.trees/${task}`,
     "--env", `TERM=${term}`,
     "--", "tmux", "new-session", "-A", "-s", task,
-    `exec bash -lc 'claude --permission-mode auto --remote-control ${container}-${task}'`,
+    `exec bash -lc 'claude --permission-mode auto --remote-control ${container}'`,
   ];
 }
