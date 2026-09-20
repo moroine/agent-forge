@@ -4,7 +4,8 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
-import { provisionContainer } from "../scripts/lib/commands/provision.ts";
+import { provisionTemplate } from "../scripts/lib/commands/provision.ts";
+import { readToken, writeToken } from "../scripts/lib/credentials.ts";
 
 let home: string;
 
@@ -33,7 +34,7 @@ test("provisioning refuses without host Claude credentials", async () => {
   rmSync(join(home, ".claude", ".credentials.json"));
   try {
     await assert.rejects(
-      () => provisionContainer(fakeContext({ rules: [IMAGE_OK], answers: ["a"] }), "agent-x", "o/r"),
+      () => provisionTemplate(fakeContext({ rules: [IMAGE_OK], answers: ["a"] }), "o/r"),
       /credentials.json not found/,
     );
   } finally { teardown(); }
@@ -43,7 +44,7 @@ test("provisioning refuses when agent-base is missing", async () => {
   setup();
   try {
     await assert.rejects(
-      () => provisionContainer(fakeContext({ rules: [{ match: "image info", code: 1 }] }), "agent-x", "o/r"),
+      () => provisionTemplate(fakeContext({ rules: [{ match: "image info", code: 1 }] }), "o/r"),
       /image agent-base not found/,
     );
   } finally { teardown(); }
@@ -53,7 +54,7 @@ test("autonomous mode reads the token without echoing and never puts it in argv"
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["a", "ghp_secret"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     // Le token part sur stdin de `gh auth login`, jamais en argv : argv est
     // visible dans ps.
     assert.ok(!c.calls.some((call) => call.join(" ").includes("ghp_secret")));
@@ -71,7 +72,7 @@ test("autonomous mode refuses an empty token", async () => {
   setup();
   try {
     await assert.rejects(
-      () => provisionContainer(fakeContext({ rules: [IMAGE_OK], answers: ["a", null] }), "agent-x", "o/r"),
+      () => provisionTemplate(fakeContext({ rules: [IMAGE_OK], answers: ["a", null] }), "o/r"),
       /empty token/,
     );
   } finally { teardown(); }
@@ -81,7 +82,7 @@ test("the plugin marketplace is added over HTTPS, never over SSH", async () => {
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const add = c.calls.map((call) => call.join(" ")).find((l) => l.includes("plugin marketplace add"));
     assert.ok(add, "no marketplace add issued");
     // Le container n'a aucune confiance SSH envers GitHub, et c'est voulu :
@@ -100,10 +101,10 @@ test("supervised mode never asks for a token and clones on the host", async () =
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     assert.ok(!c.calls.some((call) => call.join(" ").includes("gh auth")));
     assert.ok(c.calls.some((call) => call.join(" ").includes("git@github.com:o/r.git")));
-    assert.ok(c.err_lines.some((l) => l.includes("git remote add agent-x")));
+    assert.ok(c.err_lines.some((l) => l.includes("git remote add agent-o-r")));
   } finally { teardown(); }
 });
 
@@ -111,7 +112,7 @@ test("forge metadata is recorded after the clone, not before", async () => {
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const flat = c.calls.map((call) => call.join(" "));
     const clone = flat.findIndex((l) => l.includes("git clone"));
     const meta = flat.findIndex((l) => l.includes("user.forge.repo"));
@@ -126,7 +127,7 @@ test("failing to install the LFS filters aborts provisioning", async () => {
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK, { match: "lfs install --skip-repo", code: 1 }], answers: ["s"] });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /git-lfs filters in agent-x failed/);
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /git-lfs filters in agent-o-r failed/);
   } finally { teardown(); }
 });
 
@@ -146,7 +147,7 @@ test("a git-lfs failure reports git's own message, not just the step name", asyn
       }],
       answers: ["s"],
     });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /fatal: not in a git directory/);
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /fatal: not in a git directory/);
   } finally { teardown(); }
 });
 
@@ -167,7 +168,7 @@ test("a repo that manages its own hooks does not abort provisioning", async () =
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK, HOOKS_CONFLICT], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const errs = c.err_lines.join("\n");
     assert.match(errs, /Hook already exists: pre-push/);
     assert.match(errs, /filters are installed/i);
@@ -184,7 +185,7 @@ test("the worktree exclude is written even when the hooks step fails", async () 
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK, HOOKS_CONFLICT], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const flat = c.calls.map((call) => call.join(" "));
     assert.ok(flat.some((l) => l.includes("info/exclude")), flat.join("\n"));
     // …et il ne doit pas être accroché à `git lfs install` par un &&.
@@ -200,7 +201,7 @@ test("a failing clone aborts provisioning before metadata is recorded", async ()
       rules: [IMAGE_OK, { match: "git clone git@github.com", code: 1, stderr: "Permission denied (publickey)" }],
       answers: ["s"],
     });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /clone/i);
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /clone/i);
     // Sans le fail-fast, l'exécution retombait sur git-lfs puis sur les
     // configSet forge.*, timbrant un container vide comme provisionné —
     // exactement l'état que checkNameCollision (Task 6) traite comme
@@ -226,9 +227,9 @@ const ORIGIN = (url: string) => ({ match: "remote get-url", stdout: `${url}\n` }
 test("un workspace laissé par un container supprimé est réutilisé au lieu de casser le clone", async () => {
   setup();
   try {
-    seedWorkspace("agent-x", "README.md");
+    seedWorkspace("agent-o-r", "README.md");
     const c = fakeContext({ rules: [IMAGE_OK, ORIGIN("git@github.com:o/r.git")], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const flat = c.calls.map((call) => call.join(" "));
     assert.ok(!flat.some((l) => l.includes("git clone")), "pas de clone par-dessus un clone existant");
     assert.ok(flat.some((l) => l.includes("remote set-url origin git@github.com:o/r.git")));
@@ -239,9 +240,9 @@ test("un workspace laissé par un container supprimé est réutilisé au lieu de
 test("la réutilisation réaligne le remote sur le mode autonome (https, pas ssh)", async () => {
   setup();
   try {
-    seedWorkspace("agent-x", "README.md");
+    seedWorkspace("agent-o-r", "README.md");
     const c = fakeContext({ rules: [IMAGE_OK, ORIGIN("git@github.com:o/r.git")], answers: ["a", "ghp_secret"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const flat = c.calls.map((call) => call.join(" "));
     assert.ok(!flat.some((l) => l.includes("git clone")));
     assert.ok(flat.some((l) => l.includes("remote set-url origin https://github.com/o/r.git")));
@@ -253,9 +254,9 @@ test("la réutilisation réaligne le remote sur le mode autonome (https, pas ssh
 test("un workspace non vide appartenant à un autre repo arrête tout avant de créer le container", async () => {
   setup();
   try {
-    seedWorkspace("agent-x", "README.md");
+    seedWorkspace("agent-o-r", "README.md");
     const c = fakeContext({ rules: [IMAGE_OK, ORIGIN("git@github.com:someone/else.git")], answers: ["s"] });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /not a clone of o\/r/);
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /not a clone of o\/r/);
     assert.ok(!c.calls.some((call) => call.join(" ").includes("lxc launch")), "rien ne doit être créé");
   } finally { teardown(); }
 });
@@ -263,9 +264,9 @@ test("un workspace non vide appartenant à un autre repo arrête tout avant de c
 test("un workspace non vide qui n'est pas un dépôt git arrête tout avant de créer le container", async () => {
   setup();
   try {
-    seedWorkspace("agent-x", "notes.txt");
+    seedWorkspace("agent-o-r", "notes.txt");
     const c = fakeContext({ rules: [IMAGE_OK, { match: "remote get-url", code: 128 }], answers: ["s"] });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /not a clone of o\/r/);
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /not a clone of o\/r/);
     assert.ok(!c.calls.some((call) => call.join(" ").includes("lxc launch")));
   } finally { teardown(); }
 });
@@ -273,9 +274,9 @@ test("un workspace non vide qui n'est pas un dépôt git arrête tout avant de c
 test("le pré-vol ne demande même pas le mode quand le workspace est inutilisable", async () => {
   setup();
   try {
-    seedWorkspace("agent-x", "notes.txt");
+    seedWorkspace("agent-o-r", "notes.txt");
     const c = fakeContext({ rules: [IMAGE_OK, { match: "remote get-url", code: 128 }], answers: ["s"] });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"));
+    await assert.rejects(() => provisionTemplate(c, "o/r"));
     assert.ok(!c.err_lines.some((l) => l.startsWith("Choice")), "pas de question posée pour rien");
   } finally { teardown(); }
 });
@@ -283,9 +284,9 @@ test("le pré-vol ne demande même pas le mode quand le workspace est inutilisab
 test("un répertoire workspace vide se clone normalement", async () => {
   setup();
   try {
-    seedWorkspace("agent-x");
+    seedWorkspace("agent-o-r");
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["s"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     assert.ok(c.calls.some((call) => call.join(" ").includes("git clone git@github.com:o/r.git")));
   } finally { teardown(); }
 });
@@ -294,9 +295,9 @@ test("super mode launches agent-base-super under agent-super and inits nested LX
   setup();
   try {
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["u", "ghp_secret"] });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     const flat = c.calls.map((call) => call.join(" "));
-    assert.ok(flat.some((l) => l.includes("lxc launch agent-base-super agent-x --profile agent-super")));
+    assert.ok(flat.some((l) => l.includes("lxc launch agent-base-super agent-o-r --profile agent-super")));
     assert.ok(flat.some((l) => l.includes("lxd init --minimal")), "nested LXD initialised");
     // super garde le flux autonome : credential + clone https
     assert.ok(flat.some((l) => l.includes("gh auth login")));
@@ -312,7 +313,7 @@ test("super mode stamps the agent-base-super image commit", async () => {
       rules: [IMAGE_OK, { match: "image get-property agent-base-super", stdout: "SUPERSHA\n" }],
       answers: ["u", "ghp_secret"],
     });
-    await provisionContainer(c, "agent-x", "o/r");
+    await provisionTemplate(c, "o/r");
     assert.ok(c.calls.some((call) => call.join(" ").includes("user.forge.image_commit SUPERSHA")));
   } finally { teardown(); }
 });
@@ -321,6 +322,75 @@ test("super mode refuses when agent-base-super is missing", async () => {
   setup();
   try {
     const c = fakeContext({ rules: [{ match: "image info agent-base-super", code: 1 }], answers: ["u"] });
-    await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /image agent-base-super not found/);
+    await assert.rejects(() => provisionTemplate(c, "o/r"), /image agent-base-super not found/);
+  } finally { teardown(); }
+});
+
+// --- Task 7 : le provisioning produit le TEMPLATE du repo, stoppé -----------
+
+test("provisioning reads the PAT from the host store instead of prompting", async () => {
+  setup();
+  try {
+    writeToken("o/r", "ghp_stored");
+    const c = fakeContext({ rules: [IMAGE_OK], answers: ["a"] });   // only the mode question
+    await provisionTemplate(c, "o/r");
+    const login = c.calls.findIndex((call) => call.join(" ").includes("gh auth login"));
+    assert.ok(login >= 0);
+    assert.equal(c.execOptions[login]?.input, "ghp_stored");
+    assert.ok(!c.err_lines.some((l) => l.includes("Paste the token")));
+  } finally { teardown(); }
+});
+
+test("a token typed at the prompt is persisted to the host store", async () => {
+  setup();
+  try {
+    const c = fakeContext({ rules: [IMAGE_OK], answers: ["a", "ghp_typed"] });
+    await provisionTemplate(c, "o/r");
+    assert.equal(readToken("o/r"), "ghp_typed");
+  } finally { teardown(); }
+});
+
+test("provisioning configures the shared caches inside the repo mount", async () => {
+  setup();
+  try {
+    const c = fakeContext({ rules: [IMAGE_OK], answers: ["a", "ghp_x"] });
+    await provisionTemplate(c, "o/r");
+    const scripts = c.calls.map((call) => call.join(" "));
+    assert.ok(scripts.some((s) => s.includes("mkdir -p /workspace/.forge-cache/npm /workspace/.forge-cache/pnpm")));
+    assert.ok(scripts.some((s) => s.includes("npm config set cache /workspace/.forge-cache/npm")));
+    assert.ok(scripts.some((s) => s.includes("pnpm config set store-dir /workspace/.forge-cache/pnpm")));
+    assert.ok(scripts.some((s) => s.includes(".forge-cache/") && s.includes(".git/info/exclude")));
+  } finally { teardown(); }
+});
+
+test("provisioning stamps role=template and leaves the container stopped", async () => {
+  setup();
+  try {
+    const c = fakeContext({ rules: [IMAGE_OK], answers: ["a", "ghp_x"] });
+    const tpl = await provisionTemplate(c, "o/r");
+    assert.equal(tpl.name, "agent-o-r");
+    assert.equal(tpl.role, "template");
+    const joined = c.calls.map((call) => call.join(" "));
+    assert.ok(joined.some((s) => s === "lxc config set agent-o-r user.forge.role template"));
+    assert.ok(joined.some((s) => s === "lxc stop agent-o-r"));
+    assert.equal(joined.at(-1), "lxc stop agent-o-r", "le stop est la dernière étape");
+  } finally { teardown(); }
+});
+
+test("provisioning no longer installs claude-code inside the container", async () => {
+  setup();
+  try {
+    const c = fakeContext({ rules: [IMAGE_OK], answers: ["a", "ghp_x"] });
+    await provisionTemplate(c, "o/r");
+    assert.ok(!c.calls.some((call) => call.join(" ").includes("@anthropic-ai/claude-code")));
+  } finally { teardown(); }
+});
+
+test("supervised provisioning never asks for a token", async () => {
+  setup();
+  try {
+    const c = fakeContext({ rules: [IMAGE_OK], answers: ["s"] });
+    await provisionTemplate(c, "o/r");
+    assert.ok(!c.calls.some((call) => call.join(" ").includes("gh auth login")));
   } finally { teardown(); }
 });

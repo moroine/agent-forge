@@ -6,11 +6,17 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
-import { configSet, execAsAgent } from "../lxd.ts";
-import { baseImageFor, latestImageCommitFor } from "../containers.ts";
+import { addDiskDevice, configSet, execAsAgent, stopInstance } from "../lxd.ts";
+import type { ForgeContainer } from "../containers.ts";
+import { ROLE_TEMPLATE, baseImageFor, latestImageCommitFor, templateContainerName } from "../containers.ts";
 import { home, repoDir, workspaces } from "../hostpaths.ts";
+import { credentialPath, readToken, writeToken } from "../credentials.ts";
 
-export async function provisionContainer(ctx: Context, container: string, ownerRepo: string): Promise<void> {
+// Produit le TEMPLATE du repo : provisionné une seule fois, stoppé à la fin,
+// et copié (jamais travaillé dedans) par `forge start` pour chaque tâche —
+// voir §1 de la spec container-per-task.
+export async function provisionTemplate(ctx: Context, ownerRepo: string): Promise<ForgeContainer> {
+  const container = templateContainerName(ownerRepo);
   const credentials = join(home(), ".claude", ".credentials.json");
   if (!existsSync(credentials)) {
     throw new ForgeError(`${credentials} not found. Run 'claude auth login' on the host first.`);
@@ -59,8 +65,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   mkdirSync(workspaceDir, { recursive: true });
   // raw.idmap dans le profil mappe moroine (1000) vers aiuser (1001) et gère
   // aussi root : pas besoin d'idmap shifting sur ce device.
-  await mustSucceed("mount workspace", ctx.exec(["lxc", "config", "device", "add", container, "workspace", "disk",
-    `source=${workspaceDir}`, "path=/workspace"]));
+  await mustSucceed("mount workspace", addDiskDevice(ctx, container, "workspace", workspaceDir, "/workspace"));
 
   ctx.out("Copying signing key...");
   await mustSucceed("copy signing key", ctx.exec(["lxc", "file", "push", join(home(), ".ssh", "github_agents_signing"),
@@ -84,10 +89,6 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   await mustSucceed("push onboarding state", ctx.exec(["lxc", "file", "push",
     join(repoDir(), "config", "claude-onboarding-state.json"),
     `${container}/home/aiuser/.claude.json`, "--uid", "1001", "--gid", "1001", "--mode", "600"]));
-
-  ctx.out("Updating Claude Code to latest...");
-  await mustSucceed("update Claude Code",
-    ctx.exec(["lxc", "exec", container, "--", "npm", "install", "-g", "@anthropic-ai/claude-code@latest"]));
 
   // URL HTTPS explicite, pas la forme raccourcie owner/repo : claude resout
   // cette derniere en git@github.com, or le container n'a aucune confiance SSH
@@ -124,17 +125,23 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     : `https://github.com/${ownerRepo}.git`;
 
   if (mode === "autonomous" || mode === "super") {
-    ctx.err("");
-    ctx.err("==============================================================");
-    ctx.err("  GitHub token required (BOT account, fine-grained PAT)");
-    ctx.err(`  Scoped to: ${ownerRepo} only`);
-    ctx.err("  Permissions: Contents RW, Pull requests RW, Metadata R");
-    ctx.err("  The token is piped into the container and never written");
-    ctx.err("  to host disk.");
-    ctx.err("==============================================================");
-    const token = await ctx.prompt.askSecret("Paste the token (input hidden)");
-    if (!token) throw new ForgeError("empty token.");
-
+    let token = readToken(ownerRepo);
+    if (!token) {
+      ctx.err("");
+      ctx.err("==============================================================");
+      ctx.err("  GitHub token required (BOT account, fine-grained PAT)");
+      ctx.err(`  Scoped to: ${ownerRepo} only`);
+      ctx.err("  Permissions: Contents RW, Pull requests RW, Metadata R");
+      ctx.err(`  It will be stored on the host at ${credentialPath(ownerRepo)}`);
+      ctx.err("  (chmod 600), so this is asked once per repo.");
+      ctx.err("==============================================================");
+      const typed = await ctx.prompt.askSecret("Paste the token (input hidden)");
+      if (!typed) throw new ForgeError("empty token.");
+      token = typed;
+      writeToken(ownerRepo, token);
+    } else {
+      ctx.out(`Using the stored token for ${ownerRepo}.`);
+    }
     ctx.out("Authenticating gh inside the container...");
     // Le token passe par stdin, jamais par argv : argv est visible dans ps.
     await mustSucceed("gh auth login", ctx.exec(
@@ -142,7 +149,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
       { input: token },
     ));
     const status = await execAsAgent(ctx, container, "gh auth status --hostname github.com");
-    if (status.code !== 0) throw new ForgeError("the pasted token was rejected by GitHub.");
+    if (status.code !== 0) throw new ForgeError("the stored token was rejected by GitHub. Fix it with 'forge token set'.");
     await mustSucceed("gh auth setup-git", execAsAgent(ctx, container, "gh auth setup-git"));
   }
 
@@ -185,6 +192,19 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   await mustSucceed(`worktree exclude in ${container}`, execAsAgent(ctx, container,
     "cd /workspace && { grep -qxF '.trees/' .git/info/exclude || echo '.trees/' >> .git/info/exclude; }"));
 
+  ctx.out("Setting up the shared npm/pnpm caches...");
+  // Dans le montage du repo, donc dans le MÊME mount que .trees/ : c'est la
+  // seule position où les hardlinks de pnpm ne se heurtent pas à EXDEV
+  // (spec §5). Ne pas déplacer vers un device dédié.
+  await mustSucceed("create the cache directories", execAsAgent(ctx, container,
+    "mkdir -p /workspace/.forge-cache/npm /workspace/.forge-cache/pnpm"));
+  await mustSucceed("point npm at the shared cache", execAsAgent(ctx, container,
+    "npm config set cache /workspace/.forge-cache/npm"));
+  await mustSucceed("point pnpm at the shared store", execAsAgent(ctx, container,
+    "pnpm config set store-dir /workspace/.forge-cache/pnpm"));
+  await mustSucceed("exclude the cache from the main clone", execAsAgent(ctx, container,
+    "cd /workspace && { grep -qxF '.forge-cache/' .git/info/exclude || echo '.forge-cache/' >> .git/info/exclude; }"));
+
   ctx.out("Installing git-lfs hooks in /workspace...");
   // Best-effort, délibérément. `git lfs install` refuse d'écraser un pre-push
   // qu'il ne reconnaît pas et sort 2 — ce qui arrive dès que le dépôt gère ses
@@ -211,6 +231,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   ctx.out("Recording forge metadata...");
   await mustSucceed("record forge repo", configSet(ctx, container, "user.forge.repo", ownerRepo));
   await mustSucceed("record forge mode", configSet(ctx, container, "user.forge.mode", mode));
+  await mustSucceed("record forge role", configSet(ctx, container, "user.forge.role", ROLE_TEMPLATE));
 
   if (mode === "supervised") {
     ctx.err("");
@@ -218,7 +239,9 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     ctx.err(`  git remote add ${container} ssh://moroine@<host>:2222${workspaceDir}`);
   }
 
-  ctx.out(`Container ${container} provisioned.`);
+  ctx.out(`Template ${container} provisioned. Stopping it — it is only ever copied, never worked in.`);
+  await mustSucceed("lxc stop", stopInstance(ctx, container));
+  return { name: container, status: "Stopped", repo: ownerRepo, mode, role: ROLE_TEMPLATE, task: "" };
 }
 
 // `forge delete` ne supprime QUE le container : ~/workspaces/<container> est
