@@ -8,10 +8,237 @@ Infrastructure for running Claude Code agents in isolated LXD containers on a de
 SSH (port 2222, Ed25519, no password)
 └── UFW (deny all, allow 2222, LXD isolated from LAN)
     └── Fail2ban (5 retries, 30 day ban)
-        └── LXD container (2CPU, 4GB RAM, 20GB disk)
+        └── LXD container (8 CPU, 12GB RAM, 100GB disk)
             └── aiuser (no sudo, /workspace only)
                 └── Claude Code (Claude Pro, full permissions)
 ```
+
+## Security model
+
+The layered summary above is the short version. What follows is the full model:
+what each layer stops, where every secret lives, and — just as important —
+where the model deliberately stops making promises.
+
+### Defense in depth
+
+Five layers, each one assuming the previous has already fallen.
+
+```mermaid
+flowchart TB
+  ATT(["External attacker"]) --> L1
+
+  subgraph L1["Layer 1 — Host network perimeter"]
+    direction TB
+    A1["UFW: default deny incoming<br/>one open port: 2222/tcp"]
+    A2["sshd: publickey ONLY<br/>AllowUsers moroine · PasswordAuthentication no<br/>TCP/StreamLocal forwarding off · LoginGraceTime 30s · MaxStartups 3:50:10"]
+    A3["Fail2ban: sshd aggressive filter<br/>5 failures / 1h → 30-day ban, all ports"]
+    A1 --> A2 --> A3
+  end
+
+  L1 -->|"host account compromised"| L2
+
+  subgraph L2["Layer 2 — Container network segmentation"]
+    direction TB
+    B1["ufw route deny in on lxdbr0 → RFC1918<br/>10/8 · 172.16/12 · 192.168/16"]
+    B2["+ link-local 169.254/16 · CGNAT 100.64/10 · multicast 224/4"]
+    B3["+ IPv6: ULA fc00::/7 · link-local fe80::/10 · multicast ff00::/8"]
+    B4["ufw route allow → internet only<br/>GitHub, Anthropic API"]
+    B1 --> B2 --> B3 --> B4
+  end
+
+  L2 -->|"agent compromised inside a container"| L3
+
+  subgraph L3["Layer 3 — LXD container isolation · agent profile"]
+    direction TB
+    C1["security.privileged = false<br/>container root = namespaced UID, no power on the host"]
+    C2["security.syscalls.deny_default = true<br/>seccomp blocklist: mount, pivot_root, CLONE_NEWUSER, keyctl…"]
+    C3["19 capabilities dropped<br/>sys_module · sys_rawio · sys_boot · sys_ptrace · mac_admin ·<br/>mac_override · bpf · perfmon · audit_* · syslog · ipc_* …"]
+    C4["raw.idmap 1000 ⇄ 1001<br/>the container only ever sees its own mounted /workspace"]
+    C1 --> C2 --> C3 --> C4
+  end
+
+  L3 -->|"agent turns malicious WITHIN its own perimeter"| L4
+
+  subgraph L4["Layer 4 — The agent process"]
+    direction TB
+    D1["aiuser: no sudo, scoped to /workspace"]
+    D2["pre-bash.sh hook on EVERY Bash call<br/>pushed root:root 755 → aiuser cannot rewrite it<br/>settings.json root:root 644"]
+    D3["audit log /workspace/.claude/bash-audit.log<br/>written host-side: survives container deletion"]
+    D4["rootless Docker: daemon runs as aiuser<br/>a Docker escape lands back at… aiuser"]
+    D1 --> D2 --> D3 --> D4
+  end
+
+  L4 -->|"the regex filter is bypassable — it says so itself"| L5
+
+  subgraph L5["Layer 5 — The REAL boundary, on GitHub"]
+    direction TB
+    E1["Branch protection on main<br/>PR required + 1 approval"]
+    E2["Fine-grained PAT scoped to ONE repo<br/>Contents RW · Pull requests RW · Metadata R"]
+    E3["GitHub forbids approving your own PR<br/>→ the bot can never merge its own work,<br/>even with a stolen token"]
+    E1 --> E2 --> E3
+  end
+```
+
+### Trust boundaries: where each secret lives
+
+The design goal is that your personal credentials never exist on the server,
+and that a container holds the smallest credential that still lets it do its
+job — or, in supervised mode, none at all.
+
+```mermaid
+flowchart LR
+  subgraph LAP["Laptop — human trust zone"]
+    direction TB
+    Y["YubiKey<br/>signs human commits"]
+    P["Personal GitHub credentials<br/>NEVER touch the server"]
+    T["Fine-grained PAT created here,<br/>in the BOT account's UI<br/>kept in a password manager"]
+  end
+
+  subgraph HOST["Host — operator trust zone"]
+    direction TB
+    SK["~/.ssh/github_agents_signing<br/>bot signing key"]
+    CC["~/.claude/.credentials.json"]
+    WSP["~/workspaces/&lt;container&gt;<br/>+ bash-audit.log"]
+  end
+
+  subgraph CTA["AUTONOMOUS container — untrusted zone"]
+    direction TB
+    K1["signing key · 600 · aiuser"]
+    K2["Claude credentials · 600 · aiuser"]
+    K3["PAT in the gh config"]
+  end
+
+  subgraph CTS["SUPERVISED container — untrusted zone"]
+    direction TB
+    Z["NO GitHub credential. Ever.<br/>The hook blocks every push<br/>and every gh subcommand, unconditionally."]
+  end
+
+  GH(["GitHub"])
+
+  Y -.->|"ssh agent forwarding<br/>AllowAgentForwarding yes, moroine only"| HOST
+  T ==>|"pasted via STDIN, never argv — invisible in ps<br/>never written to host disk"| K3
+  SK -->|"lxc file push"| K1
+  CC -->|"lxc file push"| K2
+  HOST -->|"clone over SSH with YOUR forwarded agent"| CTS
+  WSP <-->|"bind mount"| CTS
+  K3 -->|"push agent/* + gh pr create<br/>BOT identity"| GH
+  CTS -.->|"signed local commits, then STOP"| WSP
+  WSP ==>|"you fetch, review with git log -p,<br/>rebase --reset-author, push YubiKey-signed"| GH
+  P -.->|"deliberately absent path"| HOST
+
+  classDef danger stroke-dasharray: 5 5
+  class CTA,CTS danger
+```
+
+### The `pre-bash.sh` hook: a default-deny policy
+
+Every Bash command the agent runs goes through this hook first. It is logged
+before any decision is taken, so a blocked attempt is as visible as a
+successful one.
+
+```mermaid
+flowchart TB
+  CMD(["Agent Bash command"]) --> LOG["Logged to bash-audit.log<br/>BEFORE any decision"]
+  LOG --> MODE{"container mode<br/>/home/aiuser/.claude/forge-mode"}
+
+  MODE -->|supervised| SV{"push or gh ?"}
+  SV -->|yes| BLK1["BLOCKED, no exception<br/>no credential exists here"]
+  SV -->|no| RULES
+
+  MODE -->|"autonomous / super"| RULES{"Per-rule analysis"}
+
+  RULES --> PUSH["git push"]
+  PUSH --> SEG["Split into segments on semicolons, ampersands and pipes<br/>EVERY segment must be a conforming form<br/>→ a forbidden push cannot hide behind<br/>an allowed one in a chained command"]
+  SEG --> OK1{"^git push [-u] origin agent/… $"}
+  OK1 -->|no| BLK2["BLOCKED · force, --delete, :ref refspec,<br/>git -C … push: all fail-closed"]
+  OK1 -->|yes| PASS(["ALLOWED"])
+
+  RULES --> MERGE["git merge"]
+  MERGE --> OK2{"^git merge [--no-edit] origin/main$"}
+  OK2 -->|no| BLK3["BLOCKED · never the other way round,<br/>never an arbitrary ref"]
+  OK2 -->|yes| PASS
+
+  RULES --> GHC["gh"]
+  GHC --> BLK4["BLOCKED: pr merge · api · repo ·<br/>alias · extension · auth token"]
+
+  RULES --> GIT2["checkout/switch main or master<br/>git rebase<br/>git config core.hooksPath/fsmonitor/sshCommand"]
+  GIT2 --> BLK5["BLOCKED"]
+
+  RULES --> SYS["sudo · rm -rf"]
+  SYS --> BLK6["BLOCKED"]
+
+  RULES --> NETX["curl/wget with -d, --data,<br/>--upload-file, --post-file"]
+  NETX --> WL{"destination whitelisted ?<br/>github.com · api.anthropic.com ·<br/>raw.githubusercontent.com"}
+  WL -->|no| BLK7["BLOCKED — anti-exfiltration"]
+  WL -->|yes| PASS
+
+  RULES --> DOCK["docker"]
+  DOCK --> BLK8["BLOCKED: --privileged · --pid=host ·<br/>--network=host · bind-mounts outside /workspace<br/>/etc /home /root /var /usr /boot /proc /sys /"]
+
+  BLK1 --> AUD["exit 2 + timestamped BLOCKED line<br/>in the audit log"]
+  BLK2 --> AUD
+  BLK3 --> AUD
+  BLK4 --> AUD
+  BLK5 --> AUD
+  BLK6 --> AUD
+  BLK7 --> AUD
+  BLK8 --> AUD
+```
+
+### Attack paths and what stops them
+
+```mermaid
+flowchart LR
+  A(["Compromised agent<br/>prompt injection, malicious dependency…"])
+
+  A --> P1["Land code on main"]
+  P1 --> S1["hook default-deny<br/>+ branch protection + no self-approval"]
+
+  A --> P2["Escalate inside the container"]
+  P2 --> S2["no sudo · capabilities dropped<br/>seccomp deny_default"]
+
+  A --> P3["Escape to the host"]
+  P3 --> S3["unprivileged container + idmap<br/>container root = namespaced UID"]
+
+  A --> P4["Pivot to the LAN / the router"]
+  P4 --> S4["ufw route deny on lxdbr0<br/>RFC1918 + link-local + IPv6"]
+
+  A --> P5["Exfiltrate code or secrets"]
+  P5 --> S5["curl/wget whitelist<br/>BUT: bypassable"]
+
+  A --> P6["Steal the PAT and use it elsewhere"]
+  P6 --> S6["PAT scoped to 1 repo, 3 permissions<br/>gh auth token blocked<br/>and main stays protected"]
+
+  A --> P7["Neutralize the hook itself"]
+  P7 --> S7["files are root:root, aiuser cannot write them<br/>core.hooksPath blocked"]
+
+  A --> P8["Cover its tracks"]
+  P8 --> S8["audit log lives host-side<br/>survives lxc delete"]
+
+  S5 -.->|"acknowledged in the code"| LIM["KNOWN LIMIT<br/>a regex filter cannot catch everything:<br/>variables, intermediate scripts, raw API calls.<br/>This is why the real boundary is<br/>branch protection, not the hook."]
+```
+
+### What this model does *not* promise
+
+Three honest caveats, all of them deliberate design choices rather than
+oversights:
+
+- **`pre-bash.sh` is defense in depth, not a boundary.** Its own comments say
+  so: a regex filter cannot catch a push hidden behind a variable, an
+  intermediate script or a raw `curl` to the API. It raises the cost of a
+  mistake and makes one visible in the audit log; the thing that actually
+  keeps bad code off `main` is branch protection plus GitHub's refusal to let
+  an account approve its own PR.
+- **Supervised mode is the only one that removes the credential-theft class
+  entirely.** There is nothing to steal: the clone happens host-side with your
+  forwarded agent, and both `git push` and `gh` are blocked unconditionally.
+  Autonomous mode trades that for automation, and bounds the damage with a
+  PAT scoped to one repo and three permissions.
+- **Super mode deliberately weakens layer 3.** The `agent-super` profile
+  restores `mac_admin`, `mac_override` and `sys_ptrace`, which snapd needs to
+  run the nested LXD. `security.privileged` stays `false` and the seccomp
+  blocklist stays on, but it is the only profile that hands capabilities back
+  — keep it for self-hosting agent-forge, not for general work.
 
 ## Prerequisites
 
