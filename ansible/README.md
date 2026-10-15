@@ -78,3 +78,18 @@ prints where they are.
   - Agent forwarding is allowed for the forge user only, and
     `AllowStreamLocalForwarding no`.
   - The ed25519 host key is the only host key.
+
+## Incus storage pool
+
+The playbook creates the btrfs pool `default` once. It uses a loop file of
+about 80 % of the free space, or `forge_incus_storage_size`, or the device
+`forge_incus_storage_source`. It never changes the pool afterwards. To grow a
+loop-file pool later, run on the host:
+
+```bash
+sudo incus storage set default size=200GiB
+```
+
+A loop file can grow, never shrink. Per-container disk sizes are a guard rail,
+not a hard limit: an agent can escape btrfs quotas with nested subvolumes. The
+pool's size is the hard ceiling.

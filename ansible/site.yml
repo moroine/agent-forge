@@ -33,3 +33,4 @@
     - role: hardening
     - role: firewall
     - role: fail2ban
+    - role: incus

@@ -12,3 +12,5 @@
   ansible.builtin.import_playbook: unit/firewall.yml
 - name: Fail2ban
   ansible.builtin.import_playbook: unit/fail2ban.yml
+- name: Incus
+  ansible.builtin.import_playbook: unit/incus.yml

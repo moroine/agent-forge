@@ -1,0 +1,50 @@
+---
+- name: Add the Zabbly Incus LTS 7.0 repository
+  ansible.builtin.include_role:
+    name: base
+    tasks_from: apt_repo.yml
+  vars:
+    base_apt_repo_name: zabbly
+    base_apt_repo_key_url: "{{ incus_zabbly_key_url }}"
+    base_apt_repo_fingerprint: "{{ incus_zabbly_fingerprint }}"
+    base_apt_repo_uris: ["{{ incus_zabbly_uri }}"]
+    base_apt_repo_suites: ["{{ ansible_facts.distribution_release }}"]
+    base_apt_repo_components: [main]
+    base_apt_repo_architectures: ["{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'amd64' }}"]
+
+- name: Install Incus (containers only) and the btrfs tools
+  ansible.builtin.apt:
+    name: "{{ incus_packages }}"
+    state: present
+    # Recommends would pull iptables next to nftables.
+    install_recommends: false
+
+- name: Look for the storage pool
+  ansible.builtin.command:
+    cmd: incus storage show {{ incus_pool_name }}
+  register: incus_pool_show
+  changed_when: false
+  failed_when: false
+
+- name: Check the existing pool is btrfs
+  ansible.builtin.assert:
+    that:
+      - (incus_pool_show.stdout | from_yaml).driver == 'btrfs'
+    fail_msg: >-
+      Incus already has a pool "{{ incus_pool_name }}" with driver
+      {{ (incus_pool_show.stdout | from_yaml).driver }}; agent-forge needs
+      btrfs. There is no automatic migration.
+    quiet: true
+  when: incus_pool_show.rc == 0
+
+- name: Initialize Incus with a btrfs pool and no network
+  when: incus_pool_show.rc != 0
+  block:
+    - name: Check there is room for the pool
+      ansible.builtin.import_tasks: check_room.yml
+
+    - name: Initialize Incus
+      ansible.builtin.command:
+        cmd: incus admin init --preseed
+        stdin: "{{ lookup('ansible.builtin.template', 'preseed.yml.j2') }}"
+      changed_when: true

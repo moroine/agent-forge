@@ -33,3 +33,5 @@
       ansible.builtin.import_tasks: verify/firewall.yml
     - name: Fail2ban
       ansible.builtin.import_tasks: verify/fail2ban.yml
+    - name: Incus
+      ansible.builtin.import_tasks: verify/incus.yml

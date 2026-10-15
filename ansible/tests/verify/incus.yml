@@ -1,0 +1,26 @@
+---
+- name: Read the installed Incus package
+  ansible.builtin.command:
+    cmd: dpkg-query --showformat=${Version} --show incus-base
+  register: verify_incus_version
+  changed_when: false
+
+- name: Read the storage pool
+  ansible.builtin.command:
+    cmd: incus storage show default
+  register: verify_pool
+  changed_when: false
+
+- name: Read Incus's networks
+  ansible.builtin.command:
+    cmd: incus network list --format json
+  register: verify_networks
+  changed_when: false
+
+- name: Check Incus is Zabbly's 7.0, on a btrfs pool, with no managed network
+  ansible.builtin.assert:
+    that:
+      # Zabbly's packages carry the 1: epoch; Ubuntu's own Incus is 6.0.
+      - verify_incus_version.stdout is match('1:7\\.0\\.')
+      - (verify_pool.stdout | from_yaml).driver == 'btrfs'
+      - verify_networks.stdout | from_json | selectattr('managed') | list | length == 0
