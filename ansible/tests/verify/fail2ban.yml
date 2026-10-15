@@ -1,0 +1,57 @@
+---
+- name: Check fail2ban (public and lan)
+  when: forge_exposure != 'local'
+  block:
+    - name: Read the sshd jail
+      ansible.builtin.command:
+        cmd: fail2ban-client status sshd
+      changed_when: false
+
+    # Review focus 3: the jail must see real failures, not only accept a
+    # manual ban. verify/ssh_client.yml made one (root login) just before.
+    - name: Check the jail counted the deliberate failed login
+      ansible.builtin.command:
+        cmd: fail2ban-client status sshd
+      register: verify_jail
+      changed_when: false
+      until: (verify_jail.stdout | regex_search('Total failed:\\s+(\\d+)', '\\1') | first | int) >= 1
+      retries: 10
+      delay: 2
+      when: verify_negative_auth | default(false) | bool
+
+    - name: Ban a test address
+      ansible.builtin.command:
+        cmd: fail2ban-client set sshd banip 192.0.2.1
+      changed_when: false
+
+    - name: Read fail2ban's nftables table
+      ansible.builtin.command:
+        cmd: nft list table inet f2b-table
+      register: verify_f2b_table
+      changed_when: false
+
+    - name: Lift the test ban
+      ansible.builtin.command:
+        cmd: fail2ban-client set sshd unbanip 192.0.2.1
+      changed_when: false
+
+    - name: Check the ban went through nftables
+      ansible.builtin.assert:
+        that:
+          - "'192.0.2.1' in verify_f2b_table.stdout"
+
+- name: Check fail2ban is off (local)
+  when: forge_exposure == 'local'
+  block:
+    # A read-only query: the unit may not even exist with local.
+    - name: Read whether fail2ban runs  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: systemctl is-active fail2ban
+      register: verify_f2b_active
+      changed_when: false
+      failed_when: false
+
+    - name: Check fail2ban is not running
+      ansible.builtin.assert:
+        that:
+          - verify_f2b_active.stdout != 'active'

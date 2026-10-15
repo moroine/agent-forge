@@ -32,3 +32,4 @@
     - role: base
     - role: hardening
     - role: firewall
+    - role: fail2ban

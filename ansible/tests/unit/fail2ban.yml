@@ -1,0 +1,61 @@
+---
+- name: Fail2ban jail
+  hosts: render
+  gather_facts: false
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render the jail for public and lan
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/fail2ban/templates/agent-forge.local.j2"
+        dest: "{{ unit_tmp.path }}/{{ item }}.local"
+        mode: "0644"
+      loop: [public, lan]
+      vars:
+        forge_exposure: "{{ item }}"
+        forge_ssh_port: 2222
+        forge_fail2ban_ignoreip: [198.51.100.7]
+
+    - name: Check the settings shared by both exposures
+      ansible.builtin.assert:
+        that:
+          - "'banaction = nftables-multiport' in unit_jail"
+          - "'banaction_allports = nftables-allports' in unit_jail"
+          - "'ignoreip = 127.0.0.1/8 ::1 198.51.100.7' in unit_jail"
+          - "'port = 2222' in unit_jail"
+          - "'backend = systemd' in unit_jail"
+          - "'_COMM=sshd-session' in unit_jail"
+      loop: [public, lan]
+      vars:
+        unit_jail: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/' ~ item ~ '.local') }}"
+
+    - name: Check public is strict, with an increasing ban
+      ansible.builtin.assert:
+        that:
+          - "'mode = aggressive' in unit_jail"
+          - "'maxretry = 3' in unit_jail"
+          - "'findtime = 1h' in unit_jail"
+          - "'bantime = 1d' in unit_jail"
+          - "'bantime.increment = true' in unit_jail"
+          - "'bantime.maxtime = 30d' in unit_jail"
+      vars:
+        unit_jail: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/public.local') }}"
+
+    - name: Check lan is lenient
+      ansible.builtin.assert:
+        that:
+          - "'mode = normal' in unit_jail"
+          - "'maxretry = 5' in unit_jail"
+          - "'findtime = 10m' in unit_jail"
+          - "'bantime = 1h' in unit_jail"
+          - "'bantime.increment' not in unit_jail"
+      vars:
+        unit_jail: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/lan.local') }}"
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent

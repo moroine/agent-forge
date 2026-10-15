@@ -1,0 +1,30 @@
+# Managed by agent-forge (ansible/roles/fail2ban); local changes are overwritten.
+# sshd jail, scaled with forge_exposure ({{ forge_exposure }}). Bans go into
+# fail2ban's own nftables table, which the host firewall never touches.
+[DEFAULT]
+banaction = nftables-multiport
+banaction_allports = nftables-allports
+ignoreip = 127.0.0.1/8 ::1{% for address in forge_fail2ban_ignoreip %} {{ address }}{% endfor %}
+
+
+[sshd]
+enabled = true
+port = {{ forge_ssh_port }}
+# The journal, not /var/log/auth.log, which a minimal install may lack.
+backend = systemd
+# Ubuntu's unit is ssh.service, and OpenSSH 10 logs authentication from
+# sshd-session: the stock journalmatch (sshd.service / sshd) misses both.
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd + _COMM=sshd-session
+{% if forge_exposure == 'public' %}
+mode = aggressive
+maxretry = 3
+findtime = 1h
+bantime = 1d
+bantime.increment = true
+bantime.maxtime = 30d
+{% else %}
+mode = normal
+maxretry = 5
+findtime = 10m
+bantime = 1h
+{% endif %}

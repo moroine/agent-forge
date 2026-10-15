@@ -31,3 +31,5 @@
       ansible.builtin.import_tasks: verify/ssh_client.yml
     - name: Firewall
       ansible.builtin.import_tasks: verify/firewall.yml
+    - name: Fail2ban
+      ansible.builtin.import_tasks: verify/fail2ban.yml
