@@ -1,0 +1,6 @@
+---
+# Controller-only unit tests of the host playbook: input checks, computed
+# variables and rendered templates. No target machine is involved.
+#   ansible-playbook -i ansible/tests/unit-inventory.yml ansible/tests/unit.yml
+- name: Preflight
+  ansible.builtin.import_playbook: unit/preflight.yml

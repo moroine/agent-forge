@@ -1,0 +1,53 @@
+---
+- name: Preflight input checks
+  hosts: preflight_cases
+  gather_facts: false
+  tasks:
+    - name: Run the input checks
+      block:
+        - name: Include the input checks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../preflight/inputs.yml"
+        - name: Record success
+          ansible.builtin.set_fact:
+            unit_outcome: passed
+      rescue:
+        - name: Record failure
+          ansible.builtin.set_fact:
+            unit_outcome: failed
+            unit_message: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Check the outcome
+      ansible.builtin.assert:
+        that:
+          - unit_outcome == unit_expect
+          - unit_expect == 'passed' or unit_expect_message in unit_message
+        fail_msg: >-
+          {{ inventory_hostname }}: expected {{ unit_expect }}
+          ({{ unit_expect_message | default('') }}), got {{ unit_outcome }}:
+          {{ unit_message | default('') }}
+
+    - name: Check the optional variables got their defaults
+      ansible.builtin.assert:
+        that:
+          - forge_ssh_port == 22
+          - forge_ssh_allowed_sources == []
+          - forge_external_interface == ''
+          - forge_incus_storage_size == ''
+          - forge_incus_storage_source == ''
+          - forge_fail2ban_ignoreip == []
+          - forge_admin_user == 'ubuntu'
+          - forge_user.name == 'alice'
+      when: inventory_hostname == 'preflight_valid'
+
+- name: SSH port resolution
+  hosts: port_cases
+  gather_facts: false
+  tasks:
+    - name: Resolve the port
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../preflight/port.yml"
+
+    - name: Check the resolved port
+      ansible.builtin.assert:
+        that:
+          - ansible_port | int == unit_expect_port
+        fail_msg: "{{ inventory_hostname }}: expected port {{ unit_expect_port }}, got {{ ansible_port }}"

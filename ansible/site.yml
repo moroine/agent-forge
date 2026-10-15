@@ -1,0 +1,18 @@
+---
+# Provisions an agent-forge host (v2, sub-project 1). Run from a git checkout,
+# on the controller:
+#   ansible-galaxy collection install -r ansible/requirements.yml
+#   ansible-playbook -i inventory.yml ansible/site.yml
+# See ansible/README.md and ansible/inventory.example.yml.
+- name: Preflight
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check and normalize the inventory's variables
+      ansible.builtin.import_tasks: preflight/inputs.yml
+    - name: Check the controller
+      ansible.builtin.import_tasks: preflight/controller.yml
+    - name: Resolve the SSH port to connect to
+      ansible.builtin.import_tasks: preflight/port.yml
+    - name: Check the target
+      ansible.builtin.import_tasks: preflight/target.yml

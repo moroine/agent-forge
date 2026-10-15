@@ -1,0 +1,24 @@
+---
+# Picks the port Ansible connects to. An explicit ansible_port (Lima's
+# forwarded port, for instance) is used as is. Otherwise the controller probes
+# forge_ssh_port with a bare TCP connect (no authentication, so fail2ban never
+# counts it) and falls back to 22, where sshd still listens before the first
+# run moves it.
+- name: Probe forge_ssh_port from the controller
+  when: ansible_port is not defined
+  block:
+    - name: Wait briefly for forge_ssh_port
+      ansible.builtin.wait_for:
+        host: "{{ ansible_host | default(inventory_hostname) }}"
+        port: "{{ forge_ssh_port }}"
+        timeout: 5
+      delegate_to: localhost
+      become: false
+
+    - name: Connect on forge_ssh_port
+      ansible.builtin.set_fact:
+        ansible_port: "{{ forge_ssh_port }}"
+  rescue:
+    - name: Connect on 22 (first run, sshd has not moved yet)
+      ansible.builtin.set_fact:
+        ansible_port: 22

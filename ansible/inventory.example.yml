@@ -1,0 +1,49 @@
+---
+# Example inventory for ansible/site.yml. Copy it outside the repository (it
+# names your host and keys), adjust it, then run:
+#   ansible-playbook -i inventory.yml ansible/site.yml
+all:
+  hosts:
+    forge-vm:
+      ansible_host: 203.0.113.10
+      # The admin: the machine's existing sudo account (ubuntu on cloud
+      # images, the account created at install on bare metal). Never root:
+      # the playbook sets PermitRootLogin no. Its keys and sudo are left alone.
+      ansible_user: ubuntu
+      # sshd allows 2 authentication attempts (MaxAuthTries 2), which an agent
+      # holding several keys can use up: offer only this key.
+      # ansible_ssh_private_key_file: ~/.ssh/id_ed25519
+      # ansible_ssh_common_args: -o IdentitiesOnly=yes
+      # Only when the port Ansible connects to differs from forge_ssh_port
+      # (Lima forwards a local port to the VM's sshd).
+      # ansible_port: 60022
+      # Only if the admin's sudo asks for a password and ansible-core < 2.22:
+      # Ubuntu 26.04's sudo-rs rewrites the prompt Ansible waits for, so use
+      # the C sudo that 26.04 still ships as sudo.ws. Keep the password in an
+      # ansible-vault file (ansible_become_password), never in plain text.
+      # ansible_become_exe: sudo.ws
+  vars:
+    # public: cloud VM with a public IP. lan: homelab or LAN machine.
+    # local: Lima VM on a Mac.
+    forge_exposure: public
+    # Exactly one user in v2.0. ssh_keys is authoritative: keys added by hand
+    # to the user's authorized_keys are removed on the next run.
+    forge_users:
+      - name: alice
+        ssh_keys:
+          - "ssh-ed25519 AAAA... alice@laptop"
+    # Optional; the values shown are the defaults.
+    # Port sshd listens on. The first run connects on 22 and moves sshd here.
+    # forge_ssh_port: 22
+    # CIDRs (IPv4 and/or IPv6) allowed to reach SSH; [] means anywhere.
+    # Include the controller's own address, or the next run is locked out.
+    # forge_ssh_allowed_sources: []
+    # "" means the interface of the default IPv4 route (wlo1 on WiFi, ...).
+    # forge_external_interface: ""
+    # Size of the Incus pool's loop file, e.g. "100GiB". "" means about 80 %
+    # of the free space, computed once, when the pool is created.
+    # forge_incus_storage_size: ""
+    # A disk or partition for the pool instead of a loop file, e.g. /dev/vdb.
+    # forge_incus_storage_source: ""
+    # Extra addresses fail2ban never bans.
+    # forge_fail2ban_ignoreip: []

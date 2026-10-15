@@ -1,0 +1,19 @@
+---
+# ansible-lint configuration, used by CI (job ansible-lint) and by
+# `ansible-lint ansible/` locally.
+profile: production
+exclude_paths:
+  - .github/
+  - .claude/
+  - config/
+  - docs/
+  - node_modules/
+# Files outside the usual roles/ layout: tell ansible-lint what they are.
+# The first match wins, so the more specific patterns come first.
+kinds:
+  - tasks: "**/ansible/preflight/*.yml"
+  - tasks: "**/ansible/tests/unit/tasks/*.yml"
+  - tasks: "**/ansible/tests/verify/*.yml"
+  - playbook: "**/ansible/tests/unit/*.yml"
+  - yaml: "**/ansible/tests/unit-inventory.yml"
+  - yaml: "**/ansible/inventory.example.yml"
