@@ -30,7 +30,8 @@ Beyond the 9 points, the spike found two **blockers**:
 - **Unprivileged user namespaces are refused in containers on an Ubuntu 26.04
   host** (point 6). This breaks Chrome's sandbox and rootless Docker
   (`rootlesskit`). Rootless Docker is in the v2 image, so sub-project 2 must
-  settle this first.
+  settle this first. v1 on omen is not affected: its LXD snap turns the
+  restriction off host-wide (point 6, "Constat sur omen (v1)").
 - **Incus cannot auto-pick a bridge subnet under Lima** (additional finding A).
   This breaks `incus admin init --minimal` and any `ipv4.address=auto` in
   macOS local mode.
@@ -383,9 +384,58 @@ host sysctl = 0:  uid=0(root) gid=0(root) groups=0(root)
 Full `dockerd-rootless-setuptool.sh` was not run; `rootlesskit` is the step
 that fails.
 
-v1 runs on Ubuntu 24.04 with LXD, where the same sysctl defaults to 1. Whether
-v1's Chrome and rootless Docker are affected on omen was not checked. That
-read-only check is worth doing.
+**Constat sur omen (v1): not affected, because the LXD snap turns the
+restriction off for the whole host.** This was a read-only check on
+2026-10-15. omen runs Ubuntu 24.04.5, kernel `7.0.0-28-generic` and the LXD
+snap `5.21.8`. The container was `agent-moroine-biking`, on profile `agent`
+like the two other running agents:
+
+```
+host$ sysctl kernel.apparmor_restrict_unprivileged_userns
+kernel.apparmor_restrict_unprivileged_userns = 0
+host$ grep -h apparmor_restrict /usr/lib/sysctl.d/10-apparmor.conf /run/sysctl.d/zz-lxd.conf
+kernel.apparmor_restrict_unprivileged_userns = 1          # Ubuntu default
+-kernel.apparmor_restrict_unprivileged_userns = 0         # written by LXD
+-kernel.apparmor_restrict_unprivileged_unconfined = 0
+host$ journalctl -u snap.lxd.daemon | grep 'Apparmor unprivileged'   # once per LXD start
+août 24 08:18:08 Omen lxd.daemon[1652]: ==> Disabling Apparmor unprivileged userns mediation
+
+# in the container, each command run as: lxc exec <ctr> -- su - aiuser -c '…'
+$ unshare -Ur id
+uid=0(root) gid=0(root) groups=0(root)
+$ timeout 60 google-chrome-stable --headless=new --disable-gpu --dump-dom https://example.com | grep -o "<title>.*</title>"
+<title>Example Domain</title>        # Chrome 153.0.8010.52, sandbox on, no FATAL
+$ docker info
+ Context:    rootless
+ Server Version: 29.8.1
+ Security Options:
+  seccomp
+   Profile: builtin
+  rootless
+  cgroupns
+```
+
+Chrome was given a throwaway `--user-data-dir`, removed afterwards, so that
+the agent's profile stayed untouched. v1 does not pass `--no-sandbox`: the
+`chrome-devtools-mcp` arguments in `config/claude-onboarding-state.json` do not
+include it.
+
+**Why LXD and Incus differ.** LXD does not work around the restriction. It
+removes it:
+
+- At each start, the snap's `commands/daemon.start` runs
+  `manage_apparmor_restrictions`.
+  - It sets `kernel.apparmor_restrict_unprivileged_userns=0` and
+    `kernel.apparmor_restrict_unprivileged_unconfined=0` on the host.
+  - It writes `/run/sysctl.d/zz-lxd.conf`, so a `sysctl --system` reload keeps
+    those values.
+- The snap option `apparmor.unprivileged-restrictions-disable` controls this.
+  It defaults to `true` (`meta/hooks/configure`).
+- The setting applies to the whole host, not to one container.
+
+Incus 7.0 (Zabbly package) leaves the sysctl alone: on the spike VM it stayed
+at 1 while Incus ran. In effect, v1 has always run option 1 below,
+without choosing it.
 
 **Changes:**
 
