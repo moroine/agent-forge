@@ -26,6 +26,19 @@ Tu travailles sur `agent-forge`, un repo d'infrastructure pour déployer des age
 - En mode autonome (permission-mode `auto` — que ce soit cette session ou un container provisionné par `forge start`) : push autorisé uniquement vers `agent/<branche>` (`git push -u origin agent/<branche>`), puis ouverture d'une PR avec `gh pr create --base main`. Jamais de merge automatique de la PR — elle est revue et mergée par un humain. C'est le même flux que le "Autonomous PR flow" documenté dans `README.md`.
 - En dehors du mode autonome (session interactive), demander confirmation avant tout push, même vers `agent/<branche>`
 
+### Branche `next` (v2 en cours)
+Cette branche porte la v2 d'agent-forge (Incus, hôte Ansible, herdr — spec
+cadre `docs/superpowers/specs/2026-10-15-v2-incus-ansible-herdr-design.md`).
+`main` reste la v1 jusqu'à la sortie de la v2. Sur cette branche, ce qui suit
+remplace les mentions de `main` comme base dans la section Git ci-dessus :
+- Les tâches v2 partent de `next` (`forge start` → « other branch… » →
+  `origin/next`) : ta branche de base est `next`.
+- Les PR visent `next` : `gh pr create --base next`, jamais `--base main`.
+- Pour rafraîchir ta branche `agent/*` : `git merge origin/next` (ou
+  `--no-edit`), autorisé par `pre-bash.sh` dès que la règle correspondante est
+  en place sur `main`.
+- `main` est fusionnée dans `next` régulièrement, par un humain.
+
 ### Mode super (self-hosting)
 `super` est un troisième mode container (à côté d'`autonomous`/`supervised`),
 sélectionnable au `forge start` via `[u]`. Il embarque un LXD imbriqué pour
