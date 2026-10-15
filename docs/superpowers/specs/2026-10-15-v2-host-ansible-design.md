@@ -1,7 +1,7 @@
 # agent-forge v2 — Sub-project 1: Host (Ansible) — Design
 
 **Date:** 2026-10-15
-**Status:** Approved in brainstorming, pending user review of this document
+**Status:** Approved (brainstorming, then user review of this document, 2026-10-15)
 **Branch:** `next`
 **Parent:** `docs/superpowers/specs/2026-10-15-v2-incus-ansible-herdr-design.md`
 (framing spec, section "Host (sub-project 1)")
@@ -53,7 +53,7 @@ README setup steps stay as they are until sub-project 5 rewrites the README.
 | Claude Code on the host | Anthropic's signed apt repository, `stable` channel | System-wide, signature-checked, updated by unattended-upgrades; no `curl \| bash` per user |
 | Ansible on the host | Ubuntu's `ansible` package | It bundles community.general 12.1, whose `incus` connection plugin `forge image build` needs (≥ 8.2). No `ansible-galaxy` at runtime |
 | Throwaway test VM | An LXD VM on omen, driven by `ansible/tests/vm-test.sh` run on omen | The Mac lacks disk space while other VMs run. omen's sshd forbids TCP forwarding, so Ansible runs on omen itself rather than through a `ProxyJump` |
-| CI | GitHub Actions on `ubuntu-26.04`: `npm test`, `npm run check`, `ansible-lint` (profile `production`). No VM in CI | Light, fast, no secrets |
+| CI | GitHub Actions on `ubuntu-26.04`: `npm test`, `npm run check`, `ansible-lint` (profile `production`), and the playbook's controller-only unit tests. No VM in CI | Light, fast, no secrets |
 
 ## Repository layout
 
@@ -179,7 +179,8 @@ The main play runs the roles in this order: `base`, `hardening`, `firewall`,
 - **Packages:** `git`, `curl`, `ca-certificates`.
 - **Updates.** unattended-upgrades is enabled for Ubuntu's security pocket and
   for the three repositories the playbook adds: Zabbly, NodeSource and Claude
-  Code, matched by their `Release` origin. The playbook itself installs with
+  Code, matched by host name (`site=`), because NodeSource's `Release` file has
+  no usable Origin (`. nodistro`). The playbook itself installs with
   `state: present` and never upgrades anything. There is **no automatic
   reboot**: it would kill the herdr server and every running agent. Pending
   reboots show in `/var/run/reboot-required`.
@@ -394,7 +395,7 @@ v2.0 has exactly one forge user (see "Preflight"). For that user:
      commit. If `git status --porcelain` is not empty, a warning says that HEAD
      is deployed, not the working tree.
   2. The tarball is unpacked into `/opt/agent-forge/releases/<sha>/`, owned by
-     `root:root`. A `COMMIT` file holds the full SHA. The step is skipped when
+     `root:root`. A `COMMIT` file at the release root holds the full SHA. The step is skipped when
      the directory already exists.
   3. `/opt/agent-forge/current` is switched to it atomically (symlink rename),
      and `/usr/local/bin/forge` points at the CLI entry point under `current`.
@@ -434,7 +435,7 @@ Agreed with the sub-project 2 spec session on 2026-10-15.
 | Storage pool | `default`, btrfs | 2: the forge profile's root disk (pool name overridable in forge's config) |
 | Incus access | the forge user in `incus-admin` | 2, 4 |
 | Tools | `/usr/bin/node` (24), `/usr/bin/claude`, Ubuntu's `ansible` with community.general | 2 (`forge image build`), host-side login |
-| `forge` | `/usr/local/bin/forge` → `/opt/agent-forge/current/…`; the `COMMIT` file next to the CLI | 2: the image stamp reads `COMMIT`, falling back to `git rev-parse HEAD` in a checkout. `forge` writes nothing under `/opt/agent-forge` |
+| `forge` | `/usr/local/bin/forge` → `/opt/agent-forge/current/…`; `COMMIT` at the release root (`/opt/agent-forge/releases/<sha>/COMMIT`, beside `cli/` and `ansible/`) | 2: the image stamp reads `<repo root>/COMMIT` (repo root = the CLI's own location, `cli/..`), falling back to `git -C <repo root> rev-parse HEAD`. `forge` writes nothing under `/opt/agent-forge` |
 | IPv6 | forwarding stays off | 2 keeps IPv6 off on `forgebr0` in v2.0 |
 
 ## Testing
@@ -553,6 +554,10 @@ sub-project 5 provisions a Lima VM on the Mac with the same playbook.
   `requirements_file: ansible/requirements.yml`. `.ansible-lint` sets profile
   `production` and covers all of `ansible/`, sub-project 2's image playbook
   included.
+- **Job `ansible-unit`:** the playbook's controller-only unit tests
+  (`ansible/tests/unit.yml`). They need no target machine: input checks, the
+  port fallback, computed variables and rendered templates (firewall,
+  fail2ban, preseed).
 - **Pinning:** every action is pinned to a full commit SHA.
 - **Missing tools:** when a test fails because the runner lacks a tool, the CI
   setup is fixed; the test is never skipped.
