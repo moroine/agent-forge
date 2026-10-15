@@ -8,3 +8,5 @@
   ansible.builtin.import_playbook: unit/base.yml
 - name: Hardening
   ansible.builtin.import_playbook: unit/hardening.yml
+- name: Firewall
+  ansible.builtin.import_playbook: unit/firewall.yml

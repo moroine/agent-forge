@@ -1,0 +1,34 @@
+---
+- name: Render the firewall for {{ unit_case.name }}
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../roles/firewall/templates/nftables.conf.j2"
+    dest: "{{ unit_tmp.path }}/{{ unit_case.name }}.nft"
+    mode: "0644"
+  vars:
+    forge_exposure: "{{ unit_case.exposure }}"
+    forge_ssh_allowed_sources: "{{ unit_case.sources }}"
+    forge_ssh_port: 2222
+    forge_external_interface: eth9
+
+- name: Check the firewall for {{ unit_case.name }}
+  ansible.builtin.assert:
+    that:
+      # Own table only, recreated, never a flushed ruleset.
+      - unit_nft is search('(?m)^table inet forge_host \\{\\}$')
+      - unit_nft is search('(?m)^delete table inet forge_host$')
+      - unit_nft is not search('(?m)^\\s*flush\\s+ruleset')
+      - unit_nft | regex_findall('policy drop;') | length == 2
+      # SSH on the external interface only; DHCP and DNS from the bridge.
+      - "'iifname \"eth9\" tcp dport 2222 ct state new jump ssh' in unit_nft"
+      - "'iifname \"forgebr0\" udp dport 67 accept' in unit_nft"
+      - "'iifname \"forgebr0\" meta l4proto { tcp, udp } th dport 53 accept' in unit_nft"
+      - "'iifname \"forgebr0\" oifname \"eth9\" accept' in unit_nft"
+      # Rate limit with public only; open SSH only without allowed sources;
+      # each family's allow-list present exactly when it has entries.
+      - ('update @ssh_meter_v4' in unit_nft) == (unit_case.exposure == 'public')
+      - (unit_nft is search('(?m)^\\s+accept$')) == unit_case.open
+      - ('ip saddr @ssh_allowed_v4 accept' in unit_nft) == unit_case.v4
+      - ('ip6 saddr @ssh_allowed_v6 accept' in unit_nft) == unit_case.v6
+    fail_msg: "Case {{ unit_case.name }} failed; rendered file: {{ unit_tmp.path }}/{{ unit_case.name }}.nft"
+  vars:
+    unit_nft: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/' ~ unit_case.name ~ '.nft') }}"

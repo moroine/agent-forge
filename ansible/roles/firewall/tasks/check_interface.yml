@@ -1,0 +1,9 @@
+---
+- name: Check the external interface is known
+  ansible.builtin.assert:
+    that:
+      - firewall_external_interface | length > 0
+    fail_msg: >-
+      The host has no default IPv4 route, so the firewall cannot tell which
+      interface SSH arrives on: set forge_external_interface.
+    quiet: true

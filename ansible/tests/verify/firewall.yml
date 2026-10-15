@@ -1,0 +1,53 @@
+---
+- name: Read the host firewall's table
+  ansible.builtin.command:
+    cmd: nft list table inet forge_host
+  changed_when: false
+
+- name: Read /etc/nftables.conf
+  ansible.builtin.slurp:
+    src: /etc/nftables.conf
+  register: verify_nftables_conf
+
+- name: Read the installed packages
+  ansible.builtin.package_facts:
+
+- name: Check the firewall never flushes the ruleset and UFW is gone
+  ansible.builtin.assert:
+    that:
+      - (verify_nftables_conf.content | b64decode) is not search('(?m)^\\s*flush\\s+ruleset')
+      - "'ufw' not in ansible_facts.packages"
+
+- name: Create a sentinel table that stands for Incus's tables
+  ansible.builtin.command:
+    cmd: nft add table inet forge_verify_sentinel
+  changed_when: false
+
+- name: Restart nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: restarted
+
+- name: Check the sentinel table survived the restart
+  ansible.builtin.command:
+    cmd: nft list table inet forge_verify_sentinel
+  changed_when: false
+
+- name: Reload nftables
+  ansible.builtin.systemd_service:
+    name: nftables
+    state: reloaded
+
+- name: Check the sentinel table survived the reload, and agent-forge's table is back
+  ansible.builtin.command:
+    cmd: nft list tables
+  register: verify_nft_tables
+  changed_when: false
+  failed_when: >-
+    'table inet forge_verify_sentinel' not in verify_nft_tables.stdout
+    or 'table inet forge_host' not in verify_nft_tables.stdout
+
+- name: Remove the sentinel table
+  ansible.builtin.command:
+    cmd: nft delete table inet forge_verify_sentinel
+  changed_when: false

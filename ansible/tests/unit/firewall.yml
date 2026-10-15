@@ -1,0 +1,56 @@
+---
+- name: Firewall template and interface check
+  hosts: render
+  gather_facts: false
+  # vars_files, not include_vars: its lower precedence lets each case's task
+  # vars (forge_exposure, forge_ssh_allowed_sources, ...) win.
+  vars_files:
+    - ../../roles/firewall/defaults/main.yml
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render and check each case
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/firewall_case.yml"
+      loop:
+        - {name: lan-open, exposure: lan, sources: [], open: true, v4: false, v6: false}
+        - {name: public-open, exposure: public, sources: [], open: true, v4: false, v6: false}
+        - {name: lan-both, exposure: lan, sources: [192.0.2.0/24, "2001:db8::/32"], open: false, v4: true, v6: true}
+        - {name: local-v4, exposure: local, sources: [192.0.2.0/24], open: false, v4: true, v6: false}
+        - {name: public-v6, exposure: public, sources: ["2001:db8::/32"], open: false, v4: false, v6: true}
+      loop_control:
+        loop_var: unit_case
+        label: "{{ unit_case.name }}"
+
+    - name: Check a known interface passes
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/firewall/tasks/check_interface.yml"
+      vars:
+        forge_external_interface: eth9
+
+    - name: Check an unknown interface fails (no default IPv4 route, nothing set)
+      block:
+        - name: Run the interface check with no interface
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/firewall/tasks/check_interface.yml"
+          vars:
+            forge_external_interface: ""
+        - name: Record that it passed
+          ansible.builtin.set_fact:
+            unit_interface_outcome: passed
+      rescue:
+        - name: Record that it failed
+          ansible.builtin.set_fact:
+            unit_interface_outcome: failed
+            unit_interface_message: "{{ ansible_failed_result.msg }}"
+
+    - name: Check the unknown interface was refused with a clear message
+      ansible.builtin.assert:
+        that:
+          - unit_interface_outcome == 'failed'
+          - "'forge_external_interface' in unit_interface_message"
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent
