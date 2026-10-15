@@ -21,3 +21,7 @@ hardening_ssh_match_user:
   - user: "{{ forge_users | map(attribute='name') | join(',') }}"
     rules:
       - AllowAgentForwarding yes
+# The playbook never changes the admin's sudo: devsec's password ageing would
+# make a password-holding admin (bare metal) renew its password every 60 days,
+# and sudo, Ansible's become included, would demand it.
+hardening_users_without_password_ageing: ["{{ forge_admin_user }}"]

@@ -1346,7 +1346,7 @@ git commit -m "feat: rôle base (mises à jour, horloge, headless, journald)"
   - `hardening_sysctl_overwrite` (dict);
   - `hardening_ssh_allow_users` (str, space-separated);
   - `hardening_ssh_match_user` (list of `{user, rules}`);
-  - devsec's handler `restart sshd`, which runs before the firewall's handlers because it is defined earlier.
+  - devsec's handler `Restart sshd`. It runs right before the firewall's handlers only because `site.yml` imports the roles as ordered `import_role` tasks (final-review fix C2); under `roles:` it would run last.
 
 - [ ] **Step 1: Write the failing unit test (`ansible/tests/unit/hardening.yml`)**
 

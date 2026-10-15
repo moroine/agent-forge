@@ -26,6 +26,42 @@
       vars:
         unit_uu: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/uu') }}"
 
+    # The pinned key must be the file's only primary key: apt trusts every
+    # key in a signed-by file. Lines are `gpg --show-keys --with-colons`.
+    - name: Check the key cases
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/key_case.yml"
+      loop:
+        - name: pinned-with-subkey
+          lines:
+            - "pub:-:4096:1:82CC8797C838DCFD:1688924546:::-:::scESC::::::23::0:"
+            - "fpr:::::::::4EFC590696CB15B87C73A3AD82CC8797C838DCFD:"
+            - "uid:-::::1688924546::A::Zabbly <info@zabbly.com>::::::::::0:"
+            - "sub:-:4096:1:731011EA14FBF651:1688924546::::::s::::::23:"
+            - "fpr:::::::::877E84F1CA4E4C095F3044D0731011EA14FBF651:"
+          expect: passed
+        - name: extra-primary-key
+          lines:
+            - "pub:-:4096:1:82CC8797C838DCFD:1688924546:::-:::scESC::::::23::0:"
+            - "fpr:::::::::4EFC590696CB15B87C73A3AD82CC8797C838DCFD:"
+            - "pub:-:4096:1:1111111111111111:1688924546:::-:::scESC::::::23::0:"
+            - "fpr:::::::::AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555:"
+          expect: failed
+        - name: other-key
+          lines:
+            - "pub:-:4096:1:1111111111111111:1688924546:::-:::scESC::::::23::0:"
+            - "fpr:::::::::AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555:"
+          expect: failed
+        - name: pinned-only-as-subkey
+          lines:
+            - "pub:-:4096:1:1111111111111111:1688924546:::-:::scESC::::::23::0:"
+            - "fpr:::::::::AAAA1111BBBB2222CCCC3333DDDD4444EEEE5555:"
+            - "sub:-:4096:1:82CC8797C838DCFD:1688924546::::::s::::::23:"
+            - "fpr:::::::::4EFC590696CB15B87C73A3AD82CC8797C838DCFD:"
+          expect: failed
+      loop_control:
+        loop_var: unit_case
+        label: "{{ unit_case.name }}"
+
     - name: Remove the scratch directory
       ansible.builtin.file:
         path: "{{ unit_tmp.path }}"

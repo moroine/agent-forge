@@ -11,3 +11,10 @@
       The host must run Ubuntu 26.04 LTS (found {{ ansible_facts.distribution }}
       {{ ansible_facts.distribution_version }}).
     quiet: true
+
+# Before anything changes on the host: SSH must arrive on the interface the
+# firewall will open it on.
+- name: Check the firewall's external interface
+  ansible.builtin.include_role:
+    name: firewall
+    tasks_from: check_interface.yml

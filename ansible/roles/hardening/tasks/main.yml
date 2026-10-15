@@ -6,6 +6,7 @@
     sysctl_overwrite: "{{ hardening_sysctl_overwrite }}"
     # UFW is not used: the firewall role runs native nftables.
     ufw_manage_defaults: false
+    os_users_without_password_ageing: "{{ hardening_users_without_password_ageing }}"
 
 - name: Harden sshd with devsec.hardening.ssh_hardening
   ansible.builtin.import_role:

@@ -28,10 +28,28 @@
     # A fresh cloud VM often runs apt-daily at boot and holds the dpkg lock.
     ansible.builtin.apt:
       lock_timeout: 600
-  roles:
-    - role: base
-    - role: hardening
-    - role: firewall
-    - role: fail2ban
-    - role: incus
-    - role: forge_users
+  # Ordered import_role tasks, not a roles: section: handlers run in the order
+  # they are loaded, and this order puts devsec's "Restart sshd" (imported by
+  # the hardening role) right before "Load the host firewall". Under roles:,
+  # it would load after every other role's handlers, so a failing handler in
+  # between would leave the firewall on the new port and sshd on the old one.
+  # tests/unit/site_structure.yml pins this.
+  tasks:
+    - name: Base system
+      ansible.builtin.import_role:
+        name: base
+    - name: Hardening
+      ansible.builtin.import_role:
+        name: hardening
+    - name: Host firewall
+      ansible.builtin.import_role:
+        name: firewall
+    - name: Fail2ban
+      ansible.builtin.import_role:
+        name: fail2ban
+    - name: Incus
+      ansible.builtin.import_role:
+        name: incus
+    - name: Forge user
+      ansible.builtin.import_role:
+        name: forge_users

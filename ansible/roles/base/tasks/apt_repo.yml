@@ -6,7 +6,8 @@
 #   base_apt_repo_fingerprint  the primary key's fingerprint (40 upper-case hex)
 #   base_apt_repo_uris, base_apt_repo_suites, base_apt_repo_components (lists)
 #   base_apt_repo_architectures (list, optional)
-# The key's fingerprint is checked against the pinned value on every run.
+# The key's fingerprint is checked against the pinned value on every run
+# (tasks/check_key.yml): it must be the file's only primary key.
 - name: Fetch the signing key of {{ base_apt_repo_name }}
   ansible.builtin.get_url:
     url: "{{ base_apt_repo_key_url }}"
@@ -21,15 +22,8 @@
   register: base_apt_repo_gpg
   changed_when: false
 
-- name: Check the key is the pinned one for {{ base_apt_repo_name }}
-  ansible.builtin.assert:
-    that:
-      # A colon-listing fingerprint record: "fpr" + 9 colons + fingerprint + ":".
-      - ("fpr:::::::::" ~ base_apt_repo_fingerprint ~ ":") in base_apt_repo_gpg.stdout_lines
-    fail_msg: >-
-      /etc/apt/keyrings/{{ base_apt_repo_name }}.asc is not the expected key
-      ({{ base_apt_repo_fingerprint }}). Remove it only once you know why.
-    quiet: true
+- name: Check the key is the pinned one
+  ansible.builtin.include_tasks: check_key.yml
 
 - name: Add the repository {{ base_apt_repo_name }}
   ansible.builtin.deb822_repository:

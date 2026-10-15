@@ -63,6 +63,17 @@ all:
           forge_ssh_port: 70000
           unit_expect: failed
           unit_expect_message: forge_ssh_port
+        preflight_no_admin:
+          forge_exposure: public
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: failed
+          unit_expect_message: Set ansible_user
+        preflight_keys_not_list:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: [{name: alice, ssh_keys: "ssh-ed25519 AAAA alice@test"}]
+          unit_expect: failed
+          unit_expect_message: ssh_keys
         preflight_sources_not_list:
           ansible_user: ubuntu
           forge_exposure: lan
@@ -71,13 +82,23 @@ all:
           unit_expect: failed
           unit_expect_message: must be lists
     port_cases:
+      # The probe is a real SSH login, so these cases use the ssh connection
+      # (to the local machine, on ports where nothing listens).
+      vars:
+        ansible_connection: ssh
+        ansible_host: 127.0.0.1
+        ansible_user: unit
       hosts:
         port_explicit:
-          ansible_host: 127.0.0.1
           ansible_port: 60022
           forge_ssh_port: 2222
           unit_expect_port: 60022
+          unit_expect_probe: skipped
         port_closed:
-          ansible_host: 127.0.0.1
           forge_ssh_port: 1
           unit_expect_port: 22
+          unit_expect_probe: unreachable
+        port_default:
+          forge_ssh_port: 22
+          unit_expect_port: 22
+          unit_expect_probe: skipped

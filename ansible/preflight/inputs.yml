@@ -10,7 +10,9 @@
     forge_incus_storage_size: "{{ forge_incus_storage_size | default('') }}"
     forge_incus_storage_source: "{{ forge_incus_storage_source | default('') }}"
     forge_fail2ban_ignoreip: "{{ forge_fail2ban_ignoreip | default([]) }}"
-    forge_admin_user: "{{ ansible_user | default(lookup('ansible.builtin.env', 'USER')) }}"
+    # No fallback to the controller's $USER or ~/.ssh/config: AllowUsers is
+    # built from this name, and a wrong one locks the real admin out.
+    forge_admin_user: "{{ ansible_user | default('') }}"
 
 - name: Check forge_exposure
   ansible.builtin.assert:
@@ -20,7 +22,16 @@
     fail_msg: "forge_exposure must be public, lan or local (got: {{ forge_exposure | default('nothing') }})."
     quiet: true
 
-- name: Check the admin account
+- name: Check the admin account is named
+  ansible.builtin.assert:
+    that:
+      - forge_admin_user | length > 0
+    fail_msg: >-
+      Set ansible_user to the machine's sudo account in the inventory: sshd's
+      AllowUsers is built from it, so it must be the account Ansible logs in as.
+    quiet: true
+
+- name: Check the admin account is not root
   ansible.builtin.assert:
     that:
       - forge_admin_user != 'root'
@@ -47,10 +58,12 @@
       - forge_users[0].name is defined
       - forge_users[0].name is match('^[a-z_][a-z0-9_-]*$')
       - forge_users[0].name != forge_admin_user
+      - forge_users[0].ssh_keys | default([]) is sequence
+      - forge_users[0].ssh_keys | default([]) is not string
       - forge_users[0].ssh_keys | default([]) | length > 0
     fail_msg: >-
       forge_users[0] needs a valid name, different from ansible_user
-      ({{ forge_admin_user }}), and at least one entry in ssh_keys.
+      ({{ forge_admin_user }}), and ssh_keys as a list of at least one key.
     quiet: true
 
 - name: Check the optional variables

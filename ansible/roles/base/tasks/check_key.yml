@@ -1,0 +1,22 @@
+---
+# apt trusts every key in a signed-by file, so the pinned key must be the
+# file's only primary key. In `gpg --with-colons` output, a primary key's
+# fingerprint is the "fpr" record right after its "pub" record ("fpr" + 9
+# colons + fingerprint + ":"); subkeys' fingerprints follow "sub" records.
+- name: Check the key is the pinned one for {{ base_apt_repo_name }}
+  ansible.builtin.assert:
+    that:
+      - base_apt_repo_primary_fprs == ["fpr:::::::::" ~ base_apt_repo_fingerprint ~ ":"]
+    fail_msg: >-
+      /etc/apt/keyrings/{{ base_apt_repo_name }}.asc must hold exactly the
+      pinned key {{ base_apt_repo_fingerprint }} (primary keys found:
+      {{ base_apt_repo_primary_fprs | map('regex_replace', '^fpr:+|:$', '') | join(', ') }}).
+      Remove it only once you know why.
+    quiet: true
+  vars:
+    base_apt_repo_primary_fprs: >-
+      {{ base_apt_repo_gpg.stdout_lines
+         | zip(base_apt_repo_gpg.stdout_lines[1:])
+         | selectattr('0', 'match', '^pub:')
+         | map(attribute='1')
+         | list }}

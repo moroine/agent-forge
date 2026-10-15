@@ -24,31 +24,54 @@
         loop_var: unit_case
         label: "{{ unit_case.name }}"
 
-    - name: Check a known interface passes
-      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/firewall/tasks/check_interface.yml"
+    # Review focus 2, and the controller's own path: the check must refuse an
+    # unknown interface, a missing one, and an SSH session that arrives on
+    # another interface than the one the firewall opens SSH on.
+    - name: Check the interface cases
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/interface_case.yml"
+      loop:
+        - name: default-route
+          interface: ""
+          facts: "{{ unit_facts }}"
+          expect: passed
+        - name: explicit
+          interface: eth9
+          facts: "{{ unit_facts }}"
+          expect: passed
+        - name: no-default-route
+          interface: ""
+          facts: {}
+          expect: failed
+          message: forge_external_interface
+        - name: missing-interface
+          interface: eth8
+          facts: "{{ unit_facts }}"
+          expect: failed
+          message: is not an interface
+        - name: ssh-elsewhere
+          interface: ""
+          facts: "{{ unit_facts | combine({'env': {'SSH_CONNECTION': '198.51.100.1 50000 10.8.0.1 22'}}) }}"
+          expect: failed
+          message: locked out
+        - name: ssh-loopback
+          interface: ""
+          facts: "{{ unit_facts | combine({'env': {'SSH_CONNECTION': '127.0.0.1 50000 127.0.0.1 22'}}) }}"
+          expect: passed
+      loop_control:
+        loop_var: unit_case
+        label: "{{ unit_case.name }}"
       vars:
-        forge_external_interface: eth9
-
-    - name: Check an unknown interface fails (no default IPv4 route, nothing set)
-      block:
-        - name: Run the interface check with no interface
-          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/firewall/tasks/check_interface.yml"
-          vars:
-            forge_external_interface: ""
-        - name: Record that it passed
-          ansible.builtin.set_fact:
-            unit_interface_outcome: passed
-      rescue:
-        - name: Record that it failed
-          ansible.builtin.set_fact:
-            unit_interface_outcome: failed
-            unit_interface_message: "{{ ansible_failed_result.msg }}"
-
-    - name: Check the unknown interface was refused with a clear message
-      ansible.builtin.assert:
-        that:
-          - unit_interface_outcome == 'failed'
-          - "'forge_external_interface' in unit_interface_message"
+        # A host with its default route on eth9 and a VPN on wg0; Ansible's
+        # session arrives on eth9's address unless a case says otherwise.
+        unit_facts:
+          default_ipv4: {interface: eth9, address: 192.0.2.10}
+          interfaces: [lo, eth9, wg0]
+          eth9:
+            ipv4: {address: 192.0.2.10}
+            ipv6: [{address: "2001:db8::10"}]
+          wg0:
+            ipv4: {address: 10.8.0.1}
+          env: {SSH_CONNECTION: "198.51.100.1 50000 192.0.2.10 22"}
 
     - name: Remove the scratch directory
       ansible.builtin.file:

@@ -104,16 +104,23 @@ ansible-playbook -i inventory.yml ansible/site.yml
   that 26.04 still installs under that name. This affects only Ansible's
   connection; the host's default `sudo` stays sudo-rs. A become password, if
   used, lives in an `ansible-vault` file, never in plain text in the inventory.
-- **SSH port change.** If `ansible_port` is not set in the inventory, the
-  preflight play probes `forge_ssh_port` from the controller (TCP connect only,
-  no authentication, so fail2ban never counts it). It falls back to 22 when that
-  port does not answer, which is the case on the first run. When `ansible_port`
+- **SSH port change.** If `ansible_port` is not set in the inventory and
+  `forge_ssh_port` is not 22, the preflight play tries an authenticated login
+  on `forge_ssh_port` and falls back to 22 when it is unreachable, which is the
+  case on the first run. It must be a real login: a bare TCP connect that
+  closes before the SSH banner counts as a failure in fail2ban's aggressive
+  mode (`public`), and a few runs would ban the controller. When `ansible_port`
   is set (Lima's forwarded port, for example), it is used as is.
 - **No lockout.** The sshd restart and the nftables load are handlers, and
-  `site.yml` sets `force_handlers: true`. If a run fails after the sshd or
-  firewall configuration was written, both handlers still run, so sshd's port
-  and the firewall always agree. The established-connection rule keeps the
-  current Ansible connection alive throughout.
+  `site.yml` sets `force_handlers: true`. The provisioning play imports its
+  roles as ordered `import_role` tasks, not under `roles:`. Handlers run in
+  the order they are loaded, and under `roles:` devsec's "Restart sshd"
+  (imported by the hardening role) would run after every other role's
+  handlers. With ordered imports it runs right before "Load the host
+  firewall". A handler that fails before the pair leaves both undone; after
+  the pair, both are done. Either way sshd's port and the firewall agree. The
+  established-connection rule keeps the current Ansible connection alive
+  throughout.
 
 ## Inventory and variables
 
@@ -158,8 +165,12 @@ The first play of `site.yml` fails early, with a message naming the variable or
 condition, unless:
 
 - the target is Ubuntu 26.04;
-- `ansible_user` is not `root` (`PermitRootLogin no` would lock the next run
-  out);
+- `ansible_user` is set (sshd's `AllowUsers` is built from it, so it must be
+  the account Ansible logs in as) and is not `root` (`PermitRootLogin no`
+  would lock the next run out);
+- the firewall's external interface exists, and Ansible's own SSH session
+  arrives on one of its addresses (or on loopback): SSH is accepted on that
+  interface only;
 - `forge_exposure` is `public`, `lan` or `local`;
 - `forge_users` holds exactly one user, whose name differs from `ansible_user`
   and who has at least one SSH key. Several forge users would share one Incus
@@ -307,7 +318,9 @@ table inet forge_host {
   makes configurable (spike, finding A). They are valid before the bridge exists.
 - **Refinements of the framing spec:**
   - Essential ICMP is accepted. Without ICMPv6 neighbor discovery the host's
-    own IPv6 breaks, and dropping all ICMP breaks path-MTU discovery.
+    own IPv6 breaks, and dropping all ICMP breaks path-MTU discovery. DHCPv6
+    replies and MLD from link-local addresses are accepted too: conntrack
+    cannot match them as replies, and dropping them loses the host's IPv6.
   - Forwarding is not symmetric: from the bridge to the external interface,
     anything goes; from the external interface to the bridge, only return
     traffic passes. No container is exposed inbound in v2.0.

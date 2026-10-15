@@ -24,3 +24,11 @@
         that:
           - hardening_ssh_allow_users == 'ubuntu alice'
           - "hardening_ssh_match_user == [{'user': 'alice', 'rules': ['AllowAgentForwarding yes']}]"
+
+    # The playbook never changes the admin's sudo: devsec's password ageing
+    # would make a password-holding admin's sudo demand a new password
+    # after 60 days.
+    - name: Check the admin is exempt from password ageing
+      ansible.builtin.assert:
+        that:
+          - hardening_users_without_password_ageing == ['ubuntu']

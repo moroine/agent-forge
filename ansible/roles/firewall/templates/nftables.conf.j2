@@ -67,6 +67,10 @@ table inet forge_host {
 		icmp type echo-request limit rate 5/second accept
 		icmpv6 type { destination-unreachable, packet-too-big, time-exceeded, parameter-problem, nd-router-solicit, nd-router-advert, nd-neighbor-solicit, nd-neighbor-advert } accept
 		icmpv6 type echo-request limit rate 5/second accept
+		# The host's own IPv6 from its link: DHCPv6 replies (server 547 to
+		# client 546) and MLD, which conntrack cannot match as replies.
+		ip6 saddr fe80::/10 udp sport 547 udp dport 546 accept
+		ip6 saddr fe80::/10 icmpv6 type { mld-listener-query, mld-listener-report, mld-listener-done, mld2-listener-report } accept
 
 		# Containers on the forge bridge get DHCP and DNS from the host, nothing else.
 		iifname "{{ firewall_bridge }}" udp dport 67 accept
