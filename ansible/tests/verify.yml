@@ -23,3 +23,5 @@
   tasks:
     - name: Platform
       ansible.builtin.import_tasks: verify/platform.yml
+    - name: Base
+      ansible.builtin.import_tasks: verify/base.yml

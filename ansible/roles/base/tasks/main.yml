@@ -1,0 +1,83 @@
+---
+- name: Install the base packages
+  ansible.builtin.apt:
+    name: "{{ base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create the apt keyrings directory
+  ansible.builtin.file:
+    path: /etc/apt/keyrings
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Install unattended-upgrades
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+
+- name: Turn the periodic unattended upgrade on
+  ansible.builtin.copy:
+    src: 20auto-upgrades
+    dest: /etc/apt/apt.conf.d/20auto-upgrades
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Upgrade the added repositories too, never rebooting
+  ansible.builtin.template:
+    src: 52agent-forge-unattended-upgrades.j2
+    dest: /etc/apt/apt.conf.d/52agent-forge-unattended-upgrades
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Read whether time synchronisation is on
+  ansible.builtin.command:
+    cmd: timedatectl show --property=NTP --value
+  register: base_ntp
+  changed_when: false
+
+- name: Turn time synchronisation on
+  ansible.builtin.command:
+    cmd: timedatectl set-ntp true
+  when: base_ntp.stdout != 'yes'
+  changed_when: true
+
+- name: Mask the sleep targets (headless host)
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    masked: true
+  loop: "{{ base_sleep_targets }}"
+
+- name: Read the default boot target
+  ansible.builtin.command:
+    cmd: systemctl get-default
+  register: base_default_target
+  changed_when: false
+
+- name: Boot to multi-user.target
+  ansible.builtin.command:
+    cmd: systemctl set-default multi-user.target
+  when: base_default_target.stdout != 'multi-user.target'
+  changed_when: true
+
+- name: Create the journald drop-in directory
+  ansible.builtin.file:
+    path: /etc/systemd/journald.conf.d
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Keep the journal across reboots, capped at 1G
+  ansible.builtin.copy:
+    src: journald-agent-forge.conf
+    dest: /etc/systemd/journald.conf.d/agent-forge.conf
+    mode: "0644"
+    owner: root
+    group: root
+  notify: Restart journald

@@ -16,3 +16,17 @@
       ansible.builtin.import_tasks: preflight/port.yml
     - name: Check the target
       ansible.builtin.import_tasks: preflight/target.yml
+
+- name: Provision the host
+  hosts: all
+  become: true
+  gather_facts: false   # the preflight play gathered them
+  # The sshd restart and the nftables load are handlers: forcing them keeps
+  # sshd's port and the firewall in agreement even when a later task fails.
+  force_handlers: true
+  module_defaults:
+    # A fresh cloud VM often runs apt-daily at boot and holds the dpkg lock.
+    ansible.builtin.apt:
+      lock_timeout: 600
+  roles:
+    - role: base

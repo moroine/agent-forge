@@ -1,0 +1,9 @@
+// Managed by agent-forge (ansible/roles/base); local changes are overwritten.
+// Also upgrade the third-party repositories the playbook adds. Never reboot
+// automatically: it would kill the herdr server and every running agent.
+Unattended-Upgrade::Origins-Pattern {
+{% for site in base_unattended_upgrade_sites %}
+        "site={{ site }}";
+{% endfor %}
+};
+Unattended-Upgrade::Automatic-Reboot "false";

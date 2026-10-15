@@ -1,0 +1,32 @@
+---
+- name: Base templates
+  hosts: render
+  gather_facts: false
+  vars_files:
+    - ../../roles/base/defaults/main.yml
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render the unattended-upgrades file
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/base/templates/52agent-forge-unattended-upgrades.j2"
+        dest: "{{ unit_tmp.path }}/uu"
+        mode: "0644"
+
+    - name: Check it covers the three repositories and never reboots
+      ansible.builtin.assert:
+        that:
+          - unit_uu is search('"site=pkgs.zabbly.com";')
+          - unit_uu is search('"site=deb.nodesource.com";')
+          - unit_uu is search('"site=downloads.claude.ai";')
+          - unit_uu is search('Unattended-Upgrade::Automatic-Reboot "false";')
+      vars:
+        unit_uu: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/uu') }}"
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent

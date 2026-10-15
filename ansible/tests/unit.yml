@@ -4,3 +4,5 @@
 #   ansible-playbook -i ansible/tests/unit-inventory.yml ansible/tests/unit.yml
 - name: Preflight
   ansible.builtin.import_playbook: unit/preflight.yml
+- name: Base
+  ansible.builtin.import_playbook: unit/base.yml
