@@ -1,0 +1,25 @@
+---
+# Assertions against a host provisioned by site.yml. vm-test.sh runs this
+# after the two provisioning runs and again after a reboot, with the
+# generated inventory and these extra vars:
+#   ansible_port          forge_ssh_port (sshd has moved there)
+#   verify_work           the harness's temporary directory (keys, known_hosts)
+#   verify_negative_auth  true to run the deliberate authentication failures
+- name: Verify the provisioned host
+  hosts: all
+  become: true
+  gather_facts: true
+  vars:
+    # Every SSH check opens a fresh connection: a multiplexed one would hide
+    # sshd changes (validation spike, finding D).
+    verify_ssh: >-
+      ssh -F none -o BatchMode=yes -o ConnectTimeout=10
+      -o ControlMaster=no -o ControlPath=none -o IdentitiesOnly=yes
+      -o HostKeyAlgorithms=ssh-ed25519
+      -o UserKnownHostsFile={{ verify_work }}/known_hosts
+      -o StrictHostKeyChecking=accept-new -p {{ forge_ssh_port }}
+    verify_ssh_forge: "{{ verify_ssh }} -i {{ verify_work }}/forge {{ forge_users[0].name }}@{{ ansible_host }}"
+    verify_ssh_admin: "{{ verify_ssh }} -i {{ verify_work }}/admin {{ ansible_user }}@{{ ansible_host }}"
+  tasks:
+    - name: Platform
+      ansible.builtin.import_tasks: verify/platform.yml

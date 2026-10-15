@@ -38,3 +38,23 @@ ansible-playbook -i ~/forge-inventory.yml ansible/site.yml
 npm run test:ansible     # controller-only unit tests, no target machine
 ansible-lint ansible/    # profile production (.ansible-lint)
 ```
+
+## VM test
+
+`tests/vm-test.sh` creates a throwaway VM on an LXD or Incus host with KVM, and
+provisions it with this playbook. omen is that host today. The script checks
+that a second run changes nothing, runs `tests/verify.yml`, reboots the VM,
+verifies again, and deletes the VM. Run it on omen, from a clone of `next` kept
+apart from the v1 clone:
+
+```bash
+git clone git@github.com:moroine/agent-forge.git ~/src/agent-forge-next   # once
+git -C ~/src/agent-forge-next fetch origin
+git -C ~/src/agent-forge-next checkout --detach origin/<branch>
+~/src/agent-forge-next/ansible/tests/vm-test.sh                    # --exposure public (default)
+~/src/agent-forge-next/ansible/tests/vm-test.sh --exposure local   # fail2ban off
+```
+
+It needs ansible-core 2.20 or newer (`pipx install ansible-core` on Ubuntu
+24.04). `--keep` leaves the VM and its keys in place for debugging. The script
+prints where they are.

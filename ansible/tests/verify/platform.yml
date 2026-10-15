@@ -1,0 +1,30 @@
+---
+- name: Check the host runs Ubuntu 26.04
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_release == 'resolute'
+    quiet: true
+
+- name: Read sudo's version
+  ansible.builtin.command:
+    cmd: sudo --version
+  become: false
+  register: verify_sudo_version
+  changed_when: false
+
+- name: Read ls's version
+  ansible.builtin.command:
+    cmd: ls --version
+  register: verify_ls_version
+  changed_when: false
+
+- name: Check the host runs sudo-rs and uutils, as Ubuntu 26.04 ships them
+  ansible.builtin.assert:
+    that:
+      - "'sudo-rs' in verify_sudo_version.stdout"
+      - "'uutils' in verify_ls_version.stdout"
+    fail_msg: >-
+      This test must run against sudo-rs and Rust coreutils; got
+      "{{ verify_sudo_version.stdout_lines | first }}" and
+      "{{ verify_ls_version.stdout_lines | first }}".
