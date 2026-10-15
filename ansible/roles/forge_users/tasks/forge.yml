@@ -1,0 +1,171 @@
+---
+# forge comes from the controller's HEAD, so it always matches the playbook
+# that installs it (works for forks and unpushed branches; the host needs no
+# GitHub access). One version per host, root-owned.
+
+# Read-only git queries: the git module only clones and updates.
+- name: Read the controller's HEAD  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ forge_users_repo_root }}" rev-parse HEAD
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: forge_users_head
+  changed_when: false
+
+- name: Read whether the controller's checkout has uncommitted changes  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ forge_users_repo_root }}" status --porcelain
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: forge_users_status
+  changed_when: false
+
+- name: Warn that HEAD is deployed, not the working tree
+  ansible.builtin.debug:
+    msg: >-
+      The controller's checkout has uncommitted changes: forge is deployed
+      from HEAD ({{ forge_users_head.stdout[:12] }}), not from the working tree.
+  when: forge_users_status.stdout | length > 0
+  run_once: true
+
+- name: Set the release's paths
+  ansible.builtin.set_fact:
+    forge_users_sha: "{{ forge_users_head.stdout }}"
+    forge_users_release: "{{ forge_users_install_root }}/releases/{{ forge_users_head.stdout }}"
+
+- name: Create the releases directory
+  ansible.builtin.file:
+    path: "{{ forge_users_install_root }}/releases"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Look for this release on the host
+  ansible.builtin.stat:
+    path: "{{ forge_users_release }}"
+  register: forge_users_release_stat
+
+- name: Install this release
+  when: not forge_users_release_stat.stat.exists
+  block:
+    - name: Make a scratch directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: forge_users_scratch
+
+    # The git module has no archive action that writes a tarball of HEAD.
+    # tar.umask=0022: git's default (0002) would leave the root-owned release
+    # group-writable (files 0664, directories 0775).
+    - name: Archive HEAD on the controller  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: >-
+          git -C "{{ forge_users_repo_root }}" -c tar.umask=0022 archive
+          --format=tar.gz -o "{{ forge_users_scratch.path }}/forge.tar.gz" HEAD
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: true
+
+    # Unpack into a staging directory and rename it at the end: a release
+    # directory that exists is always complete.
+    - name: Remove a staging directory left by an interrupted run
+      ansible.builtin.file:
+        path: "{{ forge_users_release }}.partial"
+        state: absent
+
+    - name: Create the staging directory
+      ansible.builtin.file:
+        path: "{{ forge_users_release }}.partial"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Unpack the release
+      ansible.builtin.unarchive:
+        src: "{{ forge_users_scratch.path }}/forge.tar.gz"
+        dest: "{{ forge_users_release }}.partial"
+        owner: root
+        group: root
+
+    # At the release root, beside scripts/ (later cli/) and ansible/: the
+    # image build of sub-project 2 reads it there.
+    - name: Record the release's commit
+      ansible.builtin.copy:
+        content: "{{ forge_users_sha }}\n"
+        dest: "{{ forge_users_release }}.partial/COMMIT"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - name: Move the release into place
+      ansible.builtin.command:
+        cmd: mv "{{ forge_users_release }}.partial" "{{ forge_users_release }}"
+        creates: "{{ forge_users_release }}"
+  always:
+    - name: Remove the controller's scratch directory
+      ansible.builtin.file:
+        path: "{{ forge_users_scratch.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: forge_users_scratch.path is defined
+
+- name: Read the current release
+  ansible.builtin.stat:
+    path: "{{ forge_users_install_root }}/current"
+  register: forge_users_current
+
+- name: Keep the outgoing release as previous
+  ansible.builtin.file:
+    src: "{{ forge_users_current.stat.lnk_source }}"
+    dest: "{{ forge_users_install_root }}/previous"
+    state: link
+    force: true
+  when:
+    - forge_users_current.stat.islnk | default(false)
+    - forge_users_current.stat.lnk_source != forge_users_release
+
+# The file module replaces an existing link through a temporary link and a
+# rename, so `current` is never missing.
+- name: Switch current to this release
+  ansible.builtin.file:
+    src: "{{ forge_users_release }}"
+    dest: "{{ forge_users_install_root }}/current"
+    state: link
+    force: true
+  notify: Regenerate forge's bash completion
+
+- name: Put forge on the PATH
+  ansible.builtin.file:
+    src: "{{ forge_users_install_root }}/current/{{ forge_users_cli_entrypoint }}"
+    dest: /usr/local/bin/forge
+    state: link
+    force: true
+
+- name: Read the previous release
+  ansible.builtin.stat:
+    path: "{{ forge_users_install_root }}/previous"
+  register: forge_users_previous
+
+- name: List the installed releases
+  ansible.builtin.find:
+    paths: "{{ forge_users_install_root }}/releases"
+    file_type: directory
+  register: forge_users_releases
+
+- name: Remove releases older than the previous one
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ forge_users_releases.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: item.path not in [forge_users_release, forge_users_previous.stat.lnk_source | default('')]

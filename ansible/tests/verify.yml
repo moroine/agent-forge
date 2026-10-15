@@ -35,3 +35,5 @@
       ansible.builtin.import_tasks: verify/fail2ban.yml
     - name: Incus
       ansible.builtin.import_tasks: verify/incus.yml
+    - name: Forge user
+      ansible.builtin.import_tasks: verify/forge_users.yml

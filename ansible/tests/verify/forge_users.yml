@@ -1,0 +1,85 @@
+---
+# Checks as the forge user go through non-interactive SSH, the way herdr and
+# forge reach the host.
+- name: Read the forge user's groups
+  ansible.builtin.command:
+    cmd: "{{ verify_ssh_forge }} id -nG"
+  delegate_to: localhost
+  become: false
+  register: verify_forge_groups
+  changed_when: false
+
+- name: Check the forge user has no sudo
+  ansible.builtin.command:
+    cmd: "{{ verify_ssh_forge }} sudo -n true"
+  delegate_to: localhost
+  become: false
+  register: verify_forge_sudo
+  changed_when: false
+  failed_when: verify_forge_sudo.rc == 0
+
+- name: Read the forge user's tools and PATH
+  ansible.builtin.command:
+    cmd: "{{ verify_ssh_forge }} '{{ item }}'"
+  delegate_to: localhost
+  become: false
+  loop:
+    - node --version
+    - claude --version
+    - ansible-doc -t connection community.general.incus
+    - forge --help
+    - incus info
+    - printenv PATH
+  register: verify_forge_tools
+  changed_when: false
+
+- name: Check agent forwarding reaches the forge user
+  ansible.builtin.command:
+    cmd: >-
+      {{ verify_ssh }} -A -i {{ verify_work }}/forge
+      {{ forge_users[0].name }}@{{ ansible_host }} ssh-add -l
+  delegate_to: localhost
+  become: false
+  register: verify_forge_agent
+  changed_when: false
+
+# A read-only git query: the git module only clones and updates.
+- name: Read the controller's HEAD  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ playbook_dir | dirname | dirname }}" rev-parse HEAD
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: verify_head
+  changed_when: false
+
+- name: Read the deployed release's commit
+  ansible.builtin.slurp:
+    src: /opt/agent-forge/current/COMMIT
+  register: verify_commit
+
+- name: Read the forge entry point
+  ansible.builtin.stat:
+    path: /usr/local/bin/forge
+  register: verify_forge_link
+
+- name: Check the forge user's account, tools and forge release
+  ansible.builtin.assert:
+    that:
+      - "'incus-admin' in verify_forge_groups.stdout.split()"
+      - "'sudo' not in verify_forge_groups.stdout.split()"
+      - verify_forge_tools.results[0].stdout is match('v24\\.')
+      - "('/home/' ~ forge_users[0].name ~ '/.local/bin') in verify_forge_tools.results[5].stdout.split(':')"
+      - "'vm-test-forge' in verify_forge_agent.stdout"
+      - (verify_commit.content | b64decode | trim) == verify_head.stdout
+      - verify_forge_link.stat.islnk
+      - verify_forge_link.stat.lnk_source is match('/opt/agent-forge/releases/[0-9a-f]{40}/scripts/forge$')
+
+- name: Run the container smoke test as the forge user
+  ansible.builtin.shell:
+    cmd: "{{ verify_ssh_forge }} 'bash -s' < {{ playbook_dir }}/files/incus-smoke.sh"
+  delegate_to: localhost
+  become: false
+  register: verify_smoke
+  changed_when: false
+  failed_when: "'incus-smoke: OK' not in verify_smoke.stdout"

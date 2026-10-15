@@ -1,0 +1,5 @@
+# Managed by agent-forge (ansible/roles/forge_users).
+# Node 24 from NodeSource; Ubuntu 26.04 itself only ships Node 22.
+Package: nodejs
+Pin: origin deb.nodesource.com
+Pin-Priority: 600

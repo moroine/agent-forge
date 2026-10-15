@@ -34,3 +34,4 @@
     - role: firewall
     - role: fail2ban
     - role: incus
+    - role: forge_users
