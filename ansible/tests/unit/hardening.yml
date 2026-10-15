@@ -1,0 +1,26 @@
+---
+- name: Hardening overrides
+  hosts: render
+  gather_facts: false
+  vars:
+    forge_admin_user: ubuntu
+    forge_users: [{name: alice, ssh_keys: ["ssh-ed25519 AAAA alice@test"]}]
+  vars_files:
+    - ../../roles/hardening/vars/main.yml
+  tasks:
+    - name: Check the sysctl overrides
+      ansible.builtin.assert:
+        that:
+          - hardening_sysctl_overwrite == unit_expected_sysctls
+      vars:
+        unit_expected_sysctls:
+          net.ipv4.ip_forward: 1
+          kernel.unprivileged_userns_clone: 1
+          kernel.apparmor_restrict_unprivileged_userns: 0
+          kernel.yama.ptrace_scope: 1
+
+    - name: Check who may log in, and who gets agent forwarding
+      ansible.builtin.assert:
+        that:
+          - hardening_ssh_allow_users == 'ubuntu alice'
+          - "hardening_ssh_match_user == [{'user': 'alice', 'rules': ['AllowAgentForwarding yes']}]"

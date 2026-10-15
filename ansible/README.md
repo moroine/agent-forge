@@ -58,3 +58,23 @@ git -C ~/src/agent-forge-next checkout --detach origin/<branch>
 It needs ansible-core 2.20 or newer (`pipx install ansible-core` on Ubuntu
 24.04). `--keep` leaves the VM and its keys in place for debugging. The script
 prints where they are.
+
+## Hardening choices
+
+`roles/hardening` applies devsec.hardening 11.0.0 (`os_hardening`,
+`ssh_hardening`). Every upstream default is kept, except these:
+
+- **Sysctls.**
+  - `net.ipv4.ip_forward=1`, for the Incus bridge.
+  - `kernel.unprivileged_userns_clone=1` and
+    `kernel.apparmor_restrict_unprivileged_userns=0`, for user namespaces
+    inside containers (Chrome's sandbox, rootless Docker).
+  - `kernel.yama.ptrace_scope=1`, Ubuntu's default, so strace and gdb work in
+    containers.
+- **UFW.** `ufw_manage_defaults: false`, since nftables is used instead.
+- **sshd.**
+  - The port is `forge_ssh_port`, and `AllowUsers` lists the admin and the
+    forge user.
+  - Agent forwarding is allowed for the forge user only, and
+    `AllowStreamLocalForwarding no`.
+  - The ed25519 host key is the only host key.

@@ -6,3 +6,5 @@
   ansible.builtin.import_playbook: unit/preflight.yml
 - name: Base
   ansible.builtin.import_playbook: unit/base.yml
+- name: Hardening
+  ansible.builtin.import_playbook: unit/hardening.yml

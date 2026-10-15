@@ -1,0 +1,32 @@
+---
+# SSH checks from the controller, each on a fresh connection.
+- name: Check root cannot log in
+  ansible.builtin.command:
+    cmd: "{{ verify_ssh }} -i {{ verify_work }}/admin root@{{ ansible_host }} true"
+  delegate_to: localhost
+  become: false
+  register: verify_root_login
+  changed_when: false
+  failed_when: verify_root_login.rc == 0
+  # A deliberate authentication failure; only on the first verify, so that
+  # the run stays below public's maxretry of 3 (fail2ban).
+  when: verify_negative_auth | default(false) | bool
+
+- name: Check sshd no longer answers on port 22
+  ansible.builtin.wait_for:
+    host: "{{ ansible_host }}"
+    port: 22
+    state: stopped
+    timeout: 10
+  delegate_to: localhost
+  become: false
+  when: forge_ssh_port | int != 22
+
+- name: Check agent forwarding is refused to the admin
+  ansible.builtin.command:
+    cmd: >-
+      {{ verify_ssh }} -A -i {{ verify_work }}/admin
+      {{ ansible_user }}@{{ ansible_host }} 'test -z "$SSH_AUTH_SOCK"'
+  delegate_to: localhost
+  become: false
+  changed_when: false

@@ -1,0 +1,23 @@
+---
+# Overrides of devsec.hardening 11.0.0. Everything not listed keeps the
+# upstream default on purpose (sub-project 1 spec, "Role hardening").
+hardening_sysctl_overwrite:
+  # Incus's NAT bridge routes container traffic.
+  net.ipv4.ip_forward: 1
+  # devsec's Ubuntu vars set 0: an unprivileged user inside a container could
+  # then not create a user namespace (Chrome's sandbox, rootless Docker).
+  kernel.unprivileged_userns_clone: 1
+  # Same breakage, from Ubuntu's AppArmor mediation (validation spike,
+  # point 6). v1 on omen runs with 0 too: the LXD snap sets it host-wide.
+  kernel.apparmor_restrict_unprivileged_userns: 0
+  # Ubuntu's default. devsec's 2, with sys_ptrace dropped from containers,
+  # leaves no strace or gdb at all inside containers.
+  kernel.yama.ptrace_scope: 1
+# Nobody but the admin and the forge user logs in.
+hardening_ssh_allow_users: "{{ ([forge_admin_user] + forge_users | map(attribute='name') | list) | join(' ') }}"
+# Agent forwarding only for the forge user, for host-side git clone and fetch.
+# herdr itself needs no forwarding at all (validation spike, point 3).
+hardening_ssh_match_user:
+  - user: "{{ forge_users | map(attribute='name') | join(',') }}"
+    rules:
+      - AllowAgentForwarding yes

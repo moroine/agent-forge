@@ -25,3 +25,7 @@
       ansible.builtin.import_tasks: verify/platform.yml
     - name: Base
       ansible.builtin.import_tasks: verify/base.yml
+    - name: Hardening
+      ansible.builtin.import_tasks: verify/hardening.yml
+    - name: SSH from the controller
+      ansible.builtin.import_tasks: verify/ssh_client.yml

@@ -30,3 +30,4 @@
       lock_timeout: 600
   roles:
     - role: base
+    - role: hardening

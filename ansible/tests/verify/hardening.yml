@@ -1,0 +1,68 @@
+---
+- name: Validate sshd's configuration
+  ansible.builtin.command:
+    cmd: sshd -t
+  changed_when: false
+
+- name: Read sshd's effective configuration
+  ansible.builtin.command:
+    cmd: sshd -T
+  register: verify_sshd
+  changed_when: false
+
+- name: Read sshd's effective configuration for the forge user
+  ansible.builtin.command:
+    cmd: sshd -T -C user={{ forge_users[0].name }},host=verify.invalid,addr=192.0.2.1
+  register: verify_sshd_forge
+  changed_when: false
+
+- name: Check sshd's settings
+  ansible.builtin.assert:
+    that:
+      - verify_cfg.port == forge_ssh_port | string
+      - verify_cfg.permitrootlogin == 'no'
+      - verify_cfg.passwordauthentication == 'no'
+      - verify_cfg.allowtcpforwarding == 'no'
+      - verify_cfg.allowstreamlocalforwarding == 'no'
+      - verify_cfg.allowagentforwarding == 'no'
+      - verify_cfg.x11forwarding == 'no'
+      - verify_cfg.permittunnel == 'no'
+      - verify_cfg.hostkey == '/etc/ssh/ssh_host_ed25519_key'
+      - verify_cfg_forge.allowagentforwarding == 'yes'
+  vars:
+    verify_cfg: "{{ dict(verify_sshd.stdout_lines | map('split', ' ', 1)) }}"
+    verify_cfg_forge: "{{ dict(verify_sshd_forge.stdout_lines | map('split', ' ', 1)) }}"
+
+- name: Read the kernel settings the hardening role overrides
+  ansible.builtin.command:
+    cmd: sysctl -n net.ipv4.ip_forward kernel.apparmor_restrict_unprivileged_userns kernel.yama.ptrace_scope
+  register: verify_sysctls
+  changed_when: false
+
+- name: Read kernel.unprivileged_userns_clone, which not every kernel has
+  ansible.builtin.command:
+    cmd: sysctl -n kernel.unprivileged_userns_clone
+  register: verify_userns_clone
+  changed_when: false
+  failed_when: false
+
+- name: Read /proc's mount options
+  ansible.builtin.command:
+    cmd: findmnt --noheadings --output OPTIONS /proc
+  register: verify_proc_options
+  changed_when: false
+
+- name: Read logind's KillUserProcesses
+  ansible.builtin.command:
+    cmd: busctl get-property org.freedesktop.login1 /org/freedesktop/login1 org.freedesktop.login1.Manager KillUserProcesses
+  register: verify_kill_user_processes
+  changed_when: false
+
+- name: Check the kernel settings, /proc's hidepid and logind
+  ansible.builtin.assert:
+    that:
+      - verify_sysctls.stdout_lines == ['1', '0', '1']
+      - verify_userns_clone.rc != 0 or verify_userns_clone.stdout == '1'
+      - verify_proc_options.stdout is search('hidepid=(2|invisible)')
+      # The herdr server must survive logout (validation spike, finding E).
+      - verify_kill_user_processes.stdout == 'b false'
