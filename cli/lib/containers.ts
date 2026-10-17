@@ -100,3 +100,7 @@ export function buildStatus(containerCommit: string, latest: string): BuildStatu
   if (!containerCommit || !latest) return "unknown";
   return containerCommit === latest ? "up-to-date" : "behind";
 }
+
+export function latestImageCommit(ctx: Context): Promise<string> {
+  return imageProperty(ctx, BASE_IMAGE, "user.forge.commit");
+}

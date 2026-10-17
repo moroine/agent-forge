@@ -4,7 +4,7 @@ import { fakeContext } from "./lib/fake-context.ts";
 import { ForgeError } from "../cli/lib/context.ts";
 import {
   listForgeContainers, forgeRepos, containerForRepo, requireContainerForRepo,
-  checkNameCollision, isRunning, buildStatus, baseImageFor, latestImageCommitFor,
+  checkNameCollision, isRunning, buildStatus, baseImageFor, latestImageCommitFor, latestImageCommit,
 } from "../cli/lib/containers.ts";
 
 const LIST = JSON.stringify([
@@ -107,4 +107,9 @@ test("latestImageCommitFor reads the commit of the mode's base image", async () 
   });
   assert.equal(await latestImageCommitFor(ctx, "super"), "SUPERSHA");
   assert.equal(await latestImageCommitFor(ctx, "autonomous"), "BASESHA");
+});
+
+test("latestImageCommit reads agent-base's stamp", async () => {
+  const ctx = fakeContext({ rules: [{ match: "image get-property agent-base user.forge.commit", stdout: "BASESHA\n" }] });
+  assert.equal(await latestImageCommit(ctx), "BASESHA");
 });

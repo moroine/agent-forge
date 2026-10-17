@@ -1,203 +1,120 @@
-// Provisioning d'un container neuf. C'est la seule commande qui modifie
-// l'hôte : elle crée ~/workspaces/<container>, et en mode supervised y clone
-// par SSH. Les chemins hôte restent surchargeables par variable
-// d'environnement pour que les tests ne touchent jamais un vrai home.
+// Provisioning d'un container neuf (spec v2, « Provisioning »). C'est la
+// seule commande qui modifie l'hôte : elle crée ~/workspaces/<container> et y
+// clone par SSH, avec l'agent de l'humain. Un seul mode : supervised — aucun
+// credential GitHub, aucune clé de signature, aucun compte bot dans le
+// container. Les chemins hôte restent surchargeables par variable
+// d'environnement (paths.ts) pour que les tests ne touchent jamais un vrai home.
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
-import { configSet, execAsAgent, incus } from "../incus.ts";
-import { baseImageFor, latestImageCommitFor } from "../containers.ts";
+import { BASE_IMAGE, latestImageCommit } from "../containers.ts";
+import {
+  configSet, execAsAgent, execAsAgentArgv, forgeProject, imageExists, incus, listObjects, waitReady,
+} from "../incus.ts";
+import { PROFILE } from "../objects.ts";
+import { forgeHome, repoRoot, workspacesDir } from "../paths.ts";
 
-const home = () => process.env.FORGE_HOME ?? "/home/moroine";
-const repoDir = () => process.env.FORGE_REPO_DIR ?? join(home(), "agent-forge");
-const workspaces = () => process.env.FORGE_WORKSPACES ?? join(home(), "workspaces");
+// Le concept de mode reste (pre-bash.sh, CLAUDE.md, user.forge.mode) : le mode
+// autonome pourra revenir sans restructurer. v2 n'en provisionne qu'un.
+const MODE = "supervised";
 
 export async function provisionContainer(ctx: Context, container: string, ownerRepo: string): Promise<void> {
-  const credentials = join(home(), ".claude", ".credentials.json");
+  // Préconditions, toutes vérifiées avant de rien créer.
+  const credentials = join(forgeHome(), ".claude", ".credentials.json");
   if (!existsSync(credentials)) {
     throw new ForgeError(`${credentials} not found. Run 'claude auth login' on the host first.`);
   }
-  const workspaceDir = join(workspaces(), container);
+  const identity = await hostGitIdentity(ctx);
+  await requireRuntime(ctx);
+  const workspaceDir = join(workspacesDir(), container);
   const reuseWorkspace = await workspaceIsReusable(ctx, workspaceDir, ownerRepo);
 
-  ctx.err("Mode for this container?");
-  ctx.err("  [a] autonomous — bot pushes commits and opens PRs itself");
-  ctx.err("  [s] supervised — no credential; you retrieve and publish the work yourself");
-  ctx.err("  [u] super — autonomous + nested LXD (self-host agent-forge: run forge/incus/integration tests)");
-  const choice = (await ctx.prompt.ask("Choice [a/s/u]")) ?? "a";
-  const mode = modeFromChoice(choice);
-
-  const baseImage = baseImageFor(mode);
-  if ((await ctx.exec(incus("image", "info", baseImage))).code !== 0) {
-    const target = mode === "super" ? "forge image build super" : "forge image build";
-    throw new ForgeError(`image ${baseImage} not found. Run '${target}' first.`);
-  }
-  const profile = mode === "super" ? "agent-super" : "agent";
-
   ctx.out(`Creating container ${container}...`);
-  await mustSucceed("incus launch", ctx.exec(incus("launch", baseImage, container, "--profile", profile)));
+  await mustSucceed("incus launch", ctx.exec(incus("launch", BASE_IMAGE, container, "--profile", PROFILE)));
+  await waitReady(ctx, container);
 
-  // Supprime le compte ubuntu laissé par cloud-init, qui peut avoir un accès
-  // administrateur sans mot de passe. Tolérant délibérément (comme le
-  // `|| true` du bash d'origine, forge-start.sh:263) : le compte peut ne pas
-  // exister.
-  ctx.out("Removing cloud-init ubuntu backdoor...");
-  await ctx.exec(incus("exec", container, "--", "deluser", "--remove-home", "ubuntu"));
-  await mustSucceed("remove cloud-init sudoers file",
-    ctx.exec(incus("exec", container, "--", "rm", "-f", "/etc/sudoers.d/90-cloud-init-users")));
-
-  // Super mode : initialise le LXD imbriqué. snapd + le snap LXD sont déjà
-  // dans l'image (forge image build super) ; on attend le seed puis on
-  // initialise un pool `dir` + un bridge internes, une fois par container.
-  if (mode === "super") {
-    ctx.out("Initializing the nested LXD daemon...");
-    await mustSucceed("wait nested snapd seed",
-      ctx.exec(incus("exec", container, "--", "snap", "wait", "system", "seed.loaded")));
-    await mustSucceed("nested lxd init",
-      ctx.exec(incus("exec", container, "--", "/snap/bin/lxd", "init", "--minimal")));
-  }
-
-  ctx.out("Mounting workspace...");
+  // Le clone vit sur l'hôte : le container n'a jamais de credential GitHub.
+  const remote = `git@github.com:${ownerRepo}.git`;
   mkdirSync(workspaceDir, { recursive: true });
-  // raw.idmap dans le profil mappe moroine (1000) vers aiuser (1001) et gère
-  // aussi root : pas besoin d'idmap shifting sur ce device.
+  if (reuseWorkspace) {
+    // Le clone survivant a pu être fait par un container v1 autonome (origin
+    // en HTTPS) : on le réaligne sur l'URL SSH du clone hôte.
+    ctx.out(`Reusing the existing clone in ${workspaceDir}...`);
+    await mustSucceed("realign origin remote", ctx.exec(["git", "-C", workspaceDir, "remote", "set-url", "origin", remote]));
+  } else {
+    ctx.out(`Cloning ${ownerRepo} on the host...`);
+    await mustSucceed("clone repository", ctx.exec(["git", "clone", remote, workspaceDir]));
+  }
+  ctx.out("Mounting workspace...");
+  // raw.idmap (profil agent-forge) mappe l'utilisateur hôte sur aiuser : pas
+  // de shift sur ce device — un projet restreint l'interdirait de toute façon.
   await mustSucceed("mount workspace", ctx.exec(incus("config", "device", "add", container, "workspace", "disk",
     `source=${workspaceDir}`, "path=/workspace")));
 
-  ctx.out("Copying signing key...");
-  await mustSucceed("copy signing key", ctx.exec(incus("file", "push", join(home(), ".ssh", "github_agents_signing"),
-    `${container}/home/aiuser/.ssh/id_ed25519_signing`, "--uid", "1001", "--gid", "1001", "--mode", "600")));
-
-  ctx.out("Configuring git...");
-  await mustSucceed("configure git", execAsAgent(ctx, container, [
-    "git config --global user.name 'Claude Agent'",
-    "git config --global user.email 'moroine-claude@users.noreply.github.com'",
-    "git config --global gpg.format ssh",
-    "git config --global user.signingkey /home/aiuser/.ssh/id_ed25519_signing",
-    "git config --global commit.gpgsign true",
-  ].join(" && ")));
+  // L'agent commite sous l'identité de l'humain, sans signature : l'humain
+  // re-signe en publiant. Le trailer Co-Authored-By de Claude Code marque
+  // toujours les commits de l'agent.
+  ctx.out("Configuring git (your identity, unsigned commits)...");
+  for (const [key, value] of [["user.name", identity.name], ["user.email", identity.email], ["commit.gpgsign", "false"]]) {
+    await mustSucceed(`git config ${key}`, execAsAgentArgv(ctx, container, ["git", "config", "--global", key, value]));
+  }
 
   ctx.out("Reusing Claude Code credentials from host...");
   await mustSucceed("create .claude directory", execAsAgent(ctx, container, "mkdir -p /home/aiuser/.claude"));
-  await mustSucceed("push Claude credentials", ctx.exec(incus("file", "push", credentials,
-    `${container}/home/aiuser/.claude/.credentials.json`, "--uid", "1001", "--gid", "1001", "--mode", "600")));
+  await pushFile(ctx, "push Claude credentials", credentials, container, "/home/aiuser/.claude/.credentials.json", 1001, "600");
 
   ctx.out("Pre-accepting Claude Code onboarding...");
-  await mustSucceed("push onboarding state", ctx.exec(incus("file", "push",
-    join(repoDir(), "container", "claude.json"),
-    `${container}/home/aiuser/.claude.json`, "--uid", "1001", "--gid", "1001", "--mode", "600")));
+  await pushFile(ctx, "push onboarding state", join(repoRoot(), "container", "claude.json"),
+    container, "/home/aiuser/.claude.json", 1001, "600");
 
-  ctx.out("Updating Claude Code to latest...");
-  await mustSucceed("update Claude Code",
-    ctx.exec(incus("exec", container, "--", "npm", "install", "-g", "@anthropic-ai/claude-code@latest")));
+  ctx.out("Installing Claude global instructions...");
+  await pushFile(ctx, "push CLAUDE.md", join(repoRoot(), "container", "CLAUDE.md"),
+    container, "/home/aiuser/.claude/CLAUDE.md", 1001, "644");
 
-  // URL HTTPS explicite, pas la forme raccourcie owner/repo : claude resout
-  // cette derniere en git@github.com, or le container n'a aucune confiance SSH
-  // envers GitHub — et c'est deliberé. En mode autonome il passe par HTTPS avec
-  // un PAT restreint, en supervised il n'a aucune credential. Ajouter la cle
-  // hote de github aux known_hosts du container elargirait cette surface pour
-  // un depot public que HTTPS sert tres bien.
+  // URL HTTPS explicite, pas la forme owner/repo : claude résoudrait cette
+  // dernière en git@github.com, et le container n'a — délibérément — aucune
+  // confiance SSH envers GitHub.
   ctx.out("Installing Claude plugins...");
   await mustSucceed("install Claude plugins", execAsAgent(ctx, container,
     "claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git && claude plugin install superpowers@claude-plugins-official"));
 
-  ctx.out("Installing Claude global instructions...");
-  await mustSucceed("push CLAUDE.md", ctx.exec(incus("file", "push", join(repoDir(), "container", "CLAUDE.md"),
-    `${container}/home/aiuser/.claude/CLAUDE.md`, "--uid", "1001", "--gid", "1001", "--mode", "644")));
-
+  // Le hook et les réglages appartiennent à root : l'agent ne peut pas les
+  // modifier.
   ctx.out("Installing Claude security hooks...");
   await mustSucceed("create hooks directory",
     ctx.exec(incus("exec", container, "--", "mkdir", "-p", "/home/aiuser/.claude/hooks")));
-  await mustSucceed("push pre-bash.sh", ctx.exec(incus("file", "push",
-    join(repoDir(), "container", "pre-bash.sh"),
-    `${container}/home/aiuser/.claude/hooks/pre-bash.sh`, "--uid", "0", "--gid", "0", "--mode", "755")));
-  await mustSucceed("push Claude settings", ctx.exec(incus("file", "push",
-    join(repoDir(), "container", "settings.json"),
-    `${container}/home/aiuser/.claude/settings.json`, "--uid", "0", "--gid", "0", "--mode", "644")));
+  await pushFile(ctx, "push pre-bash.sh", join(repoRoot(), "container", "pre-bash.sh"),
+    container, "/home/aiuser/.claude/hooks/pre-bash.sh", 0, "755");
+  await pushFile(ctx, "push Claude settings", join(repoRoot(), "container", "settings.json"),
+    container, "/home/aiuser/.claude/settings.json", 0, "644");
+
+  await refreshClaude(ctx, container);
 
   ctx.out("Recording forge mode marker...");
   await mustSucceed("record forge mode marker",
-    execAsAgent(ctx, container, `echo '${mode}' > /home/aiuser/.claude/forge-mode`));
+    execAsAgent(ctx, container, `echo '${MODE}' > /home/aiuser/.claude/forge-mode`));
+  await mustSucceed("record forge mode", configSet(ctx, container, "user.forge.mode", MODE));
 
-  // Supervised passe par SSH avec l'agent forwardé de l'humain ; autonomous
-  // par HTTPS avec le credential helper que `gh auth setup-git` vient d'armer.
-  const remote = mode === "supervised"
-    ? `git@github.com:${ownerRepo}.git`
-    : `https://github.com/${ownerRepo}.git`;
-
-  if (mode === "autonomous" || mode === "super") {
-    ctx.err("");
-    ctx.err("==============================================================");
-    ctx.err("  GitHub token required (BOT account, fine-grained PAT)");
-    ctx.err(`  Scoped to: ${ownerRepo} only`);
-    ctx.err("  Permissions: Contents RW, Pull requests RW, Metadata R");
-    ctx.err("  The token is piped into the container and never written");
-    ctx.err("  to host disk.");
-    ctx.err("==============================================================");
-    const token = await ctx.prompt.askSecret("Paste the token (input hidden)");
-    if (!token) throw new ForgeError("empty token.");
-
-    ctx.out("Authenticating gh inside the container...");
-    // Le token passe par stdin, jamais par argv : argv est visible dans ps.
-    await mustSucceed("gh auth login", ctx.exec(
-      incus("exec", container, "--", "su", "-", "aiuser", "-c", "gh auth login --hostname github.com --with-token"),
-      { input: token },
-    ));
-    const status = await execAsAgent(ctx, container, "gh auth status --hostname github.com");
-    if (status.code !== 0) throw new ForgeError("the pasted token was rejected by GitHub.");
-    await mustSucceed("gh auth setup-git", execAsAgent(ctx, container, "gh auth setup-git"));
-  }
-
-  if (reuseWorkspace) {
-    // Le clone survivant vient peut-être d'un container de l'autre mode : son
-    // origin pointerait alors vers un protocole pour lequel CE container n'a
-    // aucun credential. On le réaligne plutôt que de laisser le premier fetch
-    // échouer.
-    ctx.out(`Reusing the existing clone in ${workspaceDir}...`);
-    await mustSucceed("realign origin remote",
-      ctx.exec(["git", "-C", workspaceDir, "remote", "set-url", "origin", remote]));
-  } else if (mode === "supervised") {
-    ctx.out(`Cloning ${ownerRepo} on the host (branch main)...`);
-    await mustSucceed("clone repository", ctx.exec(["git", "clone", remote, workspaceDir]));
-  } else {
-    ctx.out(`Cloning ${ownerRepo} (branch main)...`);
-    await mustSucceed("clone repository", execAsAgent(ctx, container, `git clone ${remote} /workspace`));
-  }
-
-  // Les trois étapes ci-dessous étaient une seule commande chaînée par des
-  // `&&`. Elles n'ont ni la même cible ni la même fiabilité, et les souder
-  // faisait qu'un dépôt gérant ses propres hooks emportait tout le
-  // provisioning avec lui.
-  //
-  // Passent par mustSucceed comme toute autre étape mutante : ce site d'appel
-  // avait été oublié par c89dbf4 et jetait le stderr, ne laissant à
-  // l'opérateur qu'un « git-lfs setup failed » sans le motif du refus de git.
+  // Les trois étapes ci-dessous n'ont ni la même cible ni la même fiabilité :
+  // elles restent séparées (v1).
   ctx.out("Installing git-lfs filters...");
   // `--skip-repo` : les filtres clean/smudge/process, dans la config globale,
-  // sans toucher aux hooks du dépôt. C'est la moitié qui compte — elle fait
-  // marcher checkout et commit des fichiers LFS — et elle est déterministe,
-  // donc fatale si elle échoue.
+  // sans toucher aux hooks du dépôt. Déterministe, donc fatal s'il échoue.
   await mustSucceed(`git-lfs filters in ${container}`,
     execAsAgent(ctx, container, "git lfs install --skip-repo"));
 
   ctx.out("Ignoring worktrees in the main clone...");
-  // Indépendant de LFS, et c'est aussi la première commande du container à
-  // toucher /workspace : un montage illisible se manifeste ici, et son message
-  // doit être lisible.
+  // Première commande du container à toucher /workspace : un montage
+  // illisible se manifeste ici, avec un message lisible.
   await mustSucceed(`worktree exclude in ${container}`, execAsAgent(ctx, container,
     "cd /workspace && { grep -qxF '.trees/' .git/info/exclude || echo '.trees/' >> .git/info/exclude; }"));
 
   ctx.out("Installing git-lfs hooks in /workspace...");
-  // Best-effort, délibérément. `git lfs install` refuse d'écraser un pre-push
-  // qu'il ne reconnaît pas et sort 2 — ce qui arrive dès que le dépôt gère ses
-  // propres hooks (husky pose `core.hooksPath`, et git-lfs installe alors
-  // dedans) ou que les hooks présents ont été écrits par un autre git-lfs que
-  // celui de l'image. Depuis qu'un workspace survivant est adopté au lieu
-  // d'être recloné, les deux sont des entrées normales. Abandonner là-dessus
-  // laissait un container à moitié provisionné sans métadonnée forge —
-  // exactement la pathologie supprimée par l'adoption — pour une raison qui
-  // n'empêche rien du travail de l'agent.
+  // Best-effort : `git lfs install` refuse d'écraser un pre-push qu'il ne
+  // reconnaît pas (husky, lefthook, hooks d'un autre git-lfs). Les filtres
+  // sont là, seul le hook d'upload manque.
   const hooks = await execAsAgent(ctx, container, "cd /workspace && git lfs install");
   if (hooks.code !== 0) {
     ctx.err(`WARNING: installing git-lfs hooks in /workspace failed: ${hooks.stderr.trim() || `exit code ${hooks.code}`}`);
@@ -209,27 +126,68 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
 
   ctx.out("Stamping the image build this container came from...");
   await mustSucceed("stamp image commit",
-    configSet(ctx, container, "user.forge.image_commit", await latestImageCommitFor(ctx, mode)));
+    configSet(ctx, container, "user.forge.image_commit", await latestImageCommit(ctx)));
 
+  // En dernier : c'est cette clé qui fait reconnaître le container par
+  // checkNameCollision.
   ctx.out("Recording forge metadata...");
   await mustSucceed("record forge repo", configSet(ctx, container, "user.forge.repo", ownerRepo));
-  await mustSucceed("record forge mode", configSet(ctx, container, "user.forge.mode", mode));
 
-  if (mode === "supervised") {
-    ctx.err("");
-    ctx.err("Retrieve this container's work from your laptop with:");
-    ctx.err(`  git remote add ${container} ssh://moroine@<host>:2222${workspaceDir}`);
-  }
-
+  // L'hôte de forge n'est connu que de l'humain ; le sous-projet 5 affine.
+  ctx.err("");
+  ctx.err("Retrieve this container's work from your machine with:");
+  ctx.err(`  git remote add ${container} ssh://${userInfo().username}@<forge-host>${workspaceDir}`);
   ctx.out(`Container ${container} provisioned.`);
 }
 
+// Sondes : un code non nul veut dire « pas réglé ».
+async function hostGitIdentity(ctx: Context): Promise<{ name: string; email: string }> {
+  const name = (await ctx.exec(["git", "config", "--global", "user.name"])).stdout.trim();
+  const email = (await ctx.exec(["git", "config", "--global", "user.email"])).stdout.trim();
+  if (!name || !email) {
+    throw new ForgeError(
+      "the agent commits under your git identity, which is not set on this host. Run:\n" +
+      '  git config --global user.name "Your Name"\n' +
+      "  git config --global user.email you@example.com\n" +
+      "then run forge start again.");
+  }
+  return { name, email };
+}
+
+// `forge start` vérifie, avant de rien créer, que `forge setup` et
+// `forge image build` sont passés.
+async function requireRuntime(ctx: Context): Promise<void> {
+  if (!(await listObjects(ctx, "profile")).some((p) => p.name === PROFILE)) {
+    throw new ForgeError(`profile ${PROFILE} not found in Incus project ${forgeProject()}. Run 'forge setup' first.`);
+  }
+  if (!(await imageExists(ctx, BASE_IMAGE))) {
+    throw new ForgeError(`image ${BASE_IMAGE} not found. Run 'forge image build' first.`);
+  }
+}
+
+// `incus file push` avec propriétaire et mode. uid 0 : fichier que l'agent ne
+// peut pas modifier.
+function pushFile(ctx: Context, step: string, source: string, container: string, dest: string, uid: 0 | 1001, mode: string) {
+  return mustSucceed(step, ctx.exec(incus("file", "push", source, `${container}${dest}`,
+    "--uid", String(uid), "--gid", String(uid), "--mode", mode)));
+}
+
+// La version de l'image fonctionne : un échec ici (réseau, dépôt) est un
+// avertissement, pas une raison d'abandonner le provisioning.
+async function refreshClaude(ctx: Context, container: string): Promise<void> {
+  ctx.out("Updating Claude Code...");
+  const apt = (...args: string[]) =>
+    ctx.exec(incus("exec", container, "--env", "DEBIAN_FRONTEND=noninteractive", "--", "apt-get", ...args));
+  let r = await apt("update");
+  if (r.code === 0) r = await apt("install", "--only-upgrade", "-y", "claude-code");
+  if (r.code !== 0) {
+    ctx.err(`WARNING: updating Claude Code failed, the image's version stays: ${r.stderr.trim() || `exit code ${r.code}`}`);
+  }
+}
+
 // `forge delete` ne supprime QUE le container : ~/workspaces/<container> est
-// monté depuis l'hôte et survit délibérément (delete.ts). Un re-provisioning
-// tombait donc sur un `git clone` dans un répertoire non vide — et seulement
-// après avoir créé le container, monté le disque et fait coller le PAT,
-// laissant derrière lui un container à moitié provisionné sans métadonnée
-// forge. On tranche ici, avant de rien créer :
+// monté depuis l'hôte et survit délibérément (delete.ts). On tranche ici,
+// avant de rien créer :
 //   - clone du même repo  -> on le réutilise (le travail supervised non
 //     récupéré est la seule copie qui existe : on n'efface rien) ;
 //   - autre chose non vide -> on s'arrête sans y toucher.
@@ -246,14 +204,6 @@ async function workspaceIsReusable(ctx: Context, workspaceDir: string, ownerRepo
       "move it aside (or remove it) and run the command again.");
   }
   return true;
-}
-
-// a/s/u -> autonomous/supervised/super. Défaut autonomous.
-function modeFromChoice(choice: string): string {
-  const c = choice.trim().toLowerCase();
-  if (c.startsWith("s")) return "supervised";
-  if (c.startsWith("u")) return "super";
-  return "autonomous";
 }
 
 // Réduit une URL de remote à son `owner/repo`, quelle que soit sa forme :
