@@ -12,6 +12,18 @@
     # environment.HOME (/home/aiuser), which every `incus exec` inherits.
     ansible_remote_tmp: /root/.ansible/tmp
   pre_tasks:
+    # This play reconfigures its target destructively (it deletes the ubuntu
+    # account, among others): refuse anything but forge's build instance.
+    - name: Refuse any target but forge's image build instance
+      ansible.builtin.assert:
+        that:
+          - inventory_hostname == 'forge-image-build'
+          - ansible_connection == 'community.general.incus'
+        fail_msg: >-
+          ansible/image.yml only configures forge's throwaway build instance
+          (run it through `forge image build`), not {{ inventory_hostname }}.
+        quiet: true
+
     - name: Install python3 when the base image lacks it
       ansible.builtin.raw: >-
         test -x /usr/bin/python3 && echo present ||
