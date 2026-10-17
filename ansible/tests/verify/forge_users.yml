@@ -63,6 +63,14 @@
     path: /usr/local/bin/forge
   register: verify_forge_link
 
+# The link alone proves nothing: it is created even when its target is
+# missing (a stale entry point once left a dangling /usr/local/bin/forge).
+- name: Follow the forge entry point to its target
+  ansible.builtin.stat:
+    path: /usr/local/bin/forge
+    follow: true
+  register: verify_forge_target
+
 - name: Check the forge user's account, tools and forge release
   ansible.builtin.assert:
     that:
@@ -73,7 +81,9 @@
       - "'vm-test-forge' in verify_forge_agent.stdout"
       - (verify_commit.content | b64decode | trim) == verify_head.stdout
       - verify_forge_link.stat.islnk
-      - verify_forge_link.stat.lnk_source is match('/opt/agent-forge/releases/[0-9a-f]{40}/scripts/forge$')
+      - verify_forge_link.stat.lnk_source is match('/opt/agent-forge/releases/[0-9a-f]{40}/cli/forge$')
+      - verify_forge_target.stat.exists
+      - verify_forge_target.stat.executable
 
 - name: Run the container smoke test as the forge user
   ansible.builtin.shell:

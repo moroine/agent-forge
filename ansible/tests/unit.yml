@@ -14,5 +14,7 @@
   ansible.builtin.import_playbook: unit/fail2ban.yml
 - name: Incus
   ansible.builtin.import_playbook: unit/incus.yml
+- name: Forge users
+  ansible.builtin.import_playbook: unit/forge_users.yml
 - name: Site playbook structure
   ansible.builtin.import_playbook: unit/site_structure.yml

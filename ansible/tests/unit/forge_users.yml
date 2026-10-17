@@ -1,0 +1,28 @@
+---
+- name: Forge CLI entry point
+  hosts: render
+  gather_facts: false
+  # The role links /usr/local/bin/forge to <release>/<entry point> without
+  # checking that the target exists: a stale entry point leaves a dangling
+  # link and no forge on the host. Check it against this checkout instead.
+  vars_files:
+    - ../../roles/forge_users/defaults/main.yml
+  vars:
+    # The role's default derives the repository root from site.yml's
+    # directory; here the playbook lives three levels below the root.
+    unit_repo_root: "{{ (playbook_dir ~ '/../../..') | realpath }}"
+  tasks:
+    - name: Stat the entry point in this checkout
+      ansible.builtin.stat:
+        path: "{{ unit_repo_root }}/{{ forge_users_cli_entrypoint }}"
+      register: unit_entrypoint
+
+    - name: Check that the entry point is an executable file
+      ansible.builtin.assert:
+        that:
+          - unit_entrypoint.stat.exists
+          - unit_entrypoint.stat.isreg
+          - unit_entrypoint.stat.executable
+        fail_msg: >-
+          forge_users_cli_entrypoint ({{ forge_users_cli_entrypoint }}) is not
+          an executable file in {{ unit_repo_root }}
