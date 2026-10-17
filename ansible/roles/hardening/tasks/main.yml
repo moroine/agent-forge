@@ -8,6 +8,39 @@
     ufw_manage_defaults: false
     os_users_without_password_ageing: "{{ hardening_users_without_password_ageing }}"
 
+# apport (Ubuntu's crash reporter) writes fs.suid_dumpable=2 when it starts,
+# after systemd-sysctl applied devsec's 0: without this, the setting did not
+# survive a reboot (found 2026-10-17). An agent host has no use for crash
+# reports, so apport is stopped and masked rather than reconfigured.
+- name: Read the installed services
+  ansible.builtin.service_facts:
+
+- name: Stop and mask apport
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop:
+    - apport.service
+    - apport-autoreport.path
+    - apport-autoreport.service
+  when: item in ansible_facts.services
+
+- name: Read fs.suid_dumpable
+  ansible.builtin.command:
+    cmd: sysctl -n fs.suid_dumpable
+  register: hardening_suid_dumpable
+  changed_when: false
+
+# devsec's sysctl file sets it at boot; this only catches a value apport
+# changed before it was masked.
+- name: Put fs.suid_dumpable back to 0
+  ansible.builtin.command:
+    cmd: sysctl -w fs.suid_dumpable=0
+  when: hardening_suid_dumpable.stdout != '0'
+  changed_when: true
+
 - name: Harden sshd with devsec.hardening.ssh_hardening
   ansible.builtin.import_role:
     name: devsec.hardening.ssh_hardening
