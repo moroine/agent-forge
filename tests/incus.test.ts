@@ -4,7 +4,7 @@ import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import {
   listInstances, instanceStatus, instanceExists, configGet, configSet, imageProperty,
-  execAsAgent, startInstance, stopInstance, deleteInstance, attachArgv, forgeProject,
+  execAsAgent, startInstance, stopInstance, deleteInstance, attachArgv, forgeProject, waitReady,
 } from "../cli/lib/incus.ts";
 
 const P = ["incus", "--project", "agent-forge"];
@@ -123,4 +123,30 @@ test("the fake incus answers the transport, project included", async () => {
   assert.deepEqual(await listInstances(ctx), [{ name: "agent-x", status: "Stopped" }]);
   assert.equal(await configGet(ctx, "agent-x", "user.forge.repo"), "o/r");
   assert.equal(await imageProperty(ctx, "agent-base", "user.forge.commit"), "aaaa1111");
+});
+
+// waitReady : un Context dont exec rend les réponses données, la dernière en boucle.
+function readyContext(answers: { code: number; stdout: string; stderr: string }[]) {
+  let n = 0;
+  const ctx = { ...fakeContext(), exec: async () => answers[Math.min(n++, answers.length - 1)] };
+  return { ctx, count: () => n };
+}
+const BUS = { code: 1, stdout: "", stderr: "Failed to connect to system scope bus via local transport: No such file or directory\n" };
+
+test("waitReady retries while systemd's bus is not up, then resolves", async () => {
+  const { ctx, count } = readyContext([BUS, BUS, { code: 0, stdout: "running\n", stderr: "" }]);
+  await waitReady(ctx, "c", { delayMs: 0 });
+  assert.equal(count(), 3);
+});
+
+test("waitReady gives up after the attempts, with the last stderr", async () => {
+  const { ctx, count } = readyContext([BUS]);
+  await assert.rejects(waitReady(ctx, "c", { attempts: 4, delayMs: 0 }), /did not finish booting[\s\S]*system scope bus/);
+  assert.equal(count(), 4);
+});
+
+test("waitReady throws at once on a non-empty state that is not ready", async () => {
+  const { ctx, count } = readyContext([{ code: 1, stdout: "offline\n", stderr: "" }]);
+  await assert.rejects(waitReady(ctx, "c", { delayMs: 0 }), /systemd state: offline/);
+  assert.equal(count(), 1);
 });

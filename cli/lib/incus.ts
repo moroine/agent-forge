@@ -176,12 +176,22 @@ export function editObject(ctx: Context, kind: ObjectKind, name: string, body: o
 // Attend que systemd ait fini de démarrer l'instance. `degraded` compte pour
 // prêt : une unité en échec (souvent liée au matériel dans un container) ne
 // doit pas bloquer forge. Partagé par le build d'image et le provisioning.
-export async function waitReady(ctx: Context, name: string): Promise<void> {
-  const r = await ctx.exec(incus("exec", name, "--", "systemctl", "is-system-running", "--wait"));
-  const state = r.stdout.trim();
-  if (state !== "running" && state !== "degraded") {
-    throw new ForgeError(
-      `${name} did not finish booting (systemd state: ${state || "unknown"}): ${r.stderr.trim() || `exit code ${r.code}`}`);
+// Juste après `launch`, le bus de systemd n'est pas encore là : la commande
+// échoue avec un état vide, d'où les nouvelles tentatives tant qu'il l'est.
+export async function waitReady(
+  ctx: Context, name: string, opts: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const attempts = opts.attempts ?? 60;
+  const delayMs = opts.delayMs ?? 1000;
+  for (let i = 1; ; i++) {
+    const r = await ctx.exec(incus("exec", name, "--", "systemctl", "is-system-running", "--wait"));
+    const state = r.stdout.trim();
+    if (state === "running" || state === "degraded") return;
+    if (state !== "" || i >= attempts) {
+      throw new ForgeError(
+        `${name} did not finish booting (systemd state: ${state || "unknown"}): ${r.stderr.trim() || `exit code ${r.code}`}`);
+    }
+    await new Promise((res) => setTimeout(res, delayMs));
   }
 }
 
