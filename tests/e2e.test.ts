@@ -76,7 +76,7 @@ test("an unknown option fails cleanly rather than crashing", () => {
 test("image without a subcommand fails with its usage", () => {
   const r = forge(["image"]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /Usage: forge image build\|update/);
+  assert.match(r.stderr, /Usage: forge image build$/m);
 });
 
 test("the bash shim runs the TypeScript entry", () => {

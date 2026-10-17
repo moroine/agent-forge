@@ -12,6 +12,8 @@ export type FakeOptions = {
   tty?: boolean;
   // Faux incus à état : reçoit tout appel `incus …` qu'aucune règle n'a pris.
   incus?: FakeIncus;
+  // Code de sortie rendu par attach (ansible-playbook, tmux) ; 0 par défaut.
+  attachCode?: number;
 };
 
 export type FakeContext = Context & {
@@ -71,7 +73,7 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
 
   return {
     exec,
-    attach: async (argv) => { calls.push(argv); return 0; },
+    attach: async (argv) => { calls.push(argv); return opts.attachCode ?? 0; },
     prompt,
     out: (line) => out_lines.push(line),
     err: (line) => err_lines.push(line),

@@ -1,6 +1,6 @@
 // Couche transport : parle à Incus, ne sait rien de forge. Tout ce qui est
 // spécifique au domaine vit dans containers.ts / worktrees.ts.
-import type { Context, ExecResult } from "./context.ts";
+import { ForgeError, type Context, type ExecResult } from "./context.ts";
 
 export type Instance = { name: string; status: string };
 
@@ -171,4 +171,28 @@ export function createObject(ctx: Context, kind: ObjectKind, name: string, body:
 
 export function editObject(ctx: Context, kind: ObjectKind, name: string, body: object): Promise<ExecResult> {
   return ctx.exec(objectArgv(kind, "edit", name), { input: JSON.stringify(body) });
+}
+
+// Attend que systemd ait fini de démarrer l'instance. `degraded` compte pour
+// prêt : une unité en échec (souvent liée au matériel dans un container) ne
+// doit pas bloquer forge. Partagé par le build d'image et le provisioning.
+export async function waitReady(ctx: Context, name: string): Promise<void> {
+  const r = await ctx.exec(incus("exec", name, "--", "systemctl", "is-system-running", "--wait"));
+  const state = r.stdout.trim();
+  if (state !== "running" && state !== "degraded") {
+    throw new ForgeError(
+      `${name} did not finish booting (systemd state: ${state || "unknown"}): ${r.stderr.trim() || `exit code ${r.code}`}`);
+  }
+}
+
+// Sonde : l'empreinte de l'image qui porte l'alias, ou null.
+export async function imageFingerprint(ctx: Context, alias: string): Promise<string | null> {
+  const r = await ctx.exec(incus("image", "list", "-f", "json"));
+  if (r.code !== 0) return null;
+  try {
+    const images = JSON.parse(r.stdout) as { fingerprint?: string; aliases?: { name?: string }[] }[];
+    return images.find((i) => i.aliases?.some((a) => a.name === alias))?.fingerprint ?? null;
+  } catch {
+    return null;
+  }
 }

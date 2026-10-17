@@ -47,7 +47,7 @@ export function completionScript(forgeBin: string): string {
         4) [ "$cmd" = "finish" ] && COMPREPLY=($(compgen -W "--force" -- "$cur")) ;;
       esac
       ;;
-    image)      [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "build update" -- "$cur")) ;;
+    image)      [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "build" -- "$cur")) ;;
     completion) [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "bash repos tasks" -- "$cur")) ;;
   esac
   return 0
