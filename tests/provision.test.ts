@@ -176,9 +176,11 @@ test("a hook that lets a forbidden command through aborts provisioning", async (
 // run anything — safe, but useless, and silent unless provisioning says so.
 test("a hook that refuses a harmless command aborts provisioning", async () => {
   const { fake, run } = provision({ rules: [{ match: "forge-hook-probe-allow", code: 2, stderr: "BLOCKED: jq introuvable, le hook ne peut pas lire la commande (fail-closed).\n" }] });
-  // The hook's own sentence ends with a period: no ".." in the message.
+  // The hook's own sentence ends with a period: no ".." in the message. The
+  // half-provisioned container has no forge metadata, so `forge delete` cannot
+  // find it: the message gives the incus command (seen on a real host).
   await assert.rejects(run, (e: Error) => /refuses a harmless command/.test(e.message) && /jq introuvable/.test(e.message)
-    && !e.message.includes(".."));
+    && !e.message.includes("..") && e.message.includes("incus --project agent-forge delete --force agent-x"));
   assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], undefined);
 });
 
