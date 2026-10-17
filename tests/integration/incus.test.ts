@@ -74,15 +74,16 @@ function launch(project: string, name: string) {
   waitReady(project, name);
 }
 
-// Right after `incus launch`, systemd's bus is not up yet and systemctl
-// answers with nothing: retry until it reports a state (as forge's waitReady).
+// Right after `incus launch`, systemctl answers nothing (systemd's bus is not
+// up yet) or "offline" (systemd is not PID 1 yet) before it reports a real
+// state: retry on both (as forge's waitReady), fail on any other state.
 function waitReady(project: string, name: string) {
   let last: Run = { status: null, stdout: "", stderr: "" };
   for (let i = 0; i < 60; i++) {
     last = incus(project, ["exec", name, "--", "systemctl", "is-system-running", "--wait"]);
     const state = last.stdout.trim();
     if (state === "running" || state === "degraded") return;
-    if (state !== "") assert.fail(raw(`${name} is ${state}`, last));
+    if (state !== "" && state !== "offline") assert.fail(raw(`${name} is ${state}`, last));
     spawnSync("sleep", ["1"]);
   }
   assert.fail(raw(`${name} never became ready`, last));
