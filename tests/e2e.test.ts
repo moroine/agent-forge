@@ -87,3 +87,7 @@ test("the bash shim runs the TypeScript entry", () => {
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^REPO\s+MODE\s+STATE\s+BUILD$/m);
 });
+
+test("setup appears in the usage", () => {
+  assert.match(forge([]).stdout, /^\s+setup\s/m);
+});

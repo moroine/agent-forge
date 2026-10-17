@@ -28,7 +28,7 @@ export function completionScript(forgeBin: string): string {
   cmd="\${COMP_WORDS[1]}"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "start resume finish stop delete list image completion" -- "$cur"))
+    COMPREPLY=($(compgen -W "setup start resume finish stop delete list image completion" -- "$cur"))
     return
   fi
 

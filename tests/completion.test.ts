@@ -87,3 +87,7 @@ test("the completion script offers tasks in third position and --force where it 
   assert.ok(completionScript(FORGE_BIN).includes("start|resume|finish"));
   assert.ok(completionScript(FORGE_BIN).includes("--force"));
 });
+
+test("the completion script offers setup", () => {
+  assert.match(completionScript("/x/forge"), /compgen -W "setup start resume finish stop delete list image completion"/);
+});

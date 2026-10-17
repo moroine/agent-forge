@@ -3,6 +3,7 @@
 import { parseArgs } from "node:util";
 import type { Context } from "./lib/context.ts";
 import { createContext, ForgeError } from "./lib/context.ts";
+import { cmdSetup } from "./lib/commands/setup.ts";
 import { cmdStart } from "./lib/commands/start.ts";
 import { cmdResume } from "./lib/commands/resume.ts";
 import { cmdFinish } from "./lib/commands/finish.ts";
@@ -15,6 +16,7 @@ import { cmdCompletion } from "./lib/commands/completion.ts";
 const USAGE = `Usage: forge <command> [args]
 
 Commands:
+  setup                             Create or update forge's Incus project, bridge, ACL and profile
   start [<owner/repo>] [<task>]     Provision (if needed) and start/attach a task session
   resume [<owner/repo>] [<task>]    Re-attach an existing task's session
   finish [<owner/repo>] [<task>]    Remove a finished task's worktree
@@ -33,6 +35,7 @@ exits with this usage instead.`;
 function dispatch(ctx: Context, positionals: string[], force: boolean): Promise<number> {
   const [cmd, a, b] = positionals;
   switch (cmd) {
+    case "setup": return cmdSetup(ctx);
     case "start": return cmdStart(ctx, a, b);
     case "resume": return cmdResume(ctx, a, b);
     case "finish": return cmdFinish(ctx, a, b, force);
