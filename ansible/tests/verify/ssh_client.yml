@@ -1,5 +1,14 @@
 ---
 # SSH checks from the controller, each on a fresh connection.
+- name: Read fail2ban's failure count before the deliberate failure
+  ansible.builtin.command:
+    cmd: fail2ban-client status sshd
+  register: verify_jail_before
+  changed_when: false
+  when:
+    - verify_negative_auth | default(false) | bool
+    - forge_exposure != 'local'
+
 - name: Check root cannot log in
   ansible.builtin.command:
     cmd: "{{ verify_ssh }} -i {{ verify_work }}/admin root@{{ ansible_host }} true"

@@ -13,7 +13,8 @@ port = {{ forge_ssh_port }}
 # The journal, not /var/log/auth.log, which a minimal install may lack.
 backend = systemd
 # Ubuntu's unit is ssh.service, and OpenSSH 10 logs authentication from
-# sshd-session: the stock journalmatch (sshd.service / sshd) misses both.
+# sshd-session. Ubuntu's fail2ban 1.1.0 already matches both; pinning the
+# journalmatch here keeps the jail working if a later filter changes it.
 journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd + _COMM=sshd-session
 {% if forge_exposure == 'public' %}
 mode = aggressive

@@ -6,11 +6,11 @@ storage_pools:
     driver: btrfs
     config:
 {% if forge_incus_storage_source %}
-      source: {{ forge_incus_storage_source }}
+      source: "{{ forge_incus_storage_source }}"
 {% elif forge_incus_storage_size %}
-      size: {{ forge_incus_storage_size }}
+      size: "{{ forge_incus_storage_size }}"
 {% else %}
-      size: {{ incus_pool_auto_gib }}GiB
+      size: "{{ incus_pool_auto_gib }}GiB"
 {% endif %}
 profiles:
   - name: default

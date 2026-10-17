@@ -33,6 +33,8 @@
       - (unit_nft is search('(?m)^\\s+accept$')) == unit_case.open
       - ('ip saddr @ssh_allowed_v4 accept' in unit_nft) == unit_case.v4
       - ('ip6 saddr @ssh_allowed_v6 accept' in unit_nft) == unit_case.v6
+      # Overlapping CIDRs (a /24 inside a /16) must merge, not fail nft -c.
+      - unit_nft | regex_findall('auto-merge') | length == ([unit_case.v4, unit_case.v6] | select | list | length)
     fail_msg: "Case {{ unit_case.name }} failed; rendered file: {{ unit_tmp.path }}/{{ unit_case.name }}.nft"
   vars:
     unit_nft: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/' ~ unit_case.name ~ '.nft') }}"

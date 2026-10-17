@@ -7,8 +7,8 @@
     forge_ssh_port: "{{ forge_ssh_port | default(22) | int }}"
     forge_ssh_allowed_sources: "{{ forge_ssh_allowed_sources | default([]) }}"
     forge_external_interface: "{{ forge_external_interface | default('') }}"
-    forge_incus_storage_size: "{{ forge_incus_storage_size | default('') }}"
-    forge_incus_storage_source: "{{ forge_incus_storage_source | default('') }}"
+    forge_incus_storage_size: "{{ forge_incus_storage_size | default('') | string }}"
+    forge_incus_storage_source: "{{ forge_incus_storage_source | default('') | string }}"
     forge_fail2ban_ignoreip: "{{ forge_fail2ban_ignoreip | default([]) }}"
     # No fallback to the controller's $USER or ~/.ssh/config: AllowUsers is
     # built from this name, and a wrong one locks the real admin out.
@@ -78,6 +78,19 @@
     fail_msg: >-
       forge_ssh_port must be 1-65535; forge_ssh_allowed_sources and
       forge_fail2ban_ignoreip must be lists.
+    quiet: true
+
+- name: Check the Incus pool inputs
+  ansible.builtin.assert:
+    that:
+      - forge_incus_storage_size | length == 0 or forge_incus_storage_source | length == 0
+      - >-
+        forge_incus_storage_size | length == 0
+        or forge_incus_storage_size is match('^[0-9]+(\\.[0-9]+)?(KiB|MiB|GiB|TiB|kB|MB|GB|TB)$')
+    fail_msg: >-
+      Set forge_incus_storage_size (a loop file) or forge_incus_storage_source
+      (a disk), not both; forge_incus_storage_size needs a unit, e.g. "100GiB"
+      (a bare number would mean bytes).
     quiet: true
 
 - name: Remember the forge user

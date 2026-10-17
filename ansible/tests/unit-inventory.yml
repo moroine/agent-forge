@@ -74,6 +74,27 @@ all:
           forge_users: [{name: alice, ssh_keys: "ssh-ed25519 AAAA alice@test"}]
           unit_expect: failed
           unit_expect_message: ssh_keys
+        preflight_pool_both:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_incus_storage_size: 100GiB
+          forge_incus_storage_source: /dev/vdb
+          unit_expect: failed
+          unit_expect_message: not both
+        preflight_pool_bare_number:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_incus_storage_size: 100
+          unit_expect: failed
+          unit_expect_message: forge_incus_storage_size
+        preflight_pool_size_ok:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_incus_storage_size: 100GiB
+          unit_expect: passed
         preflight_sources_not_list:
           ansible_user: ubuntu
           forge_exposure: lan

@@ -8,13 +8,16 @@
       changed_when: false
 
     # Review focus 3: the jail must see real failures, not only accept a
-    # manual ban. verify/ssh_client.yml made one (root login) just before.
+    # manual ban. verify/ssh_client.yml read the count, then made one (root
+    # login): the count must have grown.
     - name: Check the jail counted the deliberate failed login
       ansible.builtin.command:
         cmd: fail2ban-client status sshd
       register: verify_jail
       changed_when: false
-      until: (verify_jail.stdout | regex_search('Total failed:\\s+(\\d+)', '\\1') | first | int) >= 1
+      until: >-
+        (verify_jail.stdout | regex_search('Total failed:\\s+(\\d+)', '\\1') | first | int)
+        > (verify_jail_before.stdout | regex_search('Total failed:\\s+(\\d+)', '\\1') | first | int)
       retries: 10
       delay: 2
       when: verify_negative_auth | default(false) | bool

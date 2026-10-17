@@ -19,7 +19,6 @@
       -o UserKnownHostsFile={{ verify_work }}/known_hosts
       -o StrictHostKeyChecking=accept-new -p {{ forge_ssh_port }}
     verify_ssh_forge: "{{ verify_ssh }} -i {{ verify_work }}/forge {{ forge_users[0].name }}@{{ ansible_host }}"
-    verify_ssh_admin: "{{ verify_ssh }} -i {{ verify_work }}/admin {{ ansible_user }}@{{ ansible_host }}"
   tasks:
     - name: Platform
       ansible.builtin.import_tasks: verify/platform.yml
