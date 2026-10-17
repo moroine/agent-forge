@@ -1,0 +1,40 @@
+---
+# Chrome's package adds its own apt source (google-chrome.list) on install,
+# and a daily cron job re-adds it, unless /etc/default/google-chrome says not
+# to. A second source for the same URL with another Signed-By makes apt refuse
+# to update, so the repository is declared once, here.
+- name: Tell Chrome's package not to add an apt source of its own
+  ansible.builtin.copy:
+    dest: /etc/default/google-chrome
+    content: |
+      repo_add_once="false"
+      repo_reenable_on_distupgrade="false"
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Add Google's Chrome repository
+  ansible.builtin.deb822_repository:
+    name: google-chrome
+    types: [deb]
+    uris: ["https://dl.google.com/linux/chrome/deb/"]
+    suites: [stable]
+    components: [main]
+    architectures: ["{{ forge_image_arch.stdout }}"]
+    signed_by: "{{ forge_image_google_key_url }}"
+
+- name: Install Chrome
+  ansible.builtin.apt:
+    name: google-chrome-stable
+    state: present
+    update_cache: true
+
+- name: Remove any apt source Chrome's package added anyway
+  ansible.builtin.file:
+    path: /etc/apt/sources.list.d/google-chrome.list
+    state: absent
+
+- name: Install chrome-devtools-mcp
+  ansible.builtin.command:
+    cmd: npm install -g chrome-devtools-mcp
+    creates: /usr/bin/chrome-devtools-mcp

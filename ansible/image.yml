@@ -1,0 +1,29 @@
+---
+# Configures one fresh images:ubuntu/26.04 instance into the agent-forge image.
+# `forge image build` (cli/lib/commands/image.ts) owns the lifecycle: it
+# launches the instance, runs this playbook against it through the
+# community.general.incus connection, then publishes and stamps the image.
+# Never point it at anything else: it assumes a throwaway target, as root.
+- name: Configure the agent-forge container image
+  hosts: all
+  gather_facts: false
+  vars:
+    # Root's temporary files go to root's home, not to the profile's
+    # environment.HOME (/home/aiuser), which every `incus exec` inherits.
+    ansible_remote_tmp: /root/.ansible/tmp
+  pre_tasks:
+    - name: Install python3 when the base image lacks it
+      ansible.builtin.raw: >-
+        test -x /usr/bin/python3 && echo present ||
+        { apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y python3; }
+      register: forge_image_python
+      changed_when: "'present' not in forge_image_python.stdout"
+      # The instance's network may come up after systemd reports it ready.
+      retries: 10
+      delay: 6
+      until: forge_image_python is succeeded
+
+    - name: Gather facts now that python3 is there
+      ansible.builtin.setup:
+  roles:
+    - role: forge_image

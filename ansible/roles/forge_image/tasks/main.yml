@@ -1,0 +1,27 @@
+---
+- name: Read the image's architecture
+  ansible.builtin.command:
+    cmd: dpkg --print-architecture
+  register: forge_image_arch
+  changed_when: false
+
+- name: Refuse an architecture agent-forge does not build for
+  ansible.builtin.assert:
+    that: forge_image_arch.stdout in ['amd64', 'arm64']
+    fail_msg: "agent-forge images are built for amd64 or arm64, not {{ forge_image_arch.stdout }}."
+    quiet: true
+
+- name: Install the base packages
+  ansible.builtin.import_tasks: base.yml
+
+- name: Install Node.js and pnpm
+  ansible.builtin.import_tasks: node.yml
+
+- name: Install Claude Code
+  ansible.builtin.import_tasks: claude.yml
+
+- name: Install Chrome and chrome-devtools-mcp
+  ansible.builtin.import_tasks: chrome.yml
+
+- name: Install Docker
+  ansible.builtin.import_tasks: docker.yml

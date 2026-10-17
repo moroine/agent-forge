@@ -1,0 +1,17 @@
+---
+- name: Add Anthropic's Claude Code repository (stable channel)
+  ansible.builtin.deb822_repository:
+    name: claude-code
+    types: [deb]
+    uris: ["https://downloads.claude.ai/claude-code/apt/stable"]
+    suites: [stable]
+    components: [main]
+    signed_by: "{{ forge_image_claude_key_url }}"
+
+# A root-owned binary that the agent cannot modify. Containers refresh it from
+# this repository when they are provisioned.
+- name: Install Claude Code
+  ansible.builtin.apt:
+    name: claude-code
+    state: present
+    update_cache: true
