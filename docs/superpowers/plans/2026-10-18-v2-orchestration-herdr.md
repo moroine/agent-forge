@@ -114,12 +114,12 @@
   - conventional messages, in French like the recent history (`feat:`, `fix:`, `test:`, `docs:`, `chore:`);
   - each ends with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Branches**, each created from the previous one:
-  - `agent/v2-herdr-spec` (spec and plan, on `agent/fix-forge-entrypoint`);
+  - `agent/v2-herdr-spec` (spec and plan, on `agent/hook-fail-closed`, moroine/agent-forge#36, which also changes `provision.ts`, `pre-bash.sh` and the image);
   - `agent/v2-host-git` (Tasks 1–5);
   - `agent/v2-attach` (Tasks 6–8);
   - `agent/v2-herdr` (Tasks 9–12).
 - **Pull requests:**
-  - one per branch, each `--base` the previous branch, titled `… (pile v2, N/n)`;
+  - one per branch, each `--base` the previous branch, titled `… (pile v2 · sp4, N/4)`: 1 spec and plan, 2 host-side git, 3 attach, 4 herdr;
   - the body says the commits are unsigned and that Moroine re-signs;
   - never merged by the agent, never towards `main` or `next` directly.
 - **Commands on this Mac.** The repo's hook (`container/pre-bash.sh`) runs on this Mac too:
@@ -138,7 +138,7 @@
 
 ## Delivery
 
-**First,** once this plan is approved: push `agent/v2-herdr-spec` (spec and plan) and open PR 2/n with `--base agent/fix-forge-entrypoint`.
+**First,** once this plan is approved: push `agent/v2-herdr-spec` (spec and plan) and open PR sp4 1/4 with `--base agent/hook-fail-closed`.
 
 **Then,** after Task 5, Task 8 and Task 12:
 1. run `npm test` and `npm run check`;
@@ -475,7 +475,7 @@ Then create the next branch from the current one.
   - On the VM, run `FORGE_INTEGRATION=1 npm run test:integration`. Expected: PASS.
   - With no VM, write "integration not run" in the PR body.
 
-- [ ] **Step 4: Commit, then deliver PR 3/n** (see "Delivery")
+- [ ] **Step 4: Commit, then deliver PR sp4 2/4** (see "Delivery")
 
   `git commit --no-gpg-sign -m "test: intégration du miroir en lecture seule et du workspace piégé"`
 
@@ -643,7 +643,7 @@ Then create the next branch from the current one.
   - PASS;
   - the grep prints nothing. Dated specs and plans, and the README (sub-project 5's), are outside those paths.
 
-- [ ] **Step 5: Commit, then deliver PR 4/n** (see "Delivery")
+- [ ] **Step 5: Commit, then deliver PR sp4 3/4** (see "Delivery")
 
   `git commit --no-gpg-sign -m "chore: retire tmux du CLI, de l'image et de la CI"`
 
@@ -955,7 +955,7 @@ Then create the next branch from the current one.
 
   Run: `npm test && npm run check`. Expected: PASS.
 
-- [ ] **Step 5: Commit, then deliver PR 5/n** (see "Delivery")
+- [ ] **Step 5: Commit, then deliver PR sp4 4/4** (see "Delivery")
 
   `git commit --no-gpg-sign -m "feat: forge setup installe les raccourcis forge dans la config herdr"`
 
@@ -970,7 +970,7 @@ Then create the next branch from the current one.
 
 - [ ] **Step 2: Check the spec's coverage**
 
-  For each section of the spec ("The design" 1–6, "herdr integration", "Security tests", "Testing"), name the task and test that cover it. The PR 5/n body lists what was not run:
+  For each section of the spec ("The design" 1–6, "herdr integration", "Security tests", "Testing"), name the task and test that cover it. The PR sp4 4/4 body lists what was not run:
   - the integration tests, unless a test Incus was used;
   - the manual acceptance on a real VM;
   - Claude's `--continue` probe on the image's Claude Code.
