@@ -30,6 +30,24 @@ test("stop asks for the repo when it is missing", async () => {
   assert.ok(c.calls.some((call) => call.join(" ") === "incus --project agent-forge stop agent-moroine-agent-forge"));
 });
 
+// Seen on a real host: `incus stop` on a stopped instance fails, so a second
+// `forge stop` errored out ("The instance is already stopped").
+test("stop on an already stopped container is a no-op, with or without --force", async () => {
+  for (const force of [false, true]) {
+    const c = fakeContext({
+      rules: [
+        { match: "agent-x user.forge.repo", stdout: "o/r" },
+        { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-x", status: "Stopped" }]) },
+        { match: "incus --project agent-forge stop", code: 1, stderr: "Error: The instance is already stopped\n" },
+      ],
+    });
+    assert.equal(await cmdStop(c, "o/r", force), 0);
+    assert.ok(!c.calls.some((call) => call.join(" ").includes("status --porcelain")), `force=${force}`);
+    assert.ok(!c.calls.some((call) => call[3] === "stop"), `force=${force}`);
+    assert.ok(c.out_lines.some((l) => l.includes("already stopped")), c.out_lines.join("\n"));
+  }
+});
+
 test("delete skips the pre-flight on an already stopped container", async () => {
   const c = fakeContext({
     rules: [
