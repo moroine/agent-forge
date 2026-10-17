@@ -2,6 +2,7 @@
 // règles ordonnée (première correspondance gagnante, comme un routeur), et
 // `prompt` sert une file de réponses préparées.
 import type { Context, ExecOptions, ExecResult, Prompt } from "../../cli/lib/context.ts";
+import type { FakeIncus } from "./fake-incus.ts";
 
 export type ExecRule = { match: string; code?: number; stdout?: string; stderr?: string };
 
@@ -9,6 +10,8 @@ export type FakeOptions = {
   rules?: ExecRule[];
   answers?: (number | string | null)[];
   tty?: boolean;
+  // Faux incus à état : reçoit tout appel `incus …` qu'aucune règle n'a pris.
+  incus?: FakeIncus;
 };
 
 export type FakeContext = Context & {
@@ -39,6 +42,9 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
         return { code: rule.code ?? 0, stdout: rule.stdout ?? "", stderr: rule.stderr ?? "" };
       }
     }
+    // Après les règles : un test peut toujours forcer la réponse d'un appel
+    // précis, le faux à état répond au reste.
+    if (opts.incus && argv[0] === "incus") return opts.incus.run(argv.slice(1), callOpts?.input);
     return { code: 0, stdout: "", stderr: "" };
   };
 
