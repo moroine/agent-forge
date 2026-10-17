@@ -145,8 +145,15 @@ test("waitReady gives up after the attempts, with the last stderr", async () => 
   assert.equal(count(), 4);
 });
 
-test("waitReady throws at once on a non-empty state that is not ready", async () => {
-  const { ctx, count } = readyContext([{ code: 1, stdout: "offline\n", stderr: "" }]);
-  await assert.rejects(waitReady(ctx, "c", { delayMs: 0 }), /systemd state: offline/);
+test("waitReady retries while systemd answers offline, then resolves", async () => {
+  const off = { code: 1, stdout: "offline\n", stderr: "" };
+  const { ctx, count } = readyContext([off, off, { code: 0, stdout: "running\n", stderr: "" }]);
+  await waitReady(ctx, "c", { delayMs: 0 });
+  assert.equal(count(), 3);
+});
+
+test("waitReady throws at once on a non-empty state that is neither ready nor offline", async () => {
+  const { ctx, count } = readyContext([{ code: 1, stdout: "maintenance\n", stderr: "" }]);
+  await assert.rejects(waitReady(ctx, "c", { delayMs: 0 }), /systemd state: maintenance/);
   assert.equal(count(), 1);
 });

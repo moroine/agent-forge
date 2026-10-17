@@ -176,8 +176,10 @@ export function editObject(ctx: Context, kind: ObjectKind, name: string, body: o
 // Attend que systemd ait fini de démarrer l'instance. `degraded` compte pour
 // prêt : une unité en échec (souvent liée au matériel dans un container) ne
 // doit pas bloquer forge. Partagé par le build d'image et le provisioning.
-// Juste après `launch`, le bus de systemd n'est pas encore là : la commande
-// échoue avec un état vide, d'où les nouvelles tentatives tant qu'il l'est.
+// Juste après `launch`, systemctl ne répond rien (le bus n'est pas encore là)
+// ou répond `offline` (systemd n'est pas encore PID 1) avant de donner un vrai
+// état : on réessaie tant que l'état est vide ou `offline`. Tout autre état
+// (maintenance, stopping...) échoue aussitôt.
 export async function waitReady(
   ctx: Context, name: string, opts: { attempts?: number; delayMs?: number } = {},
 ): Promise<void> {
@@ -187,7 +189,7 @@ export async function waitReady(
     const r = await ctx.exec(incus("exec", name, "--", "systemctl", "is-system-running", "--wait"));
     const state = r.stdout.trim();
     if (state === "running" || state === "degraded") return;
-    if (state !== "" || i >= attempts) {
+    if ((state !== "" && state !== "offline") || i >= attempts) {
       throw new ForgeError(
         `${name} did not finish booting (systemd state: ${state || "unknown"}): ${r.stderr.trim() || `exit code ${r.code}`}`);
     }
