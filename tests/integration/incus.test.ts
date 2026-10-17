@@ -203,10 +203,11 @@ test("network: a second container is unreachable", { skip: !ENABLED }, (t) => {
     "setsid python3 -m http.server 9000 >/dev/null 2>&1 < /dev/null &"]));
   const listed = JSON.parse(must("list", incus(PROJECT, ["list", c2, "-f", "json"])).stdout);
   const peer = listed[0].state.network.eth0.addresses.find((a: { family: string }) => a.family === "inet").address;
-  // The host reaches it, so the listener is up...
-  must(`host → ${peer}:9000`, run("bash", ["-c",
-    `for i in 1 2 3 4 5; do timeout 2 bash -c '</dev/tcp/${peer}/9000' && exit 0; sleep 1; done; exit 1`]));
-  // ...and the first container does not.
+  // The ACL's default ingress action rejects connections to a container from
+  // anywhere, the host included, so the listener is proven from inside c2;
+  // then c1's failed connect shows that the peer is unreachable.
+  must("the listener answers inside the second container", incus(PROJECT, ["exec", c2, "--", "bash", "-c",
+    "for i in 1 2 3 4 5; do timeout 2 bash -c '</dev/tcp/127.0.0.1/9000' && exit 0; sleep 1; done; exit 1"]));
   const r = connect(peer, 9000);
   assert.notEqual(r.status, 0, raw(`${peer}:9000 answered from ${c1}`, r));
 });
