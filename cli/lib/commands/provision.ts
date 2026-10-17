@@ -7,7 +7,7 @@
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { userInfo } from "node:os";
 import { join } from "node:path";
-import type { Context } from "../context.ts";
+import type { Context, ExecResult } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { BASE_IMAGE, latestImageCommit } from "../containers.ts";
 import {
@@ -166,23 +166,34 @@ async function requireRuntime(ctx: Context): Promise<void> {
   }
 }
 
-// Preuve que le hook garde vraiment CE container : un hook qui ne peut pas lire
-// sa commande (image sans jq, constaté le 2026-10-17) laissait tout passer, en
-// silence. On lui soumet, en tant qu'aiuser, une commande qu'il doit refuser
-// (exit 2). Le marqueur forge-hook-probe rend la ligne du journal d'audit
-// (/workspace/.claude/bash-audit.log) explicite.
-const HOOK_PROBE = "printf '%s' '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo true # forge-hook-probe\"}}'"
-  + " | /home/aiuser/.claude/hooks/pre-bash.sh";
+// Preuve que le hook garde vraiment CE container, dans les deux sens. Un hook
+// qui ne peut pas lire sa commande (image sans jq, constaté le 2026-10-17)
+// laissait tout passer ; devenu fail-closed, il refuse tout — sûr, mais
+// l'agent ne peut plus rien lancer. On lui soumet donc, en tant qu'aiuser, une
+// commande qu'il doit refuser (exit 2) et une qu'il doit laisser passer
+// (exit 0). Les marqueurs forge-hook-probe-* rendent les lignes du journal
+// d'audit (/workspace/.claude/bash-audit.log) explicites.
+const hookProbe = (command: string) =>
+  `printf '%s' '{"tool_name":"Bash","tool_input":{"command":"${command}"}}' | /home/aiuser/.claude/hooks/pre-bash.sh`;
 
 async function requireHookBlocks(ctx: Context, container: string): Promise<void> {
-  ctx.out("Checking that the security hook blocks a forbidden command...");
-  const r = await execAsAgentArgv(ctx, container, ["bash", "-c", HOOK_PROBE]);
-  if (r.code === 2) return;
-  const detail = r.stderr.trim() ? `: ${r.stderr.trim()}` : "";
-  throw new ForgeError(
-    `the container's security hook let a forbidden command through (exit code ${r.code}, expected 2)${detail}. ` +
-    "The agent would run unguarded, so provisioning stops. Rebuild the image ('forge image build'), " +
-    `then delete ${container} and start the task again.`);
+  ctx.out("Checking that the security hook guards the agent...");
+  const rebuild = "Rebuild the image ('forge image build'), then delete " +
+    `${container} and start the task again.`;
+  const detail = (r: ExecResult) => (r.stderr.trim() ? `: ${r.stderr.trim()}` : "");
+
+  const deny = await execAsAgentArgv(ctx, container, ["bash", "-c", hookProbe("sudo true # forge-hook-probe-deny")]);
+  if (deny.code !== 2) {
+    throw new ForgeError(
+      `the container's security hook let a forbidden command through (exit code ${deny.code}, expected 2)${detail(deny)}. ` +
+      `The agent would run unguarded, so provisioning stops. ${rebuild}`);
+  }
+  const allow = await execAsAgentArgv(ctx, container, ["bash", "-c", hookProbe("true # forge-hook-probe-allow")]);
+  if (allow.code !== 0) {
+    throw new ForgeError(
+      `the container's security hook refuses a harmless command (exit code ${allow.code}, expected 0)${detail(allow)}. ` +
+      `The agent could not run anything, so provisioning stops. ${rebuild}`);
+  }
 }
 
 // `incus file push` avec propriétaire et mode. uid 0 : fichier que l'agent ne
