@@ -4,7 +4,7 @@ import { fakeContext } from "./lib/fake-context.ts";
 import { ForgeError } from "../cli/lib/context.ts";
 import {
   listForgeContainers, forgeRepos, containerForRepo, requireContainerForRepo,
-  checkNameCollision, isRunning, buildStatus, baseImageFor, latestImageCommitFor, latestImageCommit,
+  checkNameCollision, isRunning, buildStatus, latestImageCommit,
 } from "../cli/lib/containers.ts";
 
 const LIST = JSON.stringify([
@@ -89,24 +89,6 @@ test("buildStatus compares the two stamps", () => {
   assert.equal(buildStatus("aaa", "bbb"), "behind");
   assert.equal(buildStatus("", "bbb"), "unknown");
   assert.equal(buildStatus("aaa", ""), "unknown");
-});
-
-test("baseImageFor maps super to agent-base-super, everything else to agent-base", () => {
-  assert.equal(baseImageFor("super"), "agent-base-super");
-  assert.equal(baseImageFor("autonomous"), "agent-base");
-  assert.equal(baseImageFor("supervised"), "agent-base");
-  assert.equal(baseImageFor(""), "agent-base");
-});
-
-test("latestImageCommitFor reads the commit of the mode's base image", async () => {
-  const ctx = fakeContext({
-    rules: [
-      { match: "image get-property agent-base-super", stdout: "SUPERSHA\n" },
-      { match: "image get-property agent-base", stdout: "BASESHA\n" },
-    ],
-  });
-  assert.equal(await latestImageCommitFor(ctx, "super"), "SUPERSHA");
-  assert.equal(await latestImageCommitFor(ctx, "autonomous"), "BASESHA");
 });
 
 test("latestImageCommit reads agent-base's stamp", async () => {

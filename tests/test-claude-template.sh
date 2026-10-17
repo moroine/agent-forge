@@ -62,6 +62,15 @@ assert_not_contains 'next-task'
 assert_contains '.trees/'
 assert_contains 'worktree'
 
+# v2 : plus de mode super, des commits non signés, aucune valeur personnelle.
+assert_not_contains 'Super mode'
+assert_not_contains 'signés automatiquement'
+assert_not_contains 'Commite localement, signé'
+assert_contains 'non signés'
+assert_not_contains 'moroine'
+assert_not_contains ':2222'
+assert_not_contains 'container LXD'
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

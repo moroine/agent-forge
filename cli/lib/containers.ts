@@ -78,19 +78,8 @@ export async function isRunning(ctx: Context, name: string): Promise<boolean> {
   return (await instanceStatus(ctx, name)) === "Running";
 }
 
-// L'image de base dépend du mode : super embarque un LXD imbriqué, livré par
-// une image dédiée agent-base-super (voir la spec super mode). Autonomous et
-// supervised partagent agent-base.
 // L'image de base unique : construite par `forge image build`.
 export const BASE_IMAGE = "agent-base";
-
-export function baseImageFor(mode: string): string {
-  return mode === "super" ? "agent-base-super" : BASE_IMAGE;
-}
-
-export function latestImageCommitFor(ctx: Context, mode: string): Promise<string> {
-  return imageProperty(ctx, baseImageFor(mode), "user.forge.commit");
-}
 
 export function containerImageCommit(ctx: Context, name: string): Promise<string> {
   return configGet(ctx, name, "user.forge.image_commit");

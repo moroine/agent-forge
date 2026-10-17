@@ -8,7 +8,7 @@ import { columnWidths, formatRow } from "../table.ts";
 import { listInstances } from "../incus.ts";
 import {
   buildStatus, containerImageCommit, containerMode, containerRepo,
-  latestImageCommitFor, forgeContainerNames,
+  latestImageCommit, forgeContainerNames,
 } from "../containers.ts";
 import { sessionStates, taskNames } from "../worktrees.ts";
 
@@ -23,13 +23,8 @@ function buildLabel(status: string): string {
 }
 
 export async function cmdList(ctx: Context): Promise<number> {
-  // Deux images de base seulement : agent-base (autonomous/supervised) et
-  // agent-base-super (super). On lit chaque commit une fois, puis on choisit
-  // par mode dans la boucle — pas de requête image par container.
-  const latestByBase = new Map<string, string>([
-    ["agent-base", await latestImageCommitFor(ctx, "autonomous")],
-    ["agent-base-super", await latestImageCommitFor(ctx, "super")],
-  ]);
+  // Une seule image de base : son commit est lu une fois pour toute la commande.
+  const latest = await latestImageCommit(ctx);
   const entries: Entry[] = [];
 
   // Un seul `incus list` pour toute la commande : instanceStatus le relançait
@@ -44,7 +39,6 @@ export async function cmdList(ctx: Context): Promise<number> {
     const status = statuses.get(name) ?? "Unknown";
     const stamp = await containerImageCommit(ctx, name);
 
-    const latest = latestByBase.get(mode === "super" ? "agent-base-super" : "agent-base") ?? "";
     const entry: Entry = {
       // Un container sans métadonnée repo n'a que son nom comme identifiant.
       cells: [repo || name, mode || "-", status, buildLabel(buildStatus(stamp, latest))],
