@@ -1,8 +1,9 @@
 ---
 forge_users_install_root: /opt/agent-forge
-# CLI entry point inside a release: scripts/forge today. Sub-project 2 moves
-# the CLI to cli/forge (framing spec layout) and changes this value with it.
-forge_users_cli_entrypoint: scripts/forge
+# CLI entry point inside a release (framing spec layout, since sub-project 2).
+# ansible/tests/unit/forge_users.yml checks it exists in the checkout: the
+# link to it is created even when the target is missing.
+forge_users_cli_entrypoint: cli/forge
 # The repository root on the controller (site.yml lives in ansible/).
 forge_users_repo_root: "{{ playbook_dir | dirname }}"
 forge_users_nodesource_key_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
