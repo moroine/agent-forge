@@ -9,7 +9,7 @@ import type { Context } from "../context.ts";
 import { mustSucceed } from "../context.ts";
 import { validateRepo } from "../validate.ts";
 import { requireContainerForRepo } from "../containers.ts";
-import { deleteInstance, instanceStatus } from "../lxd.ts";
+import { deleteInstance, instanceStatus } from "../incus.ts";
 import { checkAllWorktrees } from "../wip.ts";
 import { resolveRepo } from "./resolve.ts";
 
@@ -25,6 +25,6 @@ export async function cmdDelete(ctx: Context, repo: string | undefined, force: b
   }
 
   ctx.out(`Deleting container ${container}...`);
-  await mustSucceed("lxc delete", deleteInstance(ctx, container));
+  await mustSucceed("incus delete", deleteInstance(ctx, container));
   return 0;
 }

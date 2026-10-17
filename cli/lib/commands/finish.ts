@@ -5,7 +5,7 @@ import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
 import { requireContainerForRepo } from "../containers.ts";
-import { execAsAgent } from "../lxd.ts";
+import { execAsAgent } from "../incus.ts";
 import { worktreeAbsPath } from "../worktrees.ts";
 import { checkWorktree } from "../wip.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";

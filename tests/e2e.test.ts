@@ -1,4 +1,4 @@
-// Bout-en-bout : le VRAI binaire, avec un faux lxc sur le PATH. Prouve le
+// Bout-en-bout : le VRAI binaire, avec un faux incus sur le PATH. Prouve le
 // câblage que les tests unitaires ne voient pas — parsing d'argv, dispatch,
 // codes de sortie, et la séparation stdout/stderr.
 import { test, before, after } from "node:test";
@@ -13,9 +13,9 @@ const ENTRY = resolve("cli/forge.ts");
 
 before(() => {
   bin = mkdtempSync(join(tmpdir(), "forge-e2e-bin-"));
-  const stub = resolve("tests/lib/fake-lxc.ts");
-  writeFileSync(join(bin, "lxc"), `#!/bin/sh\nexec node ${stub} "$@"\n`);
-  chmodSync(join(bin, "lxc"), 0o755);
+  const stub = resolve("tests/lib/fake-incus-bin.ts");
+  writeFileSync(join(bin, "incus"), `#!/bin/sh\nexec node ${stub} "$@"\n`);
+  chmodSync(join(bin, "incus"), 0o755);
 });
 
 after(() => rmSync(bin, { recursive: true, force: true }));

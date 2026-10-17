@@ -5,7 +5,7 @@
 // la branche d'une tâche (toujours agent/<task>).
 import type { Context } from "../context.ts";
 import { columnWidths, formatRow } from "../table.ts";
-import { listInstances } from "../lxd.ts";
+import { listInstances } from "../incus.ts";
 import {
   buildStatus, containerImageCommit, containerMode, containerRepo,
   latestImageCommitFor, forgeContainerNames,
@@ -32,7 +32,7 @@ export async function cmdList(ctx: Context): Promise<number> {
   ]);
   const entries: Entry[] = [];
 
-  // Un seul `lxc list` pour toute la commande : instanceStatus le relançait
+  // Un seul `incus list` pour toute la commande : instanceStatus le relançait
   // en entier par container, soit N+1 listings complets là où un index par
   // nom suffit. `forge list` est la commande la plus lancée.
   const instances = await listInstances(ctx);

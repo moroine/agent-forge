@@ -14,7 +14,7 @@ function ctx() {
     rules: [
       { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
       { match: "agent-acme-widgets user.forge.repo", stdout: "acme/widgets" },
-      { match: "lxc list", stdout: LIST },
+      { match: "incus --project agent-forge list", stdout: LIST },
       { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\n" },
     ],
   });

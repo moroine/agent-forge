@@ -4,7 +4,7 @@ import type { Context } from "../context.ts";
 import { mustSucceed } from "../context.ts";
 import { validateRepo } from "../validate.ts";
 import { requireContainerForRepo } from "../containers.ts";
-import { stopInstance } from "../lxd.ts";
+import { stopInstance } from "../incus.ts";
 import { checkAllWorktrees } from "../wip.ts";
 import { resolveRepo } from "./resolve.ts";
 
@@ -18,6 +18,6 @@ export async function cmdStop(ctx: Context, repo: string | undefined, force: boo
   if (!force) await checkAllWorktrees(ctx, container);
 
   ctx.out(`Stopping container ${container}...`);
-  await mustSucceed("lxc stop", stopInstance(ctx, container));
+  await mustSucceed("incus stop", stopInstance(ctx, container));
   return 0;
 }

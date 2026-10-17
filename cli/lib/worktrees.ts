@@ -4,7 +4,7 @@
 // tests de contrat (couche 2) alimentent avec la sortie d'un *vrai* git et
 // d'un *vrai* tmux, sans LXD.
 import type { Context } from "./context.ts";
-import { execAsAgent } from "./lxd.ts";
+import { execAsAgent } from "./incus.ts";
 
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 

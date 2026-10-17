@@ -18,7 +18,7 @@ function ctx() {
       { match: "agent-acme-super-long-repository-name user.forge.image_commit", stdout: "bbbb2222" },
       { match: "agent-acme-super-long-repository-name user.forge.repo", stdout: "acme/super-long-repository-name" },
       { match: "agent-acme-super-long-repository-name user.forge.mode", stdout: "supervised" },
-      { match: "lxc list", stdout: LIST },
+      { match: "incus --project agent-forge list", stdout: LIST },
       { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\nworktree /workspace/.trees/api\n" },
       { match: "list-sessions", stdout: "cli 1\ndocs 0\n" },
     ],
@@ -79,10 +79,10 @@ test("a long repo name widens its column instead of shifting the others", async 
   }
 });
 
-test("forge list runs a single lxc list for the whole command", async () => {
+test("forge list runs a single incus list for the whole command", async () => {
   const c = ctx();
   await cmdList(c);
-  const listings = c.calls.filter((call) => call.join(" ") === "lxc list -f json");
+  const listings = c.calls.filter((call) => call.join(" ") === "incus --project agent-forge list -f json");
   assert.equal(listings.length, 1, `${listings.length} full listings instead of 1`);
 });
 
@@ -95,7 +95,7 @@ test("no line wraps an 80-column terminal", async () => {
 test("a container with no repo metadata falls back to its name", async () => {
   const c = fakeContext({
     rules: [
-      { match: "lxc list", stdout: JSON.stringify([{ name: "agent-orphan", status: "Stopped" }]) },
+      { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-orphan", status: "Stopped" }]) },
       { match: "image get-property", stdout: "" },
     ],
   });
@@ -107,7 +107,7 @@ test("forge list compares a super container against agent-base-super", async () 
   const LIST_SUPER = JSON.stringify([{ name: "agent-o-r", status: "Running" }]);
   const c = fakeContext({
     rules: [
-      { match: "lxc list", stdout: LIST_SUPER },
+      { match: "incus --project agent-forge list", stdout: LIST_SUPER },
       // agent-base-super avant agent-base : "agent-base" est sous-chaîne de
       // "agent-base-super", donc la règle la plus spécifique doit gagner.
       { match: "image get-property agent-base-super", stdout: "SUPERSHA" },

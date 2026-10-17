@@ -8,7 +8,7 @@ import type { Context, ExecResult } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
 import { checkNameCollision, containerMode, forgeRepos, isRunning } from "../containers.ts";
-import { attachArgv, execAsAgent, instanceExists, startInstance } from "../lxd.ts";
+import { attachArgv, execAsAgent, instanceExists, startInstance } from "../incus.ts";
 import { agentBranches, branchExists, taskNames } from "../worktrees.ts";
 import { provisionContainer } from "./provision.ts";
 
@@ -39,7 +39,7 @@ export async function cmdStart(ctx: Context, repo?: string, task?: string): Prom
   }
 
   ctx.out(`Starting container ${container}...`);
-  if (!(await isRunning(ctx, container))) await mustSucceed("lxc start", startInstance(ctx, container));
+  if (!(await isRunning(ctx, container))) await mustSucceed("incus start", startInstance(ctx, container));
 
   // Avant le menu, pas après : les branches d'origin qu'il propose doivent
   // être à jour.

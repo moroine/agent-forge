@@ -6,7 +6,7 @@ import { existsSync, mkdirSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
-import { configSet, execAsAgent } from "../lxd.ts";
+import { configSet, execAsAgent, incus } from "../incus.ts";
 import { baseImageFor, latestImageCommitFor } from "../containers.ts";
 
 const home = () => process.env.FORGE_HOME ?? "/home/moroine";
@@ -24,28 +24,28 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   ctx.err("Mode for this container?");
   ctx.err("  [a] autonomous — bot pushes commits and opens PRs itself");
   ctx.err("  [s] supervised — no credential; you retrieve and publish the work yourself");
-  ctx.err("  [u] super — autonomous + nested LXD (self-host agent-forge: run forge/lxc/integration tests)");
+  ctx.err("  [u] super — autonomous + nested LXD (self-host agent-forge: run forge/incus/integration tests)");
   const choice = (await ctx.prompt.ask("Choice [a/s/u]")) ?? "a";
   const mode = modeFromChoice(choice);
 
   const baseImage = baseImageFor(mode);
-  if ((await ctx.exec(["lxc", "image", "info", baseImage])).code !== 0) {
+  if ((await ctx.exec(incus("image", "info", baseImage))).code !== 0) {
     const target = mode === "super" ? "forge image build super" : "forge image build";
     throw new ForgeError(`image ${baseImage} not found. Run '${target}' first.`);
   }
   const profile = mode === "super" ? "agent-super" : "agent";
 
   ctx.out(`Creating container ${container}...`);
-  await mustSucceed("lxc launch", ctx.exec(["lxc", "launch", baseImage, container, "--profile", profile]));
+  await mustSucceed("incus launch", ctx.exec(incus("launch", baseImage, container, "--profile", profile)));
 
   // Supprime le compte ubuntu laissé par cloud-init, qui peut avoir un accès
   // administrateur sans mot de passe. Tolérant délibérément (comme le
   // `|| true` du bash d'origine, forge-start.sh:263) : le compte peut ne pas
   // exister.
   ctx.out("Removing cloud-init ubuntu backdoor...");
-  await ctx.exec(["lxc", "exec", container, "--", "deluser", "--remove-home", "ubuntu"]);
+  await ctx.exec(incus("exec", container, "--", "deluser", "--remove-home", "ubuntu"));
   await mustSucceed("remove cloud-init sudoers file",
-    ctx.exec(["lxc", "exec", container, "--", "rm", "-f", "/etc/sudoers.d/90-cloud-init-users"]));
+    ctx.exec(incus("exec", container, "--", "rm", "-f", "/etc/sudoers.d/90-cloud-init-users")));
 
   // Super mode : initialise le LXD imbriqué. snapd + le snap LXD sont déjà
   // dans l'image (forge image build super) ; on attend le seed puis on
@@ -53,21 +53,21 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   if (mode === "super") {
     ctx.out("Initializing the nested LXD daemon...");
     await mustSucceed("wait nested snapd seed",
-      ctx.exec(["lxc", "exec", container, "--", "snap", "wait", "system", "seed.loaded"]));
+      ctx.exec(incus("exec", container, "--", "snap", "wait", "system", "seed.loaded")));
     await mustSucceed("nested lxd init",
-      ctx.exec(["lxc", "exec", container, "--", "/snap/bin/lxd", "init", "--minimal"]));
+      ctx.exec(incus("exec", container, "--", "/snap/bin/lxd", "init", "--minimal")));
   }
 
   ctx.out("Mounting workspace...");
   mkdirSync(workspaceDir, { recursive: true });
   // raw.idmap dans le profil mappe moroine (1000) vers aiuser (1001) et gère
   // aussi root : pas besoin d'idmap shifting sur ce device.
-  await mustSucceed("mount workspace", ctx.exec(["lxc", "config", "device", "add", container, "workspace", "disk",
-    `source=${workspaceDir}`, "path=/workspace"]));
+  await mustSucceed("mount workspace", ctx.exec(incus("config", "device", "add", container, "workspace", "disk",
+    `source=${workspaceDir}`, "path=/workspace")));
 
   ctx.out("Copying signing key...");
-  await mustSucceed("copy signing key", ctx.exec(["lxc", "file", "push", join(home(), ".ssh", "github_agents_signing"),
-    `${container}/home/aiuser/.ssh/id_ed25519_signing`, "--uid", "1001", "--gid", "1001", "--mode", "600"]));
+  await mustSucceed("copy signing key", ctx.exec(incus("file", "push", join(home(), ".ssh", "github_agents_signing"),
+    `${container}/home/aiuser/.ssh/id_ed25519_signing`, "--uid", "1001", "--gid", "1001", "--mode", "600")));
 
   ctx.out("Configuring git...");
   await mustSucceed("configure git", execAsAgent(ctx, container, [
@@ -80,17 +80,17 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
 
   ctx.out("Reusing Claude Code credentials from host...");
   await mustSucceed("create .claude directory", execAsAgent(ctx, container, "mkdir -p /home/aiuser/.claude"));
-  await mustSucceed("push Claude credentials", ctx.exec(["lxc", "file", "push", credentials,
-    `${container}/home/aiuser/.claude/.credentials.json`, "--uid", "1001", "--gid", "1001", "--mode", "600"]));
+  await mustSucceed("push Claude credentials", ctx.exec(incus("file", "push", credentials,
+    `${container}/home/aiuser/.claude/.credentials.json`, "--uid", "1001", "--gid", "1001", "--mode", "600")));
 
   ctx.out("Pre-accepting Claude Code onboarding...");
-  await mustSucceed("push onboarding state", ctx.exec(["lxc", "file", "push",
+  await mustSucceed("push onboarding state", ctx.exec(incus("file", "push",
     join(repoDir(), "container", "claude.json"),
-    `${container}/home/aiuser/.claude.json`, "--uid", "1001", "--gid", "1001", "--mode", "600"]));
+    `${container}/home/aiuser/.claude.json`, "--uid", "1001", "--gid", "1001", "--mode", "600")));
 
   ctx.out("Updating Claude Code to latest...");
   await mustSucceed("update Claude Code",
-    ctx.exec(["lxc", "exec", container, "--", "npm", "install", "-g", "@anthropic-ai/claude-code@latest"]));
+    ctx.exec(incus("exec", container, "--", "npm", "install", "-g", "@anthropic-ai/claude-code@latest")));
 
   // URL HTTPS explicite, pas la forme raccourcie owner/repo : claude resout
   // cette derniere en git@github.com, or le container n'a aucune confiance SSH
@@ -103,18 +103,18 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     "claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git && claude plugin install superpowers@claude-plugins-official"));
 
   ctx.out("Installing Claude global instructions...");
-  await mustSucceed("push CLAUDE.md", ctx.exec(["lxc", "file", "push", join(repoDir(), "container", "CLAUDE.md"),
-    `${container}/home/aiuser/.claude/CLAUDE.md`, "--uid", "1001", "--gid", "1001", "--mode", "644"]));
+  await mustSucceed("push CLAUDE.md", ctx.exec(incus("file", "push", join(repoDir(), "container", "CLAUDE.md"),
+    `${container}/home/aiuser/.claude/CLAUDE.md`, "--uid", "1001", "--gid", "1001", "--mode", "644")));
 
   ctx.out("Installing Claude security hooks...");
   await mustSucceed("create hooks directory",
-    ctx.exec(["lxc", "exec", container, "--", "mkdir", "-p", "/home/aiuser/.claude/hooks"]));
-  await mustSucceed("push pre-bash.sh", ctx.exec(["lxc", "file", "push",
+    ctx.exec(incus("exec", container, "--", "mkdir", "-p", "/home/aiuser/.claude/hooks")));
+  await mustSucceed("push pre-bash.sh", ctx.exec(incus("file", "push",
     join(repoDir(), "container", "pre-bash.sh"),
-    `${container}/home/aiuser/.claude/hooks/pre-bash.sh`, "--uid", "0", "--gid", "0", "--mode", "755"]));
-  await mustSucceed("push Claude settings", ctx.exec(["lxc", "file", "push",
+    `${container}/home/aiuser/.claude/hooks/pre-bash.sh`, "--uid", "0", "--gid", "0", "--mode", "755")));
+  await mustSucceed("push Claude settings", ctx.exec(incus("file", "push",
     join(repoDir(), "container", "settings.json"),
-    `${container}/home/aiuser/.claude/settings.json`, "--uid", "0", "--gid", "0", "--mode", "644"]));
+    `${container}/home/aiuser/.claude/settings.json`, "--uid", "0", "--gid", "0", "--mode", "644")));
 
   ctx.out("Recording forge mode marker...");
   await mustSucceed("record forge mode marker",
@@ -141,7 +141,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     ctx.out("Authenticating gh inside the container...");
     // Le token passe par stdin, jamais par argv : argv est visible dans ps.
     await mustSucceed("gh auth login", ctx.exec(
-      ["lxc", "exec", container, "--", "su", "-", "aiuser", "-c", "gh auth login --hostname github.com --with-token"],
+      incus("exec", container, "--", "su", "-", "aiuser", "-c", "gh auth login --hostname github.com --with-token"),
       { input: token },
     ));
     const status = await execAsAgent(ctx, container, "gh auth status --hostname github.com");

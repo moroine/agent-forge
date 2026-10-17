@@ -1,4 +1,4 @@
-// In-memory model of the `incus` CLI for unit tests, successor of fake-lxc.
+// In-memory model of the `incus` CLI for unit tests, successor of the former stub.
 // A rule table (fake-context.ts) answers one call at a time; this model keeps
 // state, which `forge setup` and `forge image build` need: what one call
 // creates, the next `list -f json` must show. It models what forge relies on:

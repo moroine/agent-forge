@@ -256,7 +256,7 @@ test("un workspace non vide appartenant à un autre repo arrête tout avant de c
     seedWorkspace("agent-x", "README.md");
     const c = fakeContext({ rules: [IMAGE_OK, ORIGIN("git@github.com:someone/else.git")], answers: ["s"] });
     await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /not a clone of o\/r/);
-    assert.ok(!c.calls.some((call) => call.join(" ").includes("lxc launch")), "rien ne doit être créé");
+    assert.ok(!c.calls.some((call) => call.join(" ").includes("incus --project agent-forge launch")), "rien ne doit être créé");
   } finally { teardown(); }
 });
 
@@ -266,7 +266,7 @@ test("un workspace non vide qui n'est pas un dépôt git arrête tout avant de c
     seedWorkspace("agent-x", "notes.txt");
     const c = fakeContext({ rules: [IMAGE_OK, { match: "remote get-url", code: 128 }], answers: ["s"] });
     await assert.rejects(() => provisionContainer(c, "agent-x", "o/r"), /not a clone of o\/r/);
-    assert.ok(!c.calls.some((call) => call.join(" ").includes("lxc launch")));
+    assert.ok(!c.calls.some((call) => call.join(" ").includes("incus --project agent-forge launch")));
   } finally { teardown(); }
 });
 
@@ -296,7 +296,7 @@ test("super mode launches agent-base-super under agent-super and inits nested LX
     const c = fakeContext({ rules: [IMAGE_OK], answers: ["u", "ghp_secret"] });
     await provisionContainer(c, "agent-x", "o/r");
     const flat = c.calls.map((call) => call.join(" "));
-    assert.ok(flat.some((l) => l.includes("lxc launch agent-base-super agent-x --profile agent-super")));
+    assert.ok(flat.some((l) => l.includes("incus --project agent-forge launch agent-base-super agent-x --profile agent-super")));
     assert.ok(flat.some((l) => l.includes("lxd init --minimal")), "nested LXD initialised");
     // super garde le flux autonome : credential + clone https
     assert.ok(flat.some((l) => l.includes("gh auth login")));

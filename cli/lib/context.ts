@@ -26,13 +26,13 @@ export class ForgeError extends Error {}
 
 // Le bash original tournait sous `set -e` : n'importe quelle étape mutante en
 // échec interrompait la commande. Cette fonction restaure ce fail-fast pour
-// chaque appel qui MODIFIE quelque chose (lxc start/stop/delete/config set,
+// chaque appel qui MODIFIE quelque chose (incus start/stop/delete/config set,
 // git worktree add/remove, fetch…). Elle vit ici, à côté d'ExecResult et de
 // ForgeError dont elle dépend, plutôt que dans un module dédié : toute la
 // couche commandes importe déjà context.ts, aucun nouvel arc d'import.
 //
 // `ctx.exec` CAPTURE stderr là où bash en héritait : sans réinjecter
-// `r.stderr` dans le message, le diagnostic de lxc/git — la seule chose que
+// `r.stderr` dans le message, le diagnostic d'incus/git — la seule chose que
 // l'opérateur pouvait lire en bash — serait perdu.
 //
 // Les sondes (test -e, show-ref, rev-parse, list-sessions) ne passent JAMAIS
@@ -56,7 +56,7 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     // setEncoding AVANT toute concaténation : sans lui les chunks arrivent en
     // Buffer et `stdout += c` décode chacun isolément, ce qui casse tout
     // caractère multi-octets à cheval sur une frontière de chunk (messages de
-    // commit accentués remontés par wip.ts) et corrompt un `lxc list -f json`
+    // commit accentués remontés par wip.ts) et corrompt un `incus list -f json`
     // de plus de 64 Ko — JSON.parse échouerait alors en silence.
     child.stdout.setEncoding("utf8");
     child.stderr.setEncoding("utf8");
@@ -70,7 +70,7 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
 }
 
 // Hérite du terminal au lieu de capturer : c'est le cas tmux. Voir §4 de la
-// spec — tmux doit rester la cible directe de `lxc exec`, sinon SIGWINCH
+// spec — tmux doit rester la cible directe de `incus exec`, sinon SIGWINCH
 // n'atteint jamais le client au redimensionnement.
 function attach(argv: string[]): Promise<number> {
   return new Promise((resolve) => {

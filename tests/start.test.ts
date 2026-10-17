@@ -11,8 +11,8 @@ function rules(extra: ExecRule[] = []): ExecRule[] {
     ...extra,
     { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
     { match: "user.forge.mode", stdout: "autonomous" },
-    { match: "lxc list", stdout: RUNNING },
-    { match: "lxc info", code: 0 },
+    { match: "incus --project agent-forge list", stdout: RUNNING },
+    { match: "incus --project agent-forge info", code: 0 },
     { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\n" },
     { match: "test -e /workspace/.trees/", code: 1 },
     { match: "show-ref", code: 1 },
@@ -123,15 +123,15 @@ test("a failing worktree add aborts instead of attaching to a missing directory"
 test("start fails when the container refuses to start", async () => {
   const c = fakeContext({
     rules: [
-      { match: "lxc start", code: 1, stderr: "Error: Failed to start device\n" },
-      ...rules().map((r) => (r.match === "lxc list"
+      { match: "incus --project agent-forge start", code: 1, stderr: "Error: Failed to start device\n" },
+      ...rules().map((r) => (r.match === "incus --project agent-forge list"
         ? { ...r, stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) }
         : r)),
     ],
   });
   await assert.rejects(
     () => cmdStart(c, "moroine/agent-forge", "fresh"),
-    /lxc start failed: Error: Failed to start device/,
+    /incus start failed: Error: Failed to start device/,
   );
   assert.ok(!c.calls.some((call) => call.join(" ").includes("worktree add")));
 });

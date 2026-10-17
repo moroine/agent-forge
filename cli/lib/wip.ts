@@ -3,7 +3,7 @@
 // monté depuis l'hôte et survit de toute façon.
 import type { Context } from "./context.ts";
 import { ForgeError } from "./context.ts";
-import { execAsAgent } from "./lxd.ts";
+import { execAsAgent } from "./incus.ts";
 import { containerMode } from "./containers.ts";
 import { worktreeDirs } from "./worktrees.ts";
 
