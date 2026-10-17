@@ -2,6 +2,8 @@
 - name: Read the installed Incus package
   ansible.builtin.command:
     cmd: dpkg-query --showformat=${Version} --show incus-base
+    # ${Version} is dpkg-query's field, not a variable to expand.
+    expand_argument_vars: false
   register: verify_incus_version
   changed_when: false
 

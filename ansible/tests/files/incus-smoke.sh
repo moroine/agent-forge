@@ -6,18 +6,21 @@
 set -e
 
 P="forge-host-test"
+# incus reads YAML from stdin when stdin is not a terminal (`project create`,
+# for one), and stdin here is this very script: give it /dev/null instead.
+inc() { incus "$@" </dev/null; }
 cleanup() {
-  incus delete --force smoke --project "$P" >/dev/null 2>&1 || true
-  for fingerprint in $(incus image list --project "$P" --format csv --columns F 2>/dev/null); do
-    incus image delete "$fingerprint" --project "$P" >/dev/null 2>&1 || true
+  inc delete --force smoke --project "$P" >/dev/null 2>&1 || true
+  for fingerprint in $(inc image list --project "$P" --format csv --columns F 2>/dev/null); do
+    inc image delete "$fingerprint" --project "$P" >/dev/null 2>&1 || true
   done
-  incus project delete "$P" >/dev/null 2>&1 || true
+  inc project delete "$P" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
-incus project create "$P"
+inc project create "$P"
 # A new project has its own, empty default profile: the container gets a root
 # disk on the pool (--storage) and no NIC at all.
-incus launch images:ubuntu/26.04 smoke --project "$P" --storage default
-incus exec smoke --project "$P" -- setpriv --reuid 1000 --regid 1000 --clear-groups unshare -Ur true
+inc launch images:ubuntu/26.04 smoke --project "$P" --storage default
+inc exec smoke --project "$P" -- setpriv --reuid 1000 --regid 1000 --clear-groups unshare -Ur true
 echo "incus-smoke: OK"

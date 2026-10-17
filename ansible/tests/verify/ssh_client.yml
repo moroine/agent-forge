@@ -27,6 +27,9 @@
     cmd: >-
       {{ verify_ssh }} -A -i {{ verify_work }}/admin
       {{ ansible_user }}@{{ ansible_host }} 'test -z "$SSH_AUTH_SOCK"'
+    # $SSH_AUTH_SOCK is the remote one: without this, the command module
+    # replaces it with the controller's own agent socket before running ssh.
+    expand_argument_vars: false
   delegate_to: localhost
   become: false
   changed_when: false

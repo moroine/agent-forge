@@ -233,11 +233,22 @@ grep -Eq '^vm +: .*changed=0 .*failed=0' "$WORK/second-run.log" \
   || die "the second run changed something (see the tasks above)"
 
 # devsec must not have regenerated the host key: the key sshd showed on 22
-# before provisioning is the one it shows on the new port.
-key_on() { ssh-keygen -F "$1" -f "$WORK/known_hosts" | grep -v '^#' | awk '{print $3}' | head -1; }
-k22="$(key_on "$IP" || true)"
-knew="$(key_on "[$IP]:$FORGE_SSH_PORT" || true)"
-[ -n "$k22" ] && [ "$k22" = "$knew" ] || die "the host key changed during provisioning (or was not recorded)"
+# before provisioning is the one it shows on the new port. OpenSSH accepts a
+# key recorded for the bare host on any port and then records nothing for
+# "[host]:port", so the new port's key is read through an empty known_hosts.
+key_on() {  # $1 = host entry, $2 = known_hosts file
+  ssh-keygen -F "$1" -f "$2" | grep -v '^#' | awk '{print $3}' | head -1
+}
+: > "$WORK/known_hosts.new-port"
+ssh -F none -o BatchMode=yes -o ConnectTimeout=10 -o IdentitiesOnly=yes \
+  -o HostKeyAlgorithms=ssh-ed25519 \
+  -o UserKnownHostsFile="$WORK/known_hosts.new-port" -o StrictHostKeyChecking=accept-new \
+  -i "$WORK/admin" -p "$FORGE_SSH_PORT" "$ADMIN@$IP" true \
+  || die "cannot log in on port $FORGE_SSH_PORT to read the host key"
+k22="$(key_on "$IP" "$WORK/known_hosts" || true)"
+knew="$(key_on "[$IP]:$FORGE_SSH_PORT" "$WORK/known_hosts.new-port" || true)"
+[ -n "$k22" ] || die "no host key was recorded for $IP on port 22"
+[ "$k22" = "$knew" ] || die "the host key changed during provisioning"
 
 verify() {  # $1 = true|false: run the deliberate authentication failures
   playbook "$REPO/ansible/tests/verify.yml" \
