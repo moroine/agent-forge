@@ -33,7 +33,7 @@
     name: incus
     shell: /usr/sbin/nologin
     create_home: false
-  when: (ansible_facts.getent_passwd | default({})).get('incus')
+  when: incus_account_present
 
 - name: Look for the storage pool
   ansible.builtin.command:

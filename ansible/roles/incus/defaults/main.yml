@@ -18,3 +18,8 @@ incus_mounts: "{{ ansible_facts.mounts }}"
 incus_pool_mount_candidates: [/, /var, /var/lib, /var/lib/incus]
 incus_pool_mount: "{{ incus_mounts | selectattr('mount', 'in', incus_pool_mount_candidates) | sort(attribute='mount') | last }}"
 incus_pool_auto_gib: "{{ (incus_pool_mount.size_available | int * incus_pool_ratio / 1073741824) | int }}"
+# Whether the package created the incus system account (getent with
+# fail_key false maps a missing account to null). Lazily templated, so the
+# unit tests can pass their own passwd entries.
+incus_passwd: "{{ ansible_facts.getent_passwd | default({}) }}"
+incus_account_present: "{{ incus_passwd.get('incus') is not none }}"

@@ -81,6 +81,25 @@
           - unit_room_outcome == 'failed'
           - "'forge_incus_storage_size' in unit_room_message"
 
+    # A conditional must be a boolean (ansible-core 2.19+): a passwd entry is
+    # a list, so the account check must turn it into true or false.
+    - name: Check the incus account is seen when the package created it
+      ansible.builtin.assert:
+        that:
+          - incus_account_present
+      vars:
+        incus_passwd: {incus: ["x", "996", "996", "", "/var/lib/incus", "/bin/sh"]}
+
+    - name: Check a missing incus account is not seen
+      ansible.builtin.assert:
+        that:
+          - not incus_account_present
+      loop:
+        - {incus: null}
+        - {}
+      vars:
+        incus_passwd: "{{ item }}"
+
     - name: Remove the scratch directory
       ansible.builtin.file:
         path: "{{ unit_tmp.path }}"
