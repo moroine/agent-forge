@@ -52,7 +52,7 @@ README setup steps stay as they are until sub-project 5 rewrites the README.
 | sudo-rs and uutils | Tested as shipped: the verification asserts they are active, then the full run, idempotence and reboot checks pass on the stock image | A test that silently ran on GNU coreutils or C sudo would prove nothing |
 | Claude Code on the host | Anthropic's signed apt repository, `stable` channel | System-wide, signature-checked, updated by unattended-upgrades; no `curl \| bash` per user |
 | Ansible on the host | Ubuntu's `ansible` package | It bundles community.general 12.1, whose `incus` connection plugin `forge image build` needs (≥ 8.2). No `ansible-galaxy` at runtime |
-| Throwaway test VM | An LXD VM on omen, driven by `ansible/tests/vm-test.sh` run on omen | The Mac lacks disk space while other VMs run. omen's sshd forbids TCP forwarding, so Ansible runs on omen itself rather than through a `ProxyJump` |
+| Throwaway test VM | `ansible/tests/vm-test.sh`, in one of two modes: `--host`, against an existing fresh VM (a cloud VM) from the developer's machine; or, by default, a VM it creates on an LXD/Incus host with KVM (omen) | omen stopped being reachable during implementation, and most cloud VMs have no nested KVM, so `--host` makes the cloud VM itself the throwaway target. On omen, Ansible runs on omen itself: its sshd forbids TCP forwarding |
 | CI | GitHub Actions on `ubuntu-26.04`: `npm test`, `npm run check`, `ansible-lint` (profile `production`), and the playbook's controller-only unit tests. No VM in CI | Light, fast, no secrets |
 
 ## Repository layout
@@ -456,11 +456,25 @@ Agreed with the sub-project 2 spec session on 2026-10-15.
 ### Throwaway VM: `ansible/tests/vm-test.sh`
 
 A bash script (`set -e`, preconditions checked first, per the repository's
-conventions). It runs on an LXD or Incus host with KVM, which means omen today,
-from a dedicated clone of `next` kept apart from the v1 clone. The user runs
-it: a v1 agent container can neither reach omen's LXD nor run a VM.
+conventions), run by the user. Two targets:
+
+- **`--host ADDRESS --admin-key KEY [--admin USER]`**: an existing, fresh
+  Ubuntu 26.04 machine, typically a cloud VM, tested from the developer's
+  machine. `--user-data PUBLIC_KEY` prints the cloud-init that creates its
+  passwordless-sudo `ubuntu` admin for that key (the playbook refuses root,
+  and some providers only give root). The script refuses a machine that is
+  already provisioned (sshd on 2222, or `/opt/agent-forge` present). The user
+  rebuilds the VM before each run and destroys it afterwards.
+- **By default**: a VM that the script creates and deletes on the LXD or Incus
+  host with KVM it runs on (omen), from a dedicated clone of `next` kept apart
+  from the v1 clone. A v1 agent container can neither reach omen's LXD nor run
+  a VM.
 
 Options: `--exposure public|lan|local` (default `public`), `--keep`.
+
+The steps below describe the default mode. With `--host`, step 3 is the
+existing machine (its admin key copied into the temporary directory), and the
+reboot in step 8 goes through `sudo systemctl reboot` over SSH.
 
 1. **Preconditions.** `lxc` or `incus` is present and `/dev/kvm` exists.
    `ansible-playbook` ≥ 2.20 is on PATH; on omen's Ubuntu 24.04 that means
@@ -553,8 +567,9 @@ Options: `--exposure public|lan|local` (default `public`), `--keep`.
 
 A passing `vm-test.sh` run (`--exposure public`) is required before a
 sub-project 1 pull request is merged into `next`; its summary goes in the PR
-description. The VM runs on omen, so it covers **amd64**. arm64 is covered when
-sub-project 5 provisions a Lima VM on the Mac with the same playbook.
+description. The architecture covered is the test VM's: amd64 on omen or an
+amd64 cloud VM. arm64 is covered by an arm64 cloud VM, or when sub-project 5
+provisions a Lima VM on the Mac with the same playbook.
 
 ### CI: `.github/workflows/ci.yml`
 
@@ -621,4 +636,4 @@ Recorded here; the framing document is not edited.
   applies whenever set, not only with `public`.
 - "Host → Roles → `firewall`": essential ICMP accepted; forwarding from the
   external interface to the bridge limited to return traffic.
-- "Host → Tests": the throwaway VM is an LXD VM on omen (amd64).
+- "Host → Tests": the throwaway VM is a fresh cloud VM tested with `--host`, or an LXD VM on omen.

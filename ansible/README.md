@@ -52,23 +52,53 @@ ansible-lint ansible/    # profile production (.ansible-lint)
 
 ## VM test
 
-`tests/vm-test.sh` creates a throwaway VM on an LXD or Incus host with KVM, and
-provisions it with this playbook. omen is that host today. The script checks
-that a second run changes nothing, runs `tests/verify.yml`, reboots the VM,
-verifies again, and deletes the VM. Run it on omen, from a clone of `next` kept
-apart from the v1 clone:
+`tests/vm-test.sh` provisions a fresh Ubuntu 26.04 machine with this playbook,
+checks that a second run changes nothing, runs `tests/verify.yml`, reboots the
+machine and verifies again. It needs ansible-core 2.20 or newer
+(`pipx install ansible-core` on Ubuntu 24.04). `--exposure public|lan|local`
+picks the exposure (default `public`); `--keep` leaves its temporary files in
+place for debugging.
+
+### On a cloud VM (`--host`)
+
+The script runs on your machine and targets an existing, fresh VM. Most cloud
+VMs cannot run VMs themselves, so this is the usual way.
+
+1. Make a test key, used only for this:
+
+   ```bash
+   ssh-keygen -t ed25519 -N "" -f ~/.ssh/forge-host-test
+   ```
+
+2. Print the cloud-init that gives the VM a passwordless-sudo `ubuntu` admin
+   with that key (the playbook refuses to run as root):
+
+   ```bash
+   ansible/tests/vm-test.sh --user-data ~/.ssh/forge-host-test.pub > user-data.yml
+   ```
+
+3. Create an Ubuntu 26.04 VM with that user data: at least 2 vCPU, 4 GB of
+   memory and a 40 GB disk. Leave the provider's firewall off, or open ports
+   22 and 2222: sshd moves to 2222.
+4. Run the test against it:
+
+   ```bash
+   ansible/tests/vm-test.sh --host 203.0.113.10 --admin-key ~/.ssh/forge-host-test
+   ```
+
+The VM is provisioned afterwards. Rebuild it from a fresh image before the next
+run (the script refuses a machine it already provisioned), and destroy it when
+you are done.
+
+### On an LXD or Incus host with KVM
+
+Without `--host`, the script creates a throwaway VM on the LXD or Incus host it
+runs on, and deletes it at the end:
 
 ```bash
-git clone git@github.com:moroine/agent-forge.git ~/src/agent-forge-next   # once
-git -C ~/src/agent-forge-next fetch origin
-git -C ~/src/agent-forge-next checkout --detach origin/<branch>
-~/src/agent-forge-next/ansible/tests/vm-test.sh                    # --exposure public (default)
-~/src/agent-forge-next/ansible/tests/vm-test.sh --exposure local   # fail2ban off
+ansible/tests/vm-test.sh                    # --exposure public (default)
+ansible/tests/vm-test.sh --exposure local   # fail2ban off
 ```
-
-It needs ansible-core 2.20 or newer (`pipx install ansible-core` on Ubuntu
-24.04). `--keep` leaves the VM and its keys in place for debugging. The script
-prints where they are.
 
 ## Hardening choices
 
