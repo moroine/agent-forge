@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { cmdImage } from "../scripts/lib/commands/image.ts";
+import { cmdImage } from "../cli/lib/commands/image.ts";
 
 test("forge image build passes only the sub to the bash script", async () => {
   const ctx = fakeContext();

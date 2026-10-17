@@ -6,7 +6,7 @@
 # (le hook n'utilise que grep -E POSIX : fonctionne avec BSD grep comme GNU grep)
 set -e
 
-HOOK="$(cd "$(dirname "$0")/.." && pwd)/.claude/hooks/pre-bash.sh"
+HOOK="$(cd "$(dirname "$0")/.." && pwd)/container/pre-bash.sh"
 PASS=0
 FAIL=0
 

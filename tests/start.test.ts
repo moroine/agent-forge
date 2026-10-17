@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import type { ExecRule } from "./lib/fake-context.ts";
-import { cmdStart } from "../scripts/lib/commands/start.ts";
+import { cmdStart } from "../cli/lib/commands/start.ts";
 
 const RUNNING = JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Running" }]);
 

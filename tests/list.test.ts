@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { cmdList } from "../scripts/lib/commands/list.ts";
+import { cmdList } from "../cli/lib/commands/list.ts";
 
 const LIST = JSON.stringify([
   { name: "agent-moroine-agent-forge", status: "Running" },

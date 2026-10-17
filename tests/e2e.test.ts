@@ -9,7 +9,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 let bin: string;
-const ENTRY = resolve("scripts/forge.ts");
+const ENTRY = resolve("cli/forge.ts");
 
 before(() => {
   bin = mkdtempSync(join(tmpdir(), "forge-e2e-bin-"));
@@ -80,7 +80,7 @@ test("image without a subcommand fails with its usage", () => {
 });
 
 test("the bash shim runs the TypeScript entry", () => {
-  const r = spawnSync(resolve("scripts/forge"), ["list"], {
+  const r = spawnSync(resolve("cli/forge"), ["list"], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   });

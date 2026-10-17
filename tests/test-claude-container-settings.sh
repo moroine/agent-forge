@@ -1,9 +1,9 @@
 #!/bin/bash
-# Vérifie le contenu de config/claude-container-settings.json.
+# Vérifie le contenu de container/settings.json.
 # Lancer : bash tests/test-claude-container-settings.sh
 set -e
 
-FILE="$(cd "$(dirname "$0")/.." && pwd)/config/claude-container-settings.json"
+FILE="$(cd "$(dirname "$0")/.." && pwd)/container/settings.json"
 PASS=0
 FAIL=0
 

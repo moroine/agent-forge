@@ -1,7 +1,7 @@
 // Contexte scripté pour les tests unitaires. `exec` répond selon une table de
 // règles ordonnée (première correspondance gagnante, comme un routeur), et
 // `prompt` sert une file de réponses préparées.
-import type { Context, ExecOptions, ExecResult, Prompt } from "../../scripts/lib/context.ts";
+import type { Context, ExecOptions, ExecResult, Prompt } from "../../cli/lib/context.ts";
 
 export type ExecRule = { match: string; code?: number; stdout?: string; stderr?: string };
 

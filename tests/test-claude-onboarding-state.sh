@@ -1,9 +1,9 @@
 #!/bin/bash
-# Vérifie le contenu de config/claude-onboarding-state.json.
+# Vérifie le contenu de container/claude.json.
 # Lancer : bash tests/test-claude-onboarding-state.sh
 set -e
 
-FILE="$(cd "$(dirname "$0")/.." && pwd)/config/claude-onboarding-state.json"
+FILE="$(cd "$(dirname "$0")/.." && pwd)/container/claude.json"
 PASS=0
 FAIL=0
 

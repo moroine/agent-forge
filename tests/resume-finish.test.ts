@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { cmdResume } from "../scripts/lib/commands/resume.ts";
-import { cmdFinish } from "../scripts/lib/commands/finish.ts";
+import { cmdResume } from "../cli/lib/commands/resume.ts";
+import { cmdFinish } from "../cli/lib/commands/finish.ts";
 
 const BASE = [
   { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },

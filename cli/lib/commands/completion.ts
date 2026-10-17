@@ -10,7 +10,7 @@ import { taskNames } from "../worktrees.ts";
 
 const USAGE = "Usage: forge completion bash|repos|tasks <owner/repo>";
 
-// Chemin absolu du shim `scripts/forge`. import.meta.url designe forge.ts ;
+// Chemin absolu du shim `cli/forge`. import.meta.url designe forge.ts ;
 // le shim est son voisin, et c'est lui l'executable.
 export const FORGE_BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "forge");
 

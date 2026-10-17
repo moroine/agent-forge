@@ -1,11 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { ForgeError } from "../scripts/lib/context.ts";
+import { ForgeError } from "../cli/lib/context.ts";
 import {
   listForgeContainers, forgeRepos, containerForRepo, requireContainerForRepo,
   checkNameCollision, isRunning, buildStatus, baseImageFor, latestImageCommitFor,
-} from "../scripts/lib/containers.ts";
+} from "../cli/lib/containers.ts";
 
 const LIST = JSON.stringify([
   { name: "agent-moroine-agent-forge", status: "Running" },

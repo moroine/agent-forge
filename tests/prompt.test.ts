@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Readable } from "node:stream";
-import { createPrompt } from "../scripts/lib/prompt.ts";
+import { createPrompt } from "../cli/lib/prompt.ts";
 
 function stream(text: string, isTTY: boolean) {
   const s = Readable.from([text]) as Readable & { isTTY?: boolean };

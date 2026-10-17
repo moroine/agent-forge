@@ -4,7 +4,7 @@ import { fakeContext } from "./lib/fake-context.ts";
 import {
   parseWorktreeDirs, parseAgentBranches, parseSessionStates,
   taskNames, branchExists, sessionStates, worktreeAbsPath,
-} from "../scripts/lib/worktrees.ts";
+} from "../cli/lib/worktrees.ts";
 
 test("parseWorktreeDirs drops the main clone and keeps the features", () => {
   const porcelain = [

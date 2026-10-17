@@ -138,7 +138,7 @@ after(() => {
 });
 
 function forge(args: string[]) {
-  return spawnSync(resolve("scripts/forge"), args, {
+  return spawnSync(resolve("cli/forge"), args, {
     encoding: "utf8",
     env: { ...process.env, LXD_CONF: conf },
   });

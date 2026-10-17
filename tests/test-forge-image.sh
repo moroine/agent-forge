@@ -1,12 +1,12 @@
 #!/bin/bash
-# Tests structurels de scripts/forge (shim vers forge.ts) et
-# scripts/lib/forge-image.sh (script bash standalone). Le dispatch de
+# Tests structurels de cli/forge (shim vers forge.ts) et
+# cli/lib/forge-image.sh (script bash standalone). Le dispatch de
 # "forge image" est couvert par tests/e2e.test.ts.
 # Lancer : bash tests/test-forge-image.sh
 set -e
 
-FORGE="$(cd "$(dirname "$0")/.." && pwd)/scripts/forge"
-LIB="$(cd "$(dirname "$0")/.." && pwd)/scripts/lib/forge-image.sh"
+FORGE="$(cd "$(dirname "$0")/.." && pwd)/cli/forge"
+LIB="$(cd "$(dirname "$0")/.." && pwd)/cli/lib/forge-image.sh"
 PASS=0
 FAIL=0
 
@@ -104,7 +104,7 @@ fi
 
 # 2) Source, la garde doit empecher cmd_forge_image de tourner avec les
 #    arguments du script appelant — c'est exactement ce qui a casse l'ancien
-#    scripts/forge avant le fix (set -e + cmd_forge_image "$@" inconditionnel
+#    cli/forge avant le fix (set -e + cmd_forge_image "$@" inconditionnel
 #    tuait tout le process pendant le sourcing).
 output=$(bash -c 'set -e; source "'"$LIB"'"; echo STILL_ALIVE' list 2>&1) && code=0 || code=$?
 if [ "$code" -eq 0 ] && [ "$output" = "STILL_ALIVE" ]; then

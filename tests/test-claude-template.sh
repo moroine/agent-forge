@@ -1,12 +1,12 @@
 #!/bin/bash
-# Tests structurels de templates/CLAUDE.md : le fichier reste unique pour
+# Tests structurels de container/CLAUDE.md : le fichier reste unique pour
 # les deux modes — sa section Git renvoie au marqueur forge-mode plutôt que
 # de dupliquer le template (voir
 # docs/superpowers/specs/2026-07-15-supervised-git-mode-design.md).
 # Lancer : bash tests/test-claude-template.sh
 set -e
 
-TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)/templates/CLAUDE.md"
+TEMPLATE="$(cd "$(dirname "$0")/.." && pwd)/container/CLAUDE.md"
 PASS=0
 FAIL=0
 

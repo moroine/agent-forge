@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { ForgeError } from "../scripts/lib/context.ts";
-import { cmdCompletion, completionScript, FORGE_BIN } from "../scripts/lib/commands/completion.ts";
+import { ForgeError } from "../cli/lib/context.ts";
+import { cmdCompletion, completionScript, FORGE_BIN } from "../cli/lib/commands/completion.ts";
 
 const LIST = JSON.stringify([
   { name: "agent-moroine-agent-forge", status: "Running" },

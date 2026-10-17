@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
-import { provisionContainer } from "../scripts/lib/commands/provision.ts";
+import { provisionContainer } from "../cli/lib/commands/provision.ts";
 
 let home: string;
 

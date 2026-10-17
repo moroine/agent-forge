@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { checkWorktree } from "../scripts/lib/wip.ts";
+import { checkWorktree } from "../cli/lib/wip.ts";
 
 const clean = { match: "status --porcelain", stdout: "" };
 const onBranch = { match: "rev-parse --abbrev-ref HEAD", stdout: "agent/cli\n" };

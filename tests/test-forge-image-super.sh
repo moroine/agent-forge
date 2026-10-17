@@ -4,7 +4,7 @@
 # publiée et tamponnée. Lancer : bash tests/test-forge-image-super.sh
 set -e
 
-FILE="$(cd "$(dirname "$0")/.." && pwd)/scripts/lib/forge-image.sh"
+FILE="$(cd "$(dirname "$0")/.." && pwd)/cli/lib/forge-image.sh"
 PASS=0
 FAIL=0
 assert_contains() {

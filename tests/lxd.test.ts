@@ -4,7 +4,7 @@ import { fakeContext } from "./lib/fake-context.ts";
 import {
   listInstances, instanceStatus, instanceExists, configGet, configSet,
   imageProperty, execAsAgent, deleteInstance, attachArgv,
-} from "../scripts/lib/lxd.ts";
+} from "../cli/lib/lxd.ts";
 
 const LIST_JSON = JSON.stringify([
   { name: "agent-moroine-agent-forge", status: "Running" },

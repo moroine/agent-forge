@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ForgeError } from "../scripts/lib/context.ts";
-import { validateRepo, validateTaskName, validateGitRef, sanitizeContainerName } from "../scripts/lib/validate.ts";
+import { ForgeError } from "../cli/lib/context.ts";
+import { validateRepo, validateTaskName, validateGitRef, sanitizeContainerName } from "../cli/lib/validate.ts";
 
 test("validateRepo accepts owner/repo and rejects anything else", () => {
   validateRepo("moroine/agent-forge");

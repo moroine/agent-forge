@@ -85,7 +85,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
 
   ctx.out("Pre-accepting Claude Code onboarding...");
   await mustSucceed("push onboarding state", ctx.exec(["lxc", "file", "push",
-    join(repoDir(), "config", "claude-onboarding-state.json"),
+    join(repoDir(), "container", "claude.json"),
     `${container}/home/aiuser/.claude.json`, "--uid", "1001", "--gid", "1001", "--mode", "600"]));
 
   ctx.out("Updating Claude Code to latest...");
@@ -103,17 +103,17 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     "claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git && claude plugin install superpowers@claude-plugins-official"));
 
   ctx.out("Installing Claude global instructions...");
-  await mustSucceed("push CLAUDE.md", ctx.exec(["lxc", "file", "push", join(repoDir(), "templates", "CLAUDE.md"),
+  await mustSucceed("push CLAUDE.md", ctx.exec(["lxc", "file", "push", join(repoDir(), "container", "CLAUDE.md"),
     `${container}/home/aiuser/.claude/CLAUDE.md`, "--uid", "1001", "--gid", "1001", "--mode", "644"]));
 
   ctx.out("Installing Claude security hooks...");
   await mustSucceed("create hooks directory",
     ctx.exec(["lxc", "exec", container, "--", "mkdir", "-p", "/home/aiuser/.claude/hooks"]));
   await mustSucceed("push pre-bash.sh", ctx.exec(["lxc", "file", "push",
-    join(repoDir(), ".claude", "hooks", "pre-bash.sh"),
+    join(repoDir(), "container", "pre-bash.sh"),
     `${container}/home/aiuser/.claude/hooks/pre-bash.sh`, "--uid", "0", "--gid", "0", "--mode", "755"]));
   await mustSucceed("push Claude settings", ctx.exec(["lxc", "file", "push",
-    join(repoDir(), "config", "claude-container-settings.json"),
+    join(repoDir(), "container", "settings.json"),
     `${container}/home/aiuser/.claude/settings.json`, "--uid", "0", "--gid", "0", "--mode", "644"]));
 
   ctx.out("Recording forge mode marker...");

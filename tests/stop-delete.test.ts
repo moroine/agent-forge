@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { cmdStop } from "../scripts/lib/commands/stop.ts";
-import { cmdDelete } from "../scripts/lib/commands/delete.ts";
+import { cmdStop } from "../cli/lib/commands/stop.ts";
+import { cmdDelete } from "../cli/lib/commands/delete.ts";
 
 const RULES = [
   { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
