@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-17
 **Status:** Approved by the user (2026-10-18)
-**Branch:** `agent/v2-herdr-spec`, stacked on `agent/fix-forge-entrypoint` → `next`
+**Branch:** `agent/v2-herdr-spec`, stacked on `agent/hook-fail-closed` (moroine/agent-forge#36) → `next`
 **Framing spec:** `docs/superpowers/specs/2026-10-15-v2-incus-ansible-herdr-design.md`
 **Spike report:** `docs/superpowers/spikes/2026-10-15-v2-validation-spike.md`
 **Runtime spec (sub-project 2):** `docs/superpowers/specs/2026-10-15-v2-runtime-design.md`
@@ -802,7 +802,7 @@ documents are not edited.
 ## Delivery
 
 Stacked pull requests, each based on the previous branch and titled
-"(pile v2, N/n)".
+"(pile v2 · sp4, N/n)", N counted within sub-project 4.
 
 - **Commits are unsigned** (`--no-gpg-sign`). Moroine authorised it for this
   stack: "Tu peux gérer le tout sans Yubikey ? Et faire des stack PRs ? Je
