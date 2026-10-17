@@ -1,0 +1,18 @@
+---
+# Controller-only unit tests of the host playbook: input checks, computed
+# variables and rendered templates. No target machine is involved.
+#   ansible-playbook -i ansible/tests/unit-inventory.yml ansible/tests/unit.yml
+- name: Preflight
+  ansible.builtin.import_playbook: unit/preflight.yml
+- name: Base
+  ansible.builtin.import_playbook: unit/base.yml
+- name: Hardening
+  ansible.builtin.import_playbook: unit/hardening.yml
+- name: Firewall
+  ansible.builtin.import_playbook: unit/firewall.yml
+- name: Fail2ban
+  ansible.builtin.import_playbook: unit/fail2ban.yml
+- name: Incus
+  ansible.builtin.import_playbook: unit/incus.yml
+- name: Site playbook structure
+  ansible.builtin.import_playbook: unit/site_structure.yml

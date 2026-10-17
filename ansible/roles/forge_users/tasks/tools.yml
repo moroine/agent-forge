@@ -1,0 +1,37 @@
+---
+- name: Add the NodeSource Node 24 repository
+  ansible.builtin.include_role:
+    name: base
+    tasks_from: apt_repo.yml
+  vars:
+    base_apt_repo_name: nodesource
+    base_apt_repo_key_url: "{{ forge_users_nodesource_key_url }}"
+    base_apt_repo_fingerprint: "{{ forge_users_nodesource_fingerprint }}"
+    base_apt_repo_uris: ["{{ forge_users_nodesource_uri }}"]
+    base_apt_repo_suites: [nodistro]
+    base_apt_repo_components: [main]
+
+- name: Prefer NodeSource's nodejs to Ubuntu's
+  ansible.builtin.copy:
+    src: nodesource-pin
+    dest: /etc/apt/preferences.d/nodesource
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Add Anthropic's Claude Code repository (stable channel)
+  ansible.builtin.include_role:
+    name: base
+    tasks_from: apt_repo.yml
+  vars:
+    base_apt_repo_name: claude-code
+    base_apt_repo_key_url: "{{ forge_users_claude_key_url }}"
+    base_apt_repo_fingerprint: "{{ forge_users_claude_fingerprint }}"
+    base_apt_repo_uris: ["{{ forge_users_claude_uri }}"]
+    base_apt_repo_suites: [stable]
+    base_apt_repo_components: [main]
+
+- name: Install Node 24, Claude Code and Ansible
+  ansible.builtin.apt:
+    name: "{{ forge_users_packages }}"
+    state: present

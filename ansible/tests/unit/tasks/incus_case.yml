@@ -1,0 +1,26 @@
+---
+- name: Render the preseed for {{ unit_case.name }}
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../../roles/incus/templates/preseed.yml.j2"
+    dest: "{{ unit_tmp.path }}/{{ unit_case.name }}.yml"
+    mode: "0644"
+  vars:
+    incus_mounts: "{{ unit_case.mounts }}"
+    forge_incus_storage_size: "{{ unit_case.size }}"
+    forge_incus_storage_source: "{{ unit_case.source }}"
+
+- name: Check the preseed for {{ unit_case.name }}
+  ansible.builtin.assert:
+    that:
+      - unit_preseed.storage_pools | length == 1
+      - unit_preseed.storage_pools[0].name == 'default'
+      - unit_preseed.storage_pools[0].driver == 'btrfs'
+      - unit_preseed.storage_pools[0].config == unit_case.expect
+      - unit_preseed.profiles[0].name == 'default'
+      - "unit_preseed.profiles[0].devices.root == {'path': '/', 'pool': 'default', 'type': 'disk'}"
+      # The boundary rule: no network, no remote API.
+      - "'networks' not in unit_preseed"
+      - "'config' not in unit_preseed"
+    fail_msg: "Case {{ unit_case.name }}: {{ unit_preseed }}"
+  vars:
+    unit_preseed: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/' ~ unit_case.name ~ '.yml') | from_yaml }}"

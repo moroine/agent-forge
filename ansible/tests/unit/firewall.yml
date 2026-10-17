@@ -1,0 +1,79 @@
+---
+- name: Firewall template and interface check
+  hosts: render
+  gather_facts: false
+  # vars_files, not include_vars: its lower precedence lets each case's task
+  # vars (forge_exposure, forge_ssh_allowed_sources, ...) win.
+  vars_files:
+    - ../../roles/firewall/defaults/main.yml
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render and check each case
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/firewall_case.yml"
+      loop:
+        - {name: lan-open, exposure: lan, sources: [], open: true, v4: false, v6: false}
+        - {name: public-open, exposure: public, sources: [], open: true, v4: false, v6: false}
+        - {name: lan-both, exposure: lan, sources: [192.0.2.0/24, "2001:db8::/32"], open: false, v4: true, v6: true}
+        - {name: local-v4, exposure: local, sources: [192.0.2.0/24], open: false, v4: true, v6: false}
+        - {name: public-v6, exposure: public, sources: ["2001:db8::/32"], open: false, v4: false, v6: true}
+      loop_control:
+        loop_var: unit_case
+        label: "{{ unit_case.name }}"
+
+    # Review focus 2, and the controller's own path: the check must refuse an
+    # unknown interface, a missing one, and an SSH session that arrives on
+    # another interface than the one the firewall opens SSH on.
+    - name: Check the interface cases
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/interface_case.yml"
+      loop:
+        - name: default-route
+          interface: ""
+          facts: "{{ unit_facts }}"
+          expect: passed
+        - name: explicit
+          interface: eth9
+          facts: "{{ unit_facts }}"
+          expect: passed
+        - name: no-default-route
+          interface: ""
+          facts: {}
+          expect: failed
+          message: forge_external_interface
+        - name: missing-interface
+          interface: eth8
+          facts: "{{ unit_facts }}"
+          expect: failed
+          message: is not an interface
+        - name: ssh-elsewhere
+          interface: ""
+          facts: "{{ unit_facts | combine({'env': {'SSH_CONNECTION': '198.51.100.1 50000 10.8.0.1 22'}}) }}"
+          expect: failed
+          message: locked out
+        - name: ssh-loopback
+          interface: ""
+          facts: "{{ unit_facts | combine({'env': {'SSH_CONNECTION': '127.0.0.1 50000 127.0.0.1 22'}}) }}"
+          expect: passed
+      loop_control:
+        loop_var: unit_case
+        label: "{{ unit_case.name }}"
+      vars:
+        # A host with its default route on eth9 and a VPN on wg0; Ansible's
+        # session arrives on eth9's address unless a case says otherwise.
+        unit_facts:
+          default_ipv4: {interface: eth9, address: 192.0.2.10}
+          interfaces: [lo, eth9, wg0]
+          eth9:
+            ipv4: {address: 192.0.2.10}
+            ipv6: [{address: "2001:db8::10"}]
+          wg0:
+            ipv4: {address: 10.8.0.1}
+          env: {SSH_CONNECTION: "198.51.100.1 50000 192.0.2.10 22"}
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent

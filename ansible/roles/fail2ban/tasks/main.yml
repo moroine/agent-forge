@@ -1,0 +1,36 @@
+---
+- name: Run fail2ban (public and lan)
+  when: forge_exposure != 'local'
+  block:
+    - name: Install fail2ban
+      ansible.builtin.apt:
+        name: fail2ban
+        state: present
+
+    - name: Configure the sshd jail
+      ansible.builtin.template:
+        src: agent-forge.local.j2
+        dest: /etc/fail2ban/jail.d/agent-forge.local
+        mode: "0644"
+        owner: root
+        group: root
+      notify: Restart fail2ban
+
+    - name: Start fail2ban, now and at boot
+      ansible.builtin.systemd_service:
+        name: fail2ban
+        enabled: true
+        state: started
+
+- name: Keep fail2ban off with local (it would ban Lima's gateway)
+  when: forge_exposure == 'local'
+  block:
+    - name: Read the services
+      ansible.builtin.service_facts:
+
+    - name: Stop and disable fail2ban
+      ansible.builtin.systemd_service:
+        name: fail2ban
+        enabled: false
+        state: stopped
+      when: "'fail2ban.service' in ansible_facts.services"

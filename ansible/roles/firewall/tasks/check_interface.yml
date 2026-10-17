@@ -1,0 +1,38 @@
+---
+# The firewall accepts SSH on the external interface only: check it names a
+# real interface, and that Ansible's own session arrives through it, before
+# anything changes on the host (preflight runs this). Otherwise the next run
+# would be locked out.
+- name: Check the external interface is known
+  ansible.builtin.assert:
+    that:
+      - firewall_external_interface | length > 0
+    fail_msg: >-
+      The host has no default IPv4 route, so the firewall cannot tell which
+      interface SSH arrives on: set forge_external_interface.
+    quiet: true
+
+- name: Check the external interface exists
+  ansible.builtin.assert:
+    that:
+      - firewall_external_interface in (firewall_host_facts.interfaces | default([]))
+    fail_msg: >-
+      forge_external_interface ({{ firewall_external_interface }}) is not an
+      interface of this host ({{ firewall_host_facts.interfaces | default([]) | join(', ') }}).
+    quiet: true
+
+- name: Check Ansible's SSH session arrives on the external interface
+  ansible.builtin.assert:
+    that:
+      - firewall_ssh_server_address in firewall_external_addresses
+    fail_msg: >-
+      Ansible's SSH session arrives on {{ firewall_ssh_server_address }}, which
+      is not an address of {{ firewall_external_interface }}
+      ({{ firewall_external_addresses | join(', ') }}). The firewall accepts SSH
+      on that interface only, so the next run would be locked out. Connect
+      through one of its addresses, or set forge_external_interface.
+    quiet: true
+  # Loopback is always accepted (iif lo); no SSH_CONNECTION, nothing to check.
+  when:
+    - firewall_ssh_server_address | length > 0
+    - firewall_ssh_server_address not in ['127.0.0.1', '::1']

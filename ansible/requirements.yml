@@ -1,0 +1,11 @@
+---
+# Controller-side collections for site.yml (sub-project 1), pinned so that a
+# run is reproducible. Runtime image builds (sub-project 2) do not use this
+# file: they rely on Ubuntu's `ansible` package on the host.
+collections:
+  - name: devsec.hardening
+    version: "11.0.0"   # first release that lists Ubuntu 26.04
+  - name: community.general
+    version: "13.5.0"
+  - name: ansible.posix
+    version: "2.2.2"

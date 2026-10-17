@@ -1,0 +1,26 @@
+---
+# Picks the port Ansible connects to. An explicit ansible_port (Lima's
+# forwarded port, for instance) is used as is. Otherwise, when forge_ssh_port
+# is not 22, Ansible tries a real, authenticated login there and falls back to
+# 22, where sshd still listens before the first run moves it. It must be a
+# real login: a bare TCP connect that closes before the SSH banner counts as a
+# failure in fail2ban's aggressive mode (exposure public), and a few runs
+# would ban the controller. A closed port leaves no trace in sshd's log.
+- name: Remember whether the inventory sets ansible_port
+  ansible.builtin.set_fact:
+    forge_preflight_port_given: "{{ ansible_port is defined }}"
+
+- name: Try an authenticated login on forge_ssh_port
+  ansible.builtin.ping:
+  vars:
+    ansible_port: "{{ forge_ssh_port }}"
+  register: forge_preflight_probe
+  ignore_unreachable: true
+  when:
+    - not forge_preflight_port_given
+    - forge_ssh_port | int != 22
+
+- name: Connect on forge_ssh_port, or on 22 while sshd has not moved yet
+  ansible.builtin.set_fact:
+    ansible_port: "{{ 22 if (forge_preflight_probe.unreachable | default(false)) else forge_ssh_port }}"
+  when: not forge_preflight_port_given

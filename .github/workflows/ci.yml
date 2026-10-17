@@ -1,0 +1,55 @@
+# Light CI: the CLI's tests and type check, ansible-lint, and the host
+# playbook's controller-only unit tests. The playbook's real test is
+# ansible/tests/vm-test.sh, run on a host with KVM (not in CI).
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [next, main]
+
+permissions:
+  contents: read
+
+jobs:
+  cli:
+    runs-on: ubuntu-26.04
+    # The contract tests commit in throwaway repositories, and the runner's
+    # account has no name git can use as an identity.
+    env:
+      GIT_AUTHOR_NAME: agent-forge CI
+      GIT_AUTHOR_EMAIL: ci@agent-forge.invalid
+      GIT_COMMITTER_NAME: agent-forge CI
+      GIT_COMMITTER_EMAIL: ci@agent-forge.invalid
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # tmux: the contract tests use a real server (until sub-project 4
+      # removes tmux); jq: tests/test-pre-bash.sh.
+      - name: Install the test tools
+        run: sudo apt-get update && sudo apt-get install -y tmux jq
+      - run: npm ci
+      - run: npm test
+      - run: npm run check
+
+  ansible-lint:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: ansible/ansible-lint@9bce2bfb8f4a984e6b13767bc0d6bf0a49492164 # v26.10.1
+        with:
+          args: ansible/
+          requirements_file: ansible/requirements.yml
+
+  ansible-unit:
+    runs-on: ubuntu-26.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install ansible-core
+        run: |
+          sudo apt-get update && sudo apt-get install -y pipx
+          pipx install 'ansible-core>=2.20,<2.21'
+      - name: Run the controller-only unit tests
+        run: ansible-playbook -i ansible/tests/unit-inventory.yml ansible/tests/unit.yml

@@ -1,0 +1,22 @@
+---
+- name: Run the key check for {{ unit_case.name }}
+  block:
+    - name: Include the key check for {{ unit_case.name }}
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/base/tasks/check_key.yml"
+      vars:
+        base_apt_repo_name: unit
+        base_apt_repo_fingerprint: 4EFC590696CB15B87C73A3AD82CC8797C838DCFD
+        base_apt_repo_gpg: {stdout_lines: "{{ unit_case.lines }}"}
+    - name: Record that it passed for {{ unit_case.name }}
+      ansible.builtin.set_fact:
+        unit_key_outcome: passed
+  rescue:
+    - name: Record that it failed for {{ unit_case.name }}
+      ansible.builtin.set_fact:
+        unit_key_outcome: failed
+
+- name: Check the key outcome for {{ unit_case.name }}
+  ansible.builtin.assert:
+    that:
+      - unit_key_outcome == unit_case.expect
+    fail_msg: "Case {{ unit_case.name }}: expected {{ unit_case.expect }}, got {{ unit_key_outcome }}"

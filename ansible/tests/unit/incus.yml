@@ -1,0 +1,106 @@
+---
+- name: Incus pool sizing and preseed
+  hosts: render
+  gather_facts: false
+  vars:
+    unit_gib: 1073741824
+  # vars_files, not include_vars: its lower precedence lets each case's task
+  # vars (incus_mounts, forge_incus_storage_*) win over the role's defaults.
+  vars_files:
+    - ../../roles/incus/defaults/main.yml
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render and check each preseed case
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/tasks/incus_case.yml"
+      loop:
+        - name: auto-root
+          mounts: [{mount: /, size_available: "{{ 100 * unit_gib }}"}]
+          size: ""
+          source: ""
+          expect: {size: 80GiB}
+        - name: auto-var
+          mounts:
+            - {mount: /, size_available: "{{ 10 * unit_gib }}"}
+            - {mount: /var, size_available: "{{ 50 * unit_gib }}"}
+            - {mount: /boot, size_available: "{{ 1 * unit_gib }}"}
+          size: ""
+          source: ""
+          expect: {size: 40GiB}
+        - name: explicit
+          mounts: [{mount: /, size_available: "{{ 100 * unit_gib }}"}]
+          size: 200GiB
+          source: ""
+          expect: {size: 200GiB}
+        - name: device
+          mounts: [{mount: /, size_available: "{{ 5 * unit_gib }}"}]
+          size: ""
+          source: /dev/vdb
+          expect: {source: /dev/vdb}
+      loop_control:
+        loop_var: unit_case
+        label: "{{ unit_case.name }}"
+
+    - name: Check the room check passes at exactly 20 GiB (80 % of 25 GiB)
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/incus/tasks/check_room.yml"
+      vars:
+        incus_mounts: [{mount: /, size_available: "{{ 25 * unit_gib }}"}]
+        forge_incus_storage_size: ""
+        forge_incus_storage_source: ""
+
+    - name: Check an explicit size skips the room check on a small disk
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/incus/tasks/check_room.yml"
+      vars:
+        incus_mounts: [{mount: /, size_available: "{{ 5 * unit_gib }}"}]
+        forge_incus_storage_size: 30GiB
+        forge_incus_storage_source: ""
+
+    - name: Check the room check refuses 19 GiB (80 % of 24 GiB)
+      block:
+        - name: Run the room check on a 24 GiB disk
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/incus/tasks/check_room.yml"
+          vars:
+            incus_mounts: [{mount: /, size_available: "{{ 24 * unit_gib }}"}]
+            forge_incus_storage_size: ""
+            forge_incus_storage_source: ""
+        - name: Record that it passed
+          ansible.builtin.set_fact:
+            unit_room_outcome: passed
+      rescue:
+        - name: Record that it failed
+          ansible.builtin.set_fact:
+            unit_room_outcome: failed
+            unit_room_message: "{{ ansible_failed_result.msg }}"
+
+    - name: Check the small disk was refused with a clear message
+      ansible.builtin.assert:
+        that:
+          - unit_room_outcome == 'failed'
+          - "'forge_incus_storage_size' in unit_room_message"
+
+    # A conditional must be a boolean (ansible-core 2.19+): a passwd entry is
+    # a list, so the account check must turn it into true or false.
+    - name: Check the incus account is seen when the package created it
+      ansible.builtin.assert:
+        that:
+          - incus_account_present
+      vars:
+        incus_passwd: {incus: ["x", "996", "996", "", "/var/lib/incus", "/bin/sh"]}
+
+    - name: Check a missing incus account is not seen
+      ansible.builtin.assert:
+        that:
+          - not incus_account_present
+      loop:
+        - {incus: null}
+        - {}
+      vars:
+        incus_passwd: "{{ item }}"
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent

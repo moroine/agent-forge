@@ -1,0 +1,25 @@
+---
+# Interface of the forge bridge, created by `forge setup` (sub-project 2): a
+# constant shared by both sub-projects. Rules match it by name only, never by
+# subnet, so they are valid before the bridge exists.
+firewall_bridge: forgebr0
+# public exposure: new SSH connections allowed per source address.
+firewall_ssh_rate: 10/minute
+firewall_ssh_burst: 5
+# Derived from the forge_* inputs and the host's facts (lazily templated, so
+# the unit tests can pass their own inputs and facts).
+firewall_host_facts: "{{ ansible_facts }}"
+firewall_external_interface: "{{ forge_external_interface or (firewall_host_facts.default_ipv4.interface | default('')) }}"
+# Facts of the external interface (fact names turn "-" and ":" into "_").
+firewall_external_facts: "{{ firewall_host_facts[firewall_external_interface | replace('-', '_') | replace(':', '_')] | default({}) }}"
+firewall_external_addresses: >-
+  {{ ([firewall_external_facts.ipv4.address | default('')]
+      + (firewall_external_facts.ipv4_secondaries | default([]) | map(attribute='address') | list)
+      + (firewall_external_facts.ipv6 | default([]) | map(attribute='address') | list))
+     | select | list }}
+# The host address Ansible's own SSH session arrived on (SSH_CONNECTION is
+# "client_ip client_port server_ip server_port").
+firewall_ssh_server_address: "{{ ((firewall_host_facts.env.SSH_CONNECTION | default('')).split() + ['', '', ''])[2] }}"
+firewall_allowed_v4: "{{ forge_ssh_allowed_sources | reject('search', ':') | list }}"
+firewall_allowed_v6: "{{ forge_ssh_allowed_sources | select('search', ':') | list }}"
+firewall_rate_limit: "{{ forge_exposure == 'public' }}"

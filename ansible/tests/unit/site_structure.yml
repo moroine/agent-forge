@@ -1,0 +1,31 @@
+---
+# Pins how site.yml's provisioning play loads its roles. Handlers run in the
+# order they are loaded, and handlers of roles listed under `roles:` load
+# before those that a role brings in with import_role, such as devsec's
+# "Restart sshd". So `roles:` would load the firewall before sshd moves: if a
+# handler in between failed, the firewall would accept only the new port
+# while sshd stayed on the old one, and the host would be locked out. Ordered
+# import_role tasks put "Restart sshd" right before "Load the host firewall".
+- name: Site playbook structure
+  hosts: render
+  gather_facts: false
+  vars:
+    unit_site: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../site.yml') | from_yaml }}"
+    unit_provision: "{{ unit_site | selectattr('name', 'equalto', 'Provision the host') | first }}"
+  tasks:
+    - name: Check the provisioning play imports its roles in order, as tasks
+      ansible.builtin.assert:
+        that:
+          - "'roles' not in unit_provision"
+          - unit_provision.force_handlers
+          - unit_imported == ['base', 'hardening', 'firewall', 'fail2ban', 'incus', 'forge_users']
+        fail_msg: >-
+          The provisioning play must import base, hardening, firewall, fail2ban,
+          incus and forge_users, in this order, with ansible.builtin.import_role
+          tasks and no roles: section (got {{ unit_provision.roles | default(unit_imported) }}).
+      vars:
+        unit_imported: >-
+          {{ unit_provision.tasks | default([])
+             | map('dict2items') | flatten
+             | selectattr('key', 'equalto', 'ansible.builtin.import_role')
+             | map(attribute='value.name') | list }}

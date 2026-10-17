@@ -1,0 +1,14 @@
+---
+- name: Check there is room for the Incus pool
+  ansible.builtin.assert:
+    that:
+      - >-
+        forge_incus_storage_size | length > 0
+        or forge_incus_storage_source | length > 0
+        or incus_pool_auto_gib | int >= incus_min_pool_gib
+    fail_msg: >-
+      Only {{ incus_pool_auto_gib }} GiB would go to the Incus pool (80 % of
+      the free space under {{ incus_pool_mount.mount }}), and at least
+      {{ incus_min_pool_gib }} GiB are needed. Set forge_incus_storage_size,
+      or forge_incus_storage_source for a dedicated disk.
+    quiet: true

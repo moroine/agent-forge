@@ -1,0 +1,44 @@
+---
+# Adds a signed third-party apt repository. Called from other roles with
+# include_role (tasks_from: apt_repo.yml), with these inputs:
+#   base_apt_repo_name         names /etc/apt/keyrings/<name>.asc and the .sources file
+#   base_apt_repo_key_url      where to fetch the signing key
+#   base_apt_repo_fingerprint  the primary key's fingerprint (40 upper-case hex)
+#   base_apt_repo_uris, base_apt_repo_suites, base_apt_repo_components (lists)
+#   base_apt_repo_architectures (list, optional)
+# The key's fingerprint is checked against the pinned value on every run
+# (tasks/check_key.yml): it must be the file's only primary key.
+- name: Fetch the signing key of {{ base_apt_repo_name }}
+  ansible.builtin.get_url:
+    url: "{{ base_apt_repo_key_url }}"
+    dest: "/etc/apt/keyrings/{{ base_apt_repo_name }}.asc"
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Read the fingerprints of the key of {{ base_apt_repo_name }}
+  ansible.builtin.command:
+    cmd: gpg --batch --show-keys --with-colons "/etc/apt/keyrings/{{ base_apt_repo_name }}.asc"
+  register: base_apt_repo_gpg
+  changed_when: false
+
+- name: Check the key is the pinned one
+  ansible.builtin.include_tasks: check_key.yml
+
+- name: Add the repository {{ base_apt_repo_name }}
+  ansible.builtin.deb822_repository:
+    name: "{{ base_apt_repo_name }}"
+    types: [deb]
+    uris: "{{ base_apt_repo_uris }}"
+    suites: "{{ base_apt_repo_suites }}"
+    components: "{{ base_apt_repo_components }}"
+    architectures: "{{ base_apt_repo_architectures | default(omit) }}"
+    signed_by: "/etc/apt/keyrings/{{ base_apt_repo_name }}.asc"
+  register: base_apt_repo_source
+
+# The caller installs from this repository right after: a handler would
+# refresh the cache too late.
+- name: Refresh the apt cache after adding {{ base_apt_repo_name }}  # noqa: no-handler
+  ansible.builtin.apt:
+    update_cache: true
+  when: base_apt_repo_source is changed

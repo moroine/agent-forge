@@ -1,0 +1,25 @@
+---
+incus_zabbly_key_url: https://pkgs.zabbly.com/key.asc
+incus_zabbly_fingerprint: 4EFC590696CB15B87C73A3AD82CC8797C838DCFD
+incus_zabbly_uri: https://pkgs.zabbly.com/incus/lts-7.0
+# incus-base: the daemon without VM support (no QEMU); it depends on
+# incus-client, the CLI. btrfs-progs is only a Suggests, and the pool is btrfs.
+incus_packages:
+  - incus-base
+  - btrfs-progs
+# Shared with sub-project 2: the forge profile's root disk uses this pool.
+incus_pool_name: default
+incus_min_pool_gib: 20
+incus_pool_ratio: 0.8
+# The pool's loop file lives under /var/lib/incus: size it from the free space
+# of the deepest mount point holding that path. Lazily templated, so the unit
+# tests can pass their own mounts.
+incus_mounts: "{{ ansible_facts.mounts }}"
+incus_pool_mount_candidates: [/, /var, /var/lib, /var/lib/incus]
+incus_pool_mount: "{{ incus_mounts | selectattr('mount', 'in', incus_pool_mount_candidates) | sort(attribute='mount') | last }}"
+incus_pool_auto_gib: "{{ (incus_pool_mount.size_available | int * incus_pool_ratio / 1073741824) | int }}"
+# Whether the package created the incus system account (getent with
+# fail_key false maps a missing account to null). Lazily templated, so the
+# unit tests can pass their own passwd entries.
+incus_passwd: "{{ ansible_facts.getent_passwd | default({}) }}"
+incus_account_present: "{{ incus_passwd.get('incus') is not none }}"

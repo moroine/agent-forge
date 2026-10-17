@@ -1,0 +1,15 @@
+---
+- name: Regenerate forge's bash completion
+  ansible.builtin.command:
+    cmd: /usr/local/bin/forge completion bash
+  register: forge_users_completion
+  changed_when: true
+  notify: Write forge's bash completion
+
+- name: Write forge's bash completion
+  ansible.builtin.copy:
+    content: "{{ forge_users_completion.stdout }}\n"
+    dest: /etc/bash_completion.d/forge
+    mode: "0644"
+    owner: root
+    group: root

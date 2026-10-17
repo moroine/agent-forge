@@ -1,0 +1,21 @@
+# Managed by agent-forge (ansible/roles/incus). Storage only: no network
+# (Incus cannot auto-pick a subnet under Lima, validation spike finding A) and
+# no remote API. `forge setup` owns everything else inside Incus.
+storage_pools:
+  - name: {{ incus_pool_name }}
+    driver: btrfs
+    config:
+{% if forge_incus_storage_source %}
+      source: "{{ forge_incus_storage_source }}"
+{% elif forge_incus_storage_size %}
+      size: "{{ forge_incus_storage_size }}"
+{% else %}
+      size: "{{ incus_pool_auto_gib }}GiB"
+{% endif %}
+profiles:
+  - name: default
+    devices:
+      root:
+        path: /
+        pool: {{ incus_pool_name }}
+        type: disk

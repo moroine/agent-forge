@@ -1,0 +1,26 @@
+---
+- name: Harden the OS with devsec.hardening.os_hardening
+  ansible.builtin.import_role:
+    name: devsec.hardening.os_hardening
+  vars:
+    sysctl_overwrite: "{{ hardening_sysctl_overwrite }}"
+    # UFW is not used: the firewall role runs native nftables.
+    ufw_manage_defaults: false
+    os_users_without_password_ageing: "{{ hardening_users_without_password_ageing }}"
+
+- name: Harden sshd with devsec.hardening.ssh_hardening
+  ansible.builtin.import_role:
+    name: devsec.hardening.ssh_hardening
+  vars:
+    ssh_server_ports: ["{{ forge_ssh_port }}"]
+    ssh_allow_users: "{{ hardening_ssh_allow_users }}"
+    ssh_permit_root_login: "no"
+    ssh_allow_agent_forwarding: false
+    ssh_server_match_user: "{{ hardening_ssh_match_user }}"
+    # devsec does not template this one, and OpenSSH defaults it to yes.
+    sshd_custom_options:
+      - AllowStreamLocalForwarding no
+    # Keep Ubuntu's ed25519 host key. Otherwise devsec regenerates the RSA key
+    # (Ubuntu's is 3072 bits, devsec wants 4096) and clients see a new key.
+    ssh_host_key_files:
+      - /etc/ssh/ssh_host_ed25519_key

@@ -1,0 +1,24 @@
+---
+- name: Run the interface check for {{ unit_case.name }}
+  block:
+    - name: Include the interface check for {{ unit_case.name }}
+      ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/firewall/tasks/check_interface.yml"
+      vars:
+        forge_external_interface: "{{ unit_case.interface }}"
+        firewall_host_facts: "{{ unit_case.facts }}"
+    - name: Record that it passed for {{ unit_case.name }}
+      ansible.builtin.set_fact:
+        unit_interface_outcome: passed
+        unit_interface_message: ""
+  rescue:
+    - name: Record that it failed for {{ unit_case.name }}
+      ansible.builtin.set_fact:
+        unit_interface_outcome: failed
+        unit_interface_message: "{{ ansible_failed_result.msg }}"
+
+- name: Check the interface outcome for {{ unit_case.name }}
+  ansible.builtin.assert:
+    that:
+      - unit_interface_outcome == unit_case.expect
+      - unit_case.expect == 'passed' or unit_case.message in unit_interface_message
+    fail_msg: "Case {{ unit_case.name }}: expected {{ unit_case.expect }}, got {{ unit_interface_outcome }}: {{ unit_interface_message }}"

@@ -1,0 +1,125 @@
+---
+# Inventory of the controller-only unit tests (ansible/tests/unit.yml). Every
+# host is the local machine; each one is a test case with its own variables,
+# so facts set by one case never leak into another.
+all:
+  vars:
+    ansible_connection: local
+    ansible_python_interpreter: "{{ ansible_playbook_python }}"
+  children:
+    render:
+      hosts:
+        render_local: {}
+    preflight_cases:
+      vars:
+        unit_alice:
+          name: alice
+          ssh_keys: ["ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIUnitTestOnly alice@test"]
+      hosts:
+        preflight_valid:
+          ansible_user: ubuntu
+          forge_exposure: public
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: passed
+        preflight_root_admin:
+          ansible_user: root
+          forge_exposure: public
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: failed
+          unit_expect_message: not root
+        preflight_bad_exposure:
+          ansible_user: ubuntu
+          forge_exposure: cloud
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: failed
+          unit_expect_message: forge_exposure
+        preflight_no_exposure:
+          ansible_user: ubuntu
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: failed
+          unit_expect_message: forge_exposure
+        preflight_two_users:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}", {name: bob, ssh_keys: ["ssh-ed25519 AAAA bob@test"]}]
+          unit_expect: failed
+          unit_expect_message: exactly one
+        preflight_user_is_admin:
+          ansible_user: alice
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: failed
+          unit_expect_message: different from ansible_user
+        preflight_no_keys:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: [{name: alice, ssh_keys: []}]
+          unit_expect: failed
+          unit_expect_message: ssh_keys
+        preflight_bad_port:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_ssh_port: 70000
+          unit_expect: failed
+          unit_expect_message: forge_ssh_port
+        preflight_no_admin:
+          forge_exposure: public
+          forge_users: ["{{ unit_alice }}"]
+          unit_expect: failed
+          unit_expect_message: Set ansible_user
+        preflight_keys_not_list:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: [{name: alice, ssh_keys: "ssh-ed25519 AAAA alice@test"}]
+          unit_expect: failed
+          unit_expect_message: ssh_keys
+        preflight_pool_both:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_incus_storage_size: 100GiB
+          forge_incus_storage_source: /dev/vdb
+          unit_expect: failed
+          unit_expect_message: not both
+        preflight_pool_bare_number:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_incus_storage_size: 100
+          unit_expect: failed
+          unit_expect_message: forge_incus_storage_size
+        preflight_pool_size_ok:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_incus_storage_size: 100GiB
+          unit_expect: passed
+        preflight_sources_not_list:
+          ansible_user: ubuntu
+          forge_exposure: lan
+          forge_users: ["{{ unit_alice }}"]
+          forge_ssh_allowed_sources: 192.0.2.0/24
+          unit_expect: failed
+          unit_expect_message: must be lists
+    port_cases:
+      # The probe is a real SSH login, so these cases use the ssh connection
+      # (to the local machine, on ports where nothing listens).
+      vars:
+        ansible_connection: ssh
+        ansible_host: 127.0.0.1
+        ansible_user: unit
+      hosts:
+        port_explicit:
+          ansible_port: 60022
+          forge_ssh_port: 2222
+          unit_expect_port: 60022
+          unit_expect_probe: skipped
+        port_closed:
+          forge_ssh_port: 1
+          unit_expect_port: 22
+          unit_expect_probe: unreachable
+        port_default:
+          forge_ssh_port: 22
+          unit_expect_port: 22
+          unit_expect_probe: skipped

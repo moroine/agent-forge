@@ -1,0 +1,20 @@
+---
+- name: Gather the target's facts
+  ansible.builtin.setup:
+
+- name: Check the target is Ubuntu 26.04
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.distribution == 'Ubuntu'
+      - ansible_facts.distribution_release == 'resolute'
+    fail_msg: >-
+      The host must run Ubuntu 26.04 LTS (found {{ ansible_facts.distribution }}
+      {{ ansible_facts.distribution_version }}).
+    quiet: true
+
+# Before anything changes on the host: SSH must arrive on the interface the
+# firewall will open it on.
+- name: Check the firewall's external interface
+  ansible.builtin.include_role:
+    name: firewall
+    tasks_from: check_interface.yml

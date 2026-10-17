@@ -1,0 +1,19 @@
+---
+# Checks the controller: a recent enough ansible-core, and a git checkout of
+# the repository (forge is deployed from its HEAD by the forge_users role).
+- name: Check the controller's ansible-core version
+  ansible.builtin.assert:
+    that:
+      - ansible_version.full is version('2.20', '>=')
+    fail_msg: "ansible-core 2.20 or newer is required on the controller (found {{ ansible_version.full }})."
+    quiet: true
+  run_once: true
+
+# A read-only git query: the git module only clones and updates.
+- name: Check the playbook runs from a git checkout  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ playbook_dir | dirname }}" rev-parse --show-toplevel
+  delegate_to: localhost
+  become: false
+  run_once: true
+  changed_when: false

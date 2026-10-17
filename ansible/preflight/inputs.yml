@@ -1,0 +1,98 @@
+---
+# Validates the inventory's user-facing variables and normalizes the optional
+# ones to their defaults, as facts. Every forge_* variable the roles read is
+# listed here: this file is the single reference for their defaults.
+- name: Normalize the optional variables to their defaults
+  ansible.builtin.set_fact:
+    forge_ssh_port: "{{ forge_ssh_port | default(22) | int }}"
+    forge_ssh_allowed_sources: "{{ forge_ssh_allowed_sources | default([]) }}"
+    forge_external_interface: "{{ forge_external_interface | default('') }}"
+    forge_incus_storage_size: "{{ forge_incus_storage_size | default('') | string }}"
+    forge_incus_storage_source: "{{ forge_incus_storage_source | default('') | string }}"
+    forge_fail2ban_ignoreip: "{{ forge_fail2ban_ignoreip | default([]) }}"
+    # No fallback to the controller's $USER or ~/.ssh/config: AllowUsers is
+    # built from this name, and a wrong one locks the real admin out.
+    forge_admin_user: "{{ ansible_user | default('') }}"
+
+- name: Check forge_exposure
+  ansible.builtin.assert:
+    that:
+      - forge_exposure is defined
+      - forge_exposure in ['public', 'lan', 'local']
+    fail_msg: "forge_exposure must be public, lan or local (got: {{ forge_exposure | default('nothing') }})."
+    quiet: true
+
+- name: Check the admin account is named
+  ansible.builtin.assert:
+    that:
+      - forge_admin_user | length > 0
+    fail_msg: >-
+      Set ansible_user to the machine's sudo account in the inventory: sshd's
+      AllowUsers is built from it, so it must be the account Ansible logs in as.
+    quiet: true
+
+- name: Check the admin account is not root
+  ansible.builtin.assert:
+    that:
+      - forge_admin_user != 'root'
+    fail_msg: >-
+      ansible_user must be the machine's sudo account, not root: the playbook
+      sets PermitRootLogin no, which would lock the next run out.
+    quiet: true
+
+- name: Check forge_users
+  ansible.builtin.assert:
+    that:
+      - forge_users is defined
+      - forge_users is sequence
+      - forge_users is not string
+      - forge_users | length == 1
+    fail_msg: >-
+      forge_users must list exactly one user in v2.0: several forge users
+      would share one Incus project and bridge.
+    quiet: true
+
+- name: Check the forge user
+  ansible.builtin.assert:
+    that:
+      - forge_users[0].name is defined
+      - forge_users[0].name is match('^[a-z_][a-z0-9_-]*$')
+      - forge_users[0].name != forge_admin_user
+      - forge_users[0].ssh_keys | default([]) is sequence
+      - forge_users[0].ssh_keys | default([]) is not string
+      - forge_users[0].ssh_keys | default([]) | length > 0
+    fail_msg: >-
+      forge_users[0] needs a valid name, different from ansible_user
+      ({{ forge_admin_user }}), and ssh_keys as a list of at least one key.
+    quiet: true
+
+- name: Check the optional variables
+  ansible.builtin.assert:
+    that:
+      - forge_ssh_port | int >= 1
+      - forge_ssh_port | int <= 65535
+      - forge_ssh_allowed_sources is sequence
+      - forge_ssh_allowed_sources is not string
+      - forge_fail2ban_ignoreip is sequence
+      - forge_fail2ban_ignoreip is not string
+    fail_msg: >-
+      forge_ssh_port must be 1-65535; forge_ssh_allowed_sources and
+      forge_fail2ban_ignoreip must be lists.
+    quiet: true
+
+- name: Check the Incus pool inputs
+  ansible.builtin.assert:
+    that:
+      - forge_incus_storage_size | length == 0 or forge_incus_storage_source | length == 0
+      - >-
+        forge_incus_storage_size | length == 0
+        or forge_incus_storage_size is match('^[0-9]+(\\.[0-9]+)?(KiB|MiB|GiB|TiB|kB|MB|GB|TB)$')
+    fail_msg: >-
+      Set forge_incus_storage_size (a loop file) or forge_incus_storage_source
+      (a disk), not both; forge_incus_storage_size needs a unit, e.g. "100GiB"
+      (a bare number would mean bytes).
+    quiet: true
+
+- name: Remember the forge user
+  ansible.builtin.set_fact:
+    forge_user: "{{ forge_users[0] }}"

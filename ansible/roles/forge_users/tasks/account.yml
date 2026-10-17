@@ -1,0 +1,42 @@
+---
+- name: Create the forge user
+  ansible.builtin.user:
+    name: "{{ forge_user.name }}"
+    shell: /bin/bash
+    groups: [incus-admin]
+    append: false
+    password: "!"   # locked: SSH keys only
+    create_home: true
+  register: forge_users_account
+
+- name: Restrict the forge user's home to its owner
+  # os_hardening sets existing homes to 0700 on every run. A home created
+  # later with another mode would make the second run report a change.
+  ansible.builtin.file:
+    path: "{{ forge_users_account.home }}"
+    state: directory
+    mode: "0700"
+    owner: "{{ forge_user.name }}"
+    group: "{{ forge_user.name }}"
+
+- name: Install the forge user's SSH keys (the inventory is authoritative)
+  ansible.posix.authorized_key:
+    user: "{{ forge_user.name }}"
+    key: "{{ forge_user.ssh_keys | join('\n') }}"
+    exclusive: true
+
+- name: Put ~/.local/bin on the PATH, non-interactive shells included
+  ansible.builtin.blockinfile:
+    path: "{{ forge_users_account.home }}/.bashrc"
+    insertbefore: BOF
+    marker: "# {mark} agent-forge: ~/.local/bin on PATH"
+    owner: "{{ forge_user.name }}"
+    group: "{{ forge_user.name }}"
+    mode: "0644"
+    block: |
+      # Before Ubuntu's early return for non-interactive shells, so that SSH
+      # commands find what herdr installs in ~/.local/bin.
+      case ":$PATH:" in
+        *":$HOME/.local/bin:"*) ;;
+        *) PATH="$HOME/.local/bin:$PATH" ;;
+      esac

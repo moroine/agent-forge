@@ -1,0 +1,19 @@
+---
+forge_users_install_root: /opt/agent-forge
+# CLI entry point inside a release: scripts/forge today. Sub-project 2 moves
+# the CLI to cli/forge (framing spec layout) and changes this value with it.
+forge_users_cli_entrypoint: scripts/forge
+# The repository root on the controller (site.yml lives in ansible/).
+forge_users_repo_root: "{{ playbook_dir | dirname }}"
+forge_users_nodesource_key_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+forge_users_nodesource_fingerprint: 6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+forge_users_nodesource_uri: https://deb.nodesource.com/node_24.x
+forge_users_claude_key_url: https://downloads.claude.ai/keys/claude-code.asc
+forge_users_claude_fingerprint: 31DDDE24DDFAB679F42D7BD2BAA929FF1A7ECACE
+forge_users_claude_uri: https://downloads.claude.ai/claude-code/apt/stable
+# nodejs from NodeSource (Node 24); claude-code for `claude auth login`;
+# Ubuntu's ansible (with community.general) for `forge image build`.
+forge_users_packages:
+  - nodejs
+  - claude-code
+  - ansible

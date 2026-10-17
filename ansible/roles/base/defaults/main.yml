@@ -1,0 +1,21 @@
+---
+# python3-debian is required by ansible.builtin.deb822_repository; gpg checks
+# the fingerprints of third-party apt keys (tasks/apt_repo.yml).
+base_packages:
+  - git
+  - curl
+  - ca-certificates
+  - gpg
+  - python3-debian
+# Third-party repositories that unattended-upgrades keeps current, matched by
+# host name ("site"): NodeSource's Release file has Origin ". nodistro", so
+# the host name is the one stable key for all three.
+base_unattended_upgrade_sites:
+  - pkgs.zabbly.com
+  - deb.nodesource.com
+  - downloads.claude.ai
+base_sleep_targets:
+  - sleep.target
+  - suspend.target
+  - hibernate.target
+  - hybrid-sleep.target
