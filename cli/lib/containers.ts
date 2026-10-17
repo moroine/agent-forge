@@ -64,7 +64,8 @@ export async function checkNameCollision(ctx: Context, container: string, ownerR
   if (!existing) {
     throw new ForgeError(
       `container ${container} already exists but has no user.forge.repo metadata (a legacy or partially-provisioned container). ` +
-      `Refusing to reuse it — delete it first, or set the metadata manually: incus --project ${forgeProject()} config set ${container} user.forge.repo ${ownerRepo}`,
+      `Refusing to reuse it — delete it first: incus --project ${forgeProject()} delete --force ${container} ` +
+      `(its workspace in ~/workspaces survives the deletion).`,
     );
   }
   if (existing.toLowerCase() !== ownerRepo.toLowerCase()) {

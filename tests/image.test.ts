@@ -188,9 +188,9 @@ test("a degraded instance counts as ready", async () => {
   assert.equal(await run(), 0);
 });
 
-test("an instance that did not boot stops the build", async () => {
-  const { run } = build({ rules: [{ match: "is-system-running", code: 1, stdout: "offline\n" }] });
-  await assert.rejects(run, /did not finish booting \(systemd state: offline\)/);
+test("an instance that did not boot stops the build and is kept", async () => {
+  const { run } = build({ rules: [{ match: "is-system-running", code: 1, stdout: "maintenance\n" }] });
+  await assert.rejects(run, /did not finish booting \(systemd state: maintenance\).*forge-image-build is left for debugging.*the next build removes it/);
 });
 
 test("forge image takes build and nothing else", async () => {

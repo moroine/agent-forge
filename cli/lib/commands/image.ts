@@ -1,7 +1,7 @@
 // forge image build (spec "Image → forge image build"). forge drives the
 // lifecycle (launch, publish, stamp); ansible/image.yml only configures the
 // one instance it is given. Ansible's output streams live, as v1's
-// forge-image.sh did.
+// v1's image script did.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "../context.ts";
@@ -16,6 +16,11 @@ import { PROFILE } from "../objects.ts";
 import { configPath, repoRoot } from "../paths.ts";
 
 // Not "agent-…": `forge list` never shows it.
+// Appended to every failure after the launch: the instance stays for debugging.
+const keptHint = (project: string): string =>
+  `${BUILD_INSTANCE} is left for debugging (incus --project ${project} exec ${BUILD_INSTANCE} -- bash); ` +
+  `the next build removes it. ${BASE_IMAGE} is unchanged.`;
+
 export const BUILD_INSTANCE = "forge-image-build";
 // No cloud-init: with it, every instance would recreate the ubuntu account and
 // its passwordless sudo (spec "Decisions").
@@ -63,16 +68,19 @@ export async function cmdImage(
   ctx.out(`Launching ${BUILD_INSTANCE} from ${SOURCE_IMAGE}...`);
   await mustSucceed(`launch ${BUILD_INSTANCE}`,
     ctx.exec(incus("launch", SOURCE_IMAGE, BUILD_INSTANCE, "--profile", PROFILE)));
-  await waitReady(ctx, BUILD_INSTANCE);
+  try {
+    await waitReady(ctx, BUILD_INSTANCE);
+  } catch (e) {
+    if (!(e instanceof ForgeError)) throw e;
+    throw new ForgeError(`${e.message} ${keptHint(project)}`);
+  }
 
   // 5. Configure. Nothing is written in the repo directory, which is
   // read-only on an Ansible host.
   const code = await ctx.attach(ansibleArgv(project, root));
   if (code !== 0) {
     throw new ForgeError(
-      `ansible-playbook failed (exit code ${code}). ${BUILD_INSTANCE} is left for debugging ` +
-      `(incus --project ${project} exec ${BUILD_INSTANCE} -- bash); the next build removes it. ` +
-      `${BASE_IMAGE} is unchanged.`);
+      `ansible-playbook failed (exit code ${code}). ${keptHint(project)}`);
   }
 
   // 6. Publish. On Incus 7.0, publish --reuse already removes the image that

@@ -26,7 +26,7 @@ export const PROJECT_FEATURES: Record<string, string> = {
   "features.networks": "false",
 };
 
-// v1's capability drops (config/lxd-agent-profile.yaml), unchanged. Defense
+// v1's capability drops (former config/lxd-agent-profile.yaml), unchanged. Defense
 // in depth only: aiuser holds no capabilities.
 export const RAW_LXC = [
   "lxc.cap.drop = sys_module sys_rawio sys_boot sys_ptrace sys_pacct",

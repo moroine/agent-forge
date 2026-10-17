@@ -142,8 +142,8 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
 
 // Sondes : un code non nul veut dire « pas réglé ».
 async function hostGitIdentity(ctx: Context): Promise<{ name: string; email: string }> {
-  const name = (await ctx.exec(["git", "config", "--global", "user.name"])).stdout.trim();
-  const email = (await ctx.exec(["git", "config", "--global", "user.email"])).stdout.trim();
+  const name = (await ctx.exec(["git", "config", "--global", "--includes", "user.name"])).stdout.trim();
+  const email = (await ctx.exec(["git", "config", "--global", "--includes", "user.email"])).stdout.trim();
   if (!name || !email) {
     throw new ForgeError(
       "the agent commits under your git identity, which is not set on this host. Run:\n" +

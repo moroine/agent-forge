@@ -28,8 +28,8 @@ afterEach(() => {
 const NAME = `Ada O'Brien "$(id)"`;
 const EMAIL = "ada@example.com";
 const IDENTITY: ExecRule[] = [
-  { match: "git config --global user.name", stdout: `${NAME}\n` },
-  { match: "git config --global user.email", stdout: `${EMAIL}\n` },
+  { match: "git config --global --includes user.name", stdout: `${NAME}\n` },
+  { match: "git config --global --includes user.email", stdout: `${EMAIL}\n` },
 ];
 
 function provision(opts: { rules?: ExecRule[]; fake?: FakeIncus } = {}) {
@@ -65,7 +65,7 @@ test("it refuses without host Claude credentials, before creating anything", asy
 });
 
 test("it refuses without a host git identity, with the commands to run", async () => {
-  const { ctx, run } = provision({ rules: [{ match: "git config --global user.email", code: 1 }] });
+  const { ctx, run } = provision({ rules: [{ match: "git config --global --includes user.email", code: 1 }] });
   await assert.rejects(run, (e: Error) => {
     assert.match(e.message, /git config --global user\.name/);
     assert.match(e.message, /git config --global user\.email/);

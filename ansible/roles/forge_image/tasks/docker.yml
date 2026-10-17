@@ -11,7 +11,7 @@
 
 # docker-ce-rootless-extras only ships the wrappers (dockerd-rootless.sh, the
 # setup tool): dockerd and containerd themselves come from docker-ce and
-# containerd.io (v1, forge-image.sh).
+# containerd.io (v1's image script).
 - name: Install Docker and the rootless prerequisites
   ansible.builtin.apt:
     name:
