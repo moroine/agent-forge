@@ -111,7 +111,7 @@ test("forge setup converges, then reports only unchanged", { skip: !ENABLED }, (
   for (const line of lines) assert.match(line, /: unchanged$/, raw("second setup", second));
 });
 
-test("agent-base is available in the test project", { skip: !ENABLED }, (t) => {
+test("agent-base is available in the test project", { skip: !ENABLED }, () => {
   if (BUILD_IMAGE) {
     must("forge image build", forge(PROJECT, ["image", "build"]));
     const head = must("git rev-parse HEAD", run("git", ["rev-parse", "HEAD"])).stdout.trim();
@@ -122,9 +122,9 @@ test("agent-base is available in the test project", { skip: !ENABLED }, (t) => {
   }
   const copy = run("incus", ["image", "copy", "agent-base", "local:", "--project", "agent-forge",
     "--target-project", PROJECT, "--alias", "agent-base"]);
+  // A failed copy fails the run: a run that tests nothing must not look green.
   if (copy.status !== 0) {
-    t.skip(`no agent-base in project agent-forge to copy (run 'forge image build' once, or set FORGE_INTEGRATION_IMAGE=1): ${copy.stderr}`);
-    return;
+    assert.fail(`no agent-base in project agent-forge to copy (run 'forge image build' once, or set FORGE_INTEGRATION_IMAGE=1): ${copy.stderr}`);
   }
   haveImage = true;
 });
@@ -155,8 +155,14 @@ test("network: the bridge, the host's other address and the metadata address do 
   const lan = Object.values(networkInterfaces()).flat()
     .find((i) => i && i.family === "IPv4" && !i.internal && i.address !== bridge)?.address;
   assert.ok(lan, "the test VM has no IPv4 address besides the bridge's");
-  // sshd listens on every host address: without the ACL, both would answer.
-  must("sshd must listen on the host for this test to mean anything", run("bash", ["-c", "ss -ltnH | grep -qE ':22\\b'"]));
+  // Host-side proof that the targets answer without the ACL: sshd listens on
+  // every host address, so without the ACL both would answer the container.
+  for (const host of [bridge, lan]) {
+    must(`host → ${host}:22`, run("bash", ["-c", `timeout 5 bash -c '</dev/tcp/${host}/22'`]));
+  }
+  // Positive control: the same probe from the container reaches the internet,
+  // so a broken probe (no timeout, no /dev/tcp) cannot pass the denials below.
+  must("positive control: the same probe reaches example.com:443 from the container", connect("example.com", 443));
   for (const [host, port] of [[bridge, 22], [lan, 22], ["169.254.169.254", 80]] as [string, number][]) {
     const r = connect(host, port);
     assert.notEqual(r.status, 0, raw(`${host}:${port} answered from the container`, r));
