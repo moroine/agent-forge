@@ -538,6 +538,9 @@ Then create the next branch from the current one.
     6. `attachTask`.
   - **`forge.ts`:** `case "attach": return cmdAttach(ctx, a, b);`.
   - **Callers of the old `attachArgv`** (`start.ts`, `resume.ts`) call `attachTask` for now. Task 8 replaces those calls.
+  - **Contract with sub-project 3** (its plan `docs/superpowers/plans/2026-10-18-v2-egress-allowlist.md`, Task 8). It applies if `cli/lib/strict.ts` exists on the base branch when this task runs; otherwise sub-project 3 adds these lines when it lands second.
+    - **`ensureRunning`** begins with `await egressBeforeStart(ctx, container)`, before any `incus start`, even when the container already runs. A too-old Incus is then refused before the container starts.
+    - **`attachTask`** begins with `await egressAfterStart(ctx, container, await egressMode(ctx, container))`. `egressMode` is read-only: it reads `user.forge.egress`.
 
 - [ ] **Step 4: Run them to verify they pass**
 
