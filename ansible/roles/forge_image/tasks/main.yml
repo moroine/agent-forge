@@ -25,3 +25,12 @@
 
 - name: Install Docker
   ansible.builtin.import_tasks: docker.yml
+
+- name: Create aiuser and its directories
+  ansible.builtin.import_tasks: aiuser.yml
+
+- name: Set up rootless Docker for aiuser
+  ansible.builtin.import_tasks: rootless_docker.yml
+
+- name: Verify the image
+  ansible.builtin.import_tasks: verify.yml

@@ -1,0 +1,40 @@
+---
+# useradd gave aiuser a subordinate range of its own; a second, overlapping
+# one would make newuidmap reject the mapping (v1). Replace it with a known
+# range.
+- name: Set aiuser's subordinate UIDs and GIDs
+  ansible.builtin.lineinfile:
+    path: "/etc/{{ item }}"
+    regexp: "^aiuser:"
+    line: "aiuser:{{ forge_image_subid_start }}:{{ forge_image_subid_count }}"
+    mode: "0644"
+  loop:
+    - subuid
+    - subgid
+
+- name: Keep aiuser's systemd user instance running without a login
+  ansible.builtin.command:
+    cmd: loginctl enable-linger aiuser
+    creates: /var/lib/systemd/linger/aiuser
+
+# `su -` opens a PAM session, which gives the setup tool and systemctl --user
+# their XDG_RUNTIME_DIR. Ansible's become is not used: Ubuntu's
+# community.general 12.1 predates the fix for become methods that need a tty.
+- name: Install rootless Docker for aiuser
+  ansible.builtin.command:
+    cmd: su - aiuser -c 'dockerd-rootless-setuptool.sh install --skip-iptables'
+    creates: /home/aiuser/.config/systemd/user/docker.service
+
+- name: Start aiuser's rootless Docker daemon at boot
+  ansible.builtin.command:
+    cmd: su - aiuser -c 'systemctl --user enable docker'
+    creates: /home/aiuser/.config/systemd/user/default.target.wants/docker.service
+
+- name: Point aiuser's shells at the rootless daemon
+  ansible.builtin.lineinfile:
+    path: /home/aiuser/.bashrc
+    line: "export DOCKER_HOST=unix:///run/user/{{ forge_image_aiuser_uid }}/docker.sock"
+    owner: aiuser
+    group: aiuser
+    mode: "0644"
+    create: true
