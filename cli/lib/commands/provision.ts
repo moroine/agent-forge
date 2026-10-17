@@ -180,7 +180,11 @@ async function requireHookBlocks(ctx: Context, container: string): Promise<void>
   ctx.out("Checking that the security hook guards the agent...");
   const rebuild = "Rebuild the image ('forge image build'), then delete " +
     `${container} and start the task again.`;
-  const detail = (r: ExecResult) => (r.stderr.trim() ? `: ${r.stderr.trim()}` : "");
+  // Le hook termine ses phrases par un point : on le retire avant d'enchaîner.
+  const detail = (r: ExecResult) => {
+    const stderr = r.stderr.trim().replace(/\.+$/, "");
+    return stderr ? `: ${stderr}` : "";
+  };
 
   const deny = await execAsAgentArgv(ctx, container, ["bash", "-c", hookProbe("sudo true # forge-hook-probe-deny")]);
   if (deny.code !== 2) {
