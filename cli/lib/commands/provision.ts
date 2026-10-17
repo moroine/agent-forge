@@ -178,8 +178,11 @@ const hookProbe = (command: string) =>
 
 async function requireHookBlocks(ctx: Context, container: string): Promise<void> {
   ctx.out("Checking that the security hook guards the agent...");
-  const rebuild = "Rebuild the image ('forge image build'), then delete " +
-    `${container} and start the task again.`;
+  // Le container s'arrête avant ses métadonnées forge : `forge delete` ne le
+  // trouve pas, d'où la commande incus exacte.
+  const rebuild = "Rebuild the image ('forge image build'), remove this container with " +
+    `'incus --project ${forgeProject()} delete --force ${container}' (its workspace survives), ` +
+    "then start the task again.";
   // Le hook termine ses phrases par un point : on le retire avant d'enchaîner.
   const detail = (r: ExecResult) => {
     const stderr = r.stderr.trim().replace(/\.+$/, "");
