@@ -83,6 +83,9 @@ function parseBody(input: string | undefined): Parsed {
 
 export class FakeIncus {
   readonly calls: FakeCall[] = [];
+  // Incus 7.0.1 removes the image that held the alias on `publish --reuse`; set to
+  // true to model an Incus that keeps it.
+  publishReuseKeepsOld = false;
   readonly projects = new Map<string, ProjectState>([
     ["default", { name: "default", description: "Default Incus project", config: {} }],
   ]);
@@ -320,6 +323,10 @@ export class FakeIncus {
       holder.aliases = holder.aliases.filter((a) => a.name !== alias);
     }
     const fingerprint = this.addImage(p, alias);
+    if (holder && !this.publishReuseKeepsOld && holder.aliases.length === 0) {
+      const images = this.images.get(p)!;
+      images.splice(images.indexOf(holder), 1);
+    }
     return ok(`Instance published with fingerprint: ${fingerprint}\n`);
   }
 

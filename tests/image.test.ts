@@ -42,7 +42,9 @@ function build(opts: { fake?: FakeIncus; rules?: ExecRule[]; attachCode?: number
 const flat = (ctx: ReturnType<typeof fakeContext>) => ctx.calls.map((c) => c.join(" "));
 
 test("the build runs its steps in the spec's order", async () => {
-  const { ctx, run } = build();
+  const fake = FakeIncus.withRuntime({ commit: "OLD" });
+  fake.publishReuseKeepsOld = true;
+  const { ctx, run } = build({ fake });
   assert.equal(await run(), 0);
   const calls = flat(ctx);
   const at = (s: string) => {
@@ -75,12 +77,24 @@ test("the new image carries the alias and the commit; the old one and the instan
 });
 
 test("the old image is deleted only after the new one is published and stamped", async () => {
-  const { ctx, run } = build();
+  const fake = FakeIncus.withRuntime({ commit: "OLD" });
+  fake.publishReuseKeepsOld = true;
+  const { ctx, run } = build({ fake });
   await run();
   const calls = flat(ctx);
   const deleted = calls.findIndex((l) => l.includes("image delete"));
   assert.ok(deleted > calls.findIndex((l) => l.includes(" publish ")));
   assert.ok(deleted > calls.findIndex((l) => l.includes("set-property")));
+});
+
+test("with Incus removing the old image on --reuse, no explicit delete is issued and the build succeeds", async () => {
+  const { fake, ctx, run } = build();
+  assert.equal(await run(), 0);
+  const images = fake.images.get("agent-forge")!;
+  assert.equal(images.length, 1);
+  assert.equal(images[0].properties["user.forge.commit"], SHA);
+  assert.ok(!flat(ctx).some((l) => l.includes("image delete")));
+  assert.equal(fake.instances.get("agent-forge")!.has("forge-image-build"), false);
 });
 
 test("a first build deletes no image", async () => {

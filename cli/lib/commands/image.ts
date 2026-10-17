@@ -10,7 +10,7 @@ import { loadConfig } from "../config.ts";
 import { BASE_IMAGE } from "../containers.ts";
 import { checkHost, checkIpForward, checkStoragePool, type ProcPaths } from "../host.ts";
 import {
-  deleteInstance, forgeProject, imageFingerprint, incus, instanceExists, listObjects, waitReady,
+  deleteInstance, forgeProject, imageExists, imageFingerprint, incus, instanceExists, listObjects, waitReady,
 } from "../incus.ts";
 import { PROFILE } from "../objects.ts";
 import { configPath, repoRoot } from "../paths.ts";
@@ -75,8 +75,10 @@ export async function cmdImage(
       `${BASE_IMAGE} is unchanged.`);
   }
 
-  // 6. Publish. The previous image goes only once the new one carries the
-  // alias and the stamp: an agent-base exists at every moment.
+  // 6. Publish. On Incus 7.0, publish --reuse already removes the image that
+  // held the alias; the probe below covers an Incus that keeps it. Either way
+  // the previous image goes only once the new one carries the alias and the
+  // stamp, so an agent-base exists at every moment.
   const previous = await imageFingerprint(ctx, BASE_IMAGE);
   await mustSucceed(`stop ${BUILD_INSTANCE}`, ctx.exec(incus("stop", BUILD_INSTANCE)));
   await mustSucceed(`publish ${BASE_IMAGE}`,
@@ -84,7 +86,7 @@ export async function cmdImage(
   await mustSucceed(`stamp ${BASE_IMAGE}`,
     ctx.exec(incus("image", "set-property", BASE_IMAGE, "user.forge.commit", commit)));
   const current = await imageFingerprint(ctx, BASE_IMAGE);
-  if (previous && previous !== current) {
+  if (previous && previous !== current && (await imageExists(ctx, previous))) {
     await mustSucceed(`delete the previous ${BASE_IMAGE}`, ctx.exec(incus("image", "delete", previous)));
   }
   await mustSucceed(`delete ${BUILD_INSTANCE}`, deleteInstance(ctx, BUILD_INSTANCE));

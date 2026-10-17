@@ -74,8 +74,18 @@ test("network list includes the host's unmanaged interfaces", () => {
   assert.ok(listed.some((n: { name: string; managed: boolean }) => n.name === "eth0" && !n.managed));
 });
 
-test("publish --reuse moves the alias to a new image and keeps the old one", () => {
+test("publish --reuse moves the alias to a new image and removes the old one", () => {
   const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "b", { status: "Stopped" });
+  const before = fake.findImage("agent-forge", "agent-base")!.fingerprint;
+  assert.equal(fake.run([...P, "publish", "b", "--alias", "agent-base", "--reuse"]).code, 0);
+  assert.equal(fake.images.get("agent-forge")!.length, 1);
+  assert.notEqual(fake.findImage("agent-forge", "agent-base")!.fingerprint, before);
+});
+
+test("publish --reuse keeps the old image when publishReuseKeepsOld is set", () => {
+  const fake = FakeIncus.withRuntime();
+  fake.publishReuseKeepsOld = true;
   fake.addInstance("agent-forge", "b", { status: "Stopped" });
   const before = fake.findImage("agent-forge", "agent-base")!.fingerprint;
   assert.equal(fake.run([...P, "publish", "b", "--alias", "agent-base", "--reuse"]).code, 0);
