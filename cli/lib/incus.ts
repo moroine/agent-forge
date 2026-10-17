@@ -126,3 +126,49 @@ export async function storagePoolExists(ctx: Context, name: string): Promise<boo
     return false;
   }
 }
+
+// Les objets que `forge setup` possède. Les réseaux et les ACL passent aussi
+// par --project : avec features.networks=false, Incus les résout dans
+// `default`, et un utilisateur restreint (B) ne peut pas forcément nommer ce
+// projet-là. Les projets, eux, sont globaux.
+export type ObjectKind = "project" | "network" | "network acl" | "profile";
+
+export type IncusObject = {
+  name: string;
+  description?: string;
+  config?: Record<string, string>;
+  devices?: Record<string, Record<string, string>>;
+  ingress?: Record<string, string>[];
+  egress?: Record<string, string>[];
+};
+
+function objectArgv(kind: ObjectKind, ...args: string[]): string[] {
+  const words = kind.split(" ");
+  return kind === "project" ? ["incus", ...words, ...args] : incus(...words, ...args);
+}
+
+// Sonde : une liste en échec ou illisible vaut « aucun objet ». La création
+// qui suit échoue alors avec le message d'Incus, remonté par mustSucceed.
+export async function listObjects(ctx: Context, kind: ObjectKind): Promise<IncusObject[]> {
+  const r = await ctx.exec(objectArgv(kind, "list", "-f", "json"));
+  if (r.code !== 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(r.stdout);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((o): o is IncusObject =>
+      typeof o === "object" && o !== null && typeof (o as IncusObject).name === "string");
+  } catch {
+    return [];
+  }
+}
+
+// L'objet entier passe sur stdin, en JSON (YAML 1.2 en est un sur-ensemble).
+// Jamais via ctx.attach : `create`/`edit` lisent stdin dès qu'il n'est pas un
+// terminal, et un stdin vide remplacerait l'objet par un objet vide.
+export function createObject(ctx: Context, kind: ObjectKind, name: string, body: object): Promise<ExecResult> {
+  return ctx.exec(objectArgv(kind, "create", name), { input: JSON.stringify(body) });
+}
+
+export function editObject(ctx: Context, kind: ObjectKind, name: string, body: object): Promise<ExecResult> {
+  return ctx.exec(objectArgv(kind, "edit", name), { input: JSON.stringify(body) });
+}
