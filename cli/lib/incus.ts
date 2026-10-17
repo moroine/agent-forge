@@ -100,3 +100,29 @@ export function attachArgv(container: string, task: string, term: string): strin
     `exec bash -lc 'claude --permission-mode auto --remote-control ${container}-${task}'`,
   ];
 }
+
+export type ServerInfo = { environment?: { firewall?: string } };
+
+// `incus query /1.0` rend les infos du serveur en JSON — les mêmes que
+// `incus info`, sans parseur YAML. Niveau hôte : pas de --project.
+export async function serverInfo(ctx: Context): Promise<{ ok: true; info: ServerInfo } | { ok: false; error: string }> {
+  const r = await ctx.exec(["incus", "query", "/1.0"]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || `exit code ${r.code}` };
+  try {
+    return { ok: true, info: JSON.parse(r.stdout) as ServerInfo };
+  } catch {
+    return { ok: false, error: "unreadable answer to incus query /1.0" };
+  }
+}
+
+// Sonde : les pools sont globaux, pas de --project.
+export async function storagePoolExists(ctx: Context, name: string): Promise<boolean> {
+  const r = await ctx.exec(["incus", "storage", "list", "-f", "json"]);
+  if (r.code !== 0) return false;
+  try {
+    const pools: unknown = JSON.parse(r.stdout);
+    return Array.isArray(pools) && pools.some((p) => (p as { name?: unknown })?.name === name);
+  } catch {
+    return false;
+  }
+}
