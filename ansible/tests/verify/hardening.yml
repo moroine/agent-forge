@@ -58,6 +58,31 @@
   register: verify_kill_user_processes
   changed_when: false
 
+# apport rewrites fs.suid_dumpable to 2 when it starts, after systemd-sysctl
+# applied devsec's 0: the hardening did not survive a reboot (found
+# 2026-10-17). This check runs again in "verify after reboot".
+- name: Read fs.suid_dumpable
+  ansible.builtin.command:
+    cmd: sysctl -n fs.suid_dumpable
+  register: verify_suid_dumpable
+  changed_when: false
+
+- name: Read apport's unit state  # noqa: command-instead-of-module (read-only: the module cannot report "masked")
+  ansible.builtin.command:
+    cmd: systemctl is-enabled apport.service
+  register: verify_apport
+  changed_when: false
+  failed_when: false
+
+- name: Check that no setuid program may dump core, and that apport stays off
+  ansible.builtin.assert:
+    that:
+      - verify_suid_dumpable.stdout == '0'
+      - verify_apport.stdout in ['masked', 'not-found'] or verify_apport.rc == 4
+    fail_msg: >-
+      fs.suid_dumpable={{ verify_suid_dumpable.stdout }} (expected 0),
+      apport.service is '{{ verify_apport.stdout }}' (expected masked or absent)
+
 - name: Check the kernel settings, /proc's hidepid and logind
   ansible.builtin.assert:
     that:
