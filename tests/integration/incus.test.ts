@@ -17,6 +17,7 @@ import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { createServer, type AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -178,23 +179,33 @@ test("network: the internet answers and DNS works", { skip: !ENABLED }, (t) => {
   must("DNS from the container", incus(PROJECT, ["exec", c1, "--", "getent", "hosts", "example.com"]));
 });
 
-test("network: the bridge, the host's other address and the metadata address do not answer", { skip: !ENABLED }, (t) => {
+test("network: the bridge, the host's other address and the metadata address do not answer", { skip: !ENABLED }, async (t) => {
   if (!c1) return t.skip("no container");
   const bridge = must("bridge address", incus(PROJECT, ["network", "get", "forgebr0", "ipv4.address"])).stdout.trim().split("/")[0];
   const lan = Object.values(networkInterfaces()).flat()
     .find((i) => i && i.family === "IPv4" && !i.internal && i.address !== bridge)?.address;
   assert.ok(lan, "the test VM has no IPv4 address besides the bridge's");
-  // Host-side proof that the targets answer without the ACL: sshd listens on
-  // every host address, so without the ACL both would answer the container.
-  for (const host of [bridge, lan]) {
-    must(`host → ${host}:22`, run("bash", ["-c", `timeout 5 bash -c '</dev/tcp/${host}/22'`]));
-  }
-  // Positive control: the same probe from the container reaches the internet,
-  // so a broken probe (no timeout, no /dev/tcp) cannot pass the denials below.
-  must("positive control: the same probe reaches example.com:443 from the container", connect("example.com", 443));
-  for (const [host, port] of [[bridge, 22], [lan, 22], ["169.254.169.254", 80]] as [string, number][]) {
-    const r = connect(host, port);
-    assert.notEqual(r.status, 0, raw(`${host}:${port} answered from the container`, r));
+  // The test's own listener on every host address. sshd is no target: the
+  // host playbook moves it off 22 (found on an Ansible-provisioned host,
+  // 2026-10-17). spawnSync blocks the event loop, but the kernel still
+  // completes the handshakes into the listen backlog.
+  const server = createServer((s) => s.destroy());
+  await new Promise<void>((done) => server.listen(0, "0.0.0.0", done));
+  const port = (server.address() as AddressInfo).port;
+  try {
+    // Host-side proof that the targets answer without the ACL.
+    for (const host of [bridge, lan]) {
+      must(`host → ${host}:${port}`, run("bash", ["-c", `timeout 5 bash -c '</dev/tcp/${host}/${port}'`]));
+    }
+    // Positive control: the same probe from the container reaches the internet,
+    // so a broken probe (no timeout, no /dev/tcp) cannot pass the denials below.
+    must("positive control: the same probe reaches example.com:443 from the container", connect("example.com", 443));
+    for (const [host, p] of [[bridge, port], [lan, port], ["169.254.169.254", 80]] as [string, number][]) {
+      const r = connect(host, p);
+      assert.notEqual(r.status, 0, raw(`${host}:${p} answered from the container`, r));
+    }
+  } finally {
+    server.close();
   }
 });
 
