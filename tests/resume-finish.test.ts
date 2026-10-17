@@ -1,12 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { cmdResume } from "../scripts/lib/commands/resume.ts";
-import { cmdFinish } from "../scripts/lib/commands/finish.ts";
+import { cmdResume } from "../cli/lib/commands/resume.ts";
+import { cmdFinish } from "../cli/lib/commands/finish.ts";
 
 const BASE = [
   { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
-  { match: "lxc list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Running" }]) },
+  { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Running" }]) },
   { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\n" },
 ];
 
@@ -92,15 +92,15 @@ test("finish fails when the worktree removal fails, and claims nothing", async (
 test("resume fails when the container refuses to start", async () => {
   const c = fakeContext({
     rules: [
-      { match: "lxc start", code: 1, stderr: "Error: Failed to start device\n" },
+      { match: "incus --project agent-forge start", code: 1, stderr: "Error: Failed to start device\n" },
       { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
-      { match: "lxc list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
+      { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
       { match: "test -e", code: 0 },
     ],
   });
   await assert.rejects(
     () => cmdResume(c, "moroine/agent-forge", "cli"),
-    /lxc start failed: Error: Failed to start device/,
+    /incus start failed: Error: Failed to start device/,
   );
   assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec du démarrage");
 });

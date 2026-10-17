@@ -6,7 +6,7 @@ import { execFileSync } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { parseWorktreeDirs, parseAgentBranches } from "../../scripts/lib/worktrees.ts";
+import { parseWorktreeDirs, parseAgentBranches } from "../../cli/lib/worktrees.ts";
 
 let repo: string;
 const git = (args: string[], cwd = repo) =>

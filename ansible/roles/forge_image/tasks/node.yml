@@ -1,0 +1,33 @@
+---
+- name: Add NodeSource's repository
+  ansible.builtin.deb822_repository:
+    name: nodesource
+    types: [deb]
+    uris: ["https://deb.nodesource.com/node_{{ forge_image_node_major }}.x"]
+    suites: [nodistro]
+    components: [main]
+    signed_by: "{{ forge_image_nodesource_key_url }}"
+
+# Ubuntu 26.04 ships Node 22: NodeSource's nodejs must win whatever the version
+# strings say, as on the host (sub-project 1).
+- name: Prefer NodeSource's nodejs
+  ansible.builtin.copy:
+    dest: /etc/apt/preferences.d/nodesource
+    content: |
+      Package: nodejs
+      Pin: origin deb.nodesource.com
+      Pin-Priority: 600
+    mode: "0644"
+    owner: root
+    group: root
+
+- name: Install Node.js
+  ansible.builtin.apt:
+    name: nodejs
+    state: present
+    update_cache: true
+
+- name: Install pnpm
+  ansible.builtin.command:
+    cmd: npm install -g pnpm
+    creates: /usr/bin/pnpm

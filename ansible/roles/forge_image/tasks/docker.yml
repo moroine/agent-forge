@@ -1,0 +1,38 @@
+---
+- name: Add Docker's repository
+  ansible.builtin.deb822_repository:
+    name: docker
+    types: [deb]
+    uris: ["https://download.docker.com/linux/ubuntu"]
+    suites: [resolute]
+    components: [stable]
+    architectures: ["{{ forge_image_arch.stdout }}"]
+    signed_by: "{{ forge_image_docker_key_url }}"
+
+# docker-ce-rootless-extras only ships the wrappers (dockerd-rootless.sh, the
+# setup tool): dockerd and containerd themselves come from docker-ce and
+# containerd.io (v1's image script).
+- name: Install Docker and the rootless prerequisites
+  ansible.builtin.apt:
+    name:
+      - docker-ce
+      - docker-ce-cli
+      - containerd.io
+      - docker-ce-rootless-extras
+      - docker-compose-plugin
+      - uidmap
+      - dbus-user-session
+    state: present
+    update_cache: true
+
+# Only the binaries matter: a rootful daemon must never run in a container.
+- name: Stop, disable and mask the rootful Docker and containerd units
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    state: stopped
+    enabled: false
+    masked: true
+  loop:
+    - docker.service
+    - docker.socket
+    - containerd.service

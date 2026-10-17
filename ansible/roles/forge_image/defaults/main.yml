@@ -1,0 +1,9 @@
+---
+# Node.js major version, from NodeSource; the host (sub-project 1) runs the
+# same major. Moving to 26 is a change of this value.
+forge_image_node_major: 24
+# aiuser's UID and GID: the profile's raw.idmap maps the forge user onto them.
+forge_image_aiuser_uid: 1001
+# aiuser's subordinate IDs, for rootless Docker.
+forge_image_subid_start: 200000
+forge_image_subid_count: 65536

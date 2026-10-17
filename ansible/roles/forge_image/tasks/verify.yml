@@ -1,0 +1,121 @@
+---
+# The image's smoke test: every check fails the build. It also catches the
+# file transfers community.general 12.1 may fail silently (the copied files
+# are read back), and it proves the host's user-namespace requirement end to
+# end (unshare, Chrome's sandbox, rootless Docker).
+- name: Check that every tool answers
+  ansible.builtin.command:
+    cmd: "{{ item }}"
+  loop:
+    - node --version
+    - pnpm --version
+    - claude --version
+    - google-chrome-stable --version
+    - chrome-devtools-mcp --version
+    - docker --version
+    - docker compose version
+    - git lfs version
+    - tmux -V
+  changed_when: false
+
+- name: Read Node's major version
+  ansible.builtin.command:
+    cmd: node -p "process.versions.node.split('.')[0]"
+  register: forge_image_node_version
+  changed_when: false
+
+- name: Check Node's major version
+  ansible.builtin.assert:
+    that: forge_image_node_version.stdout == (forge_image_node_major | string)
+    fail_msg: "node is {{ forge_image_node_version.stdout }}, expected {{ forge_image_node_major }}"
+    quiet: true
+
+- name: Read the files copied by the role
+  ansible.builtin.command:
+    cmd: >-
+      grep -qx -e 'Pin: origin deb.nodesource.com' -e 'repo_add_once="false"' {{ item }}
+  loop:
+    - /etc/apt/preferences.d/nodesource
+    - /etc/default/google-chrome
+  changed_when: false
+
+# The apt module cannot turn warnings into errors; --error-on=any does.
+- name: Check that apt updates without error or warning (provisioning runs it)  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: apt-get update --error-on=any
+  changed_when: false
+
+- name: Read aiuser's UID and GID
+  ansible.builtin.command:
+    cmd: id {{ item }} aiuser
+  loop: [-u, -g]
+  register: forge_image_aiuser_ids
+  changed_when: false
+
+- name: Check aiuser's UID and GID
+  ansible.builtin.assert:
+    that: forge_image_aiuser_ids.results | map(attribute='stdout') | list == [forge_image_aiuser_uid | string] * 2
+    fail_msg: "aiuser is {{ forge_image_aiuser_ids.results | map(attribute='stdout') | join(':') }}"
+    quiet: true
+
+- name: List the accounts whose shell is a login shell
+  ansible.builtin.command:
+    cmd: >-
+      awk -F: 'NR == FNR { if ($0 !~ /^#/) shells[$0] = 1; next } ($7 in shells) { print $1 }'
+      /etc/shells /etc/passwd
+  register: forge_image_login_accounts
+  changed_when: false
+
+- name: Check that only root and aiuser can log in
+  ansible.builtin.assert:
+    that: forge_image_login_accounts.stdout_lines | sort == ['aiuser', 'root']
+    fail_msg: "accounts with a login shell: {{ forge_image_login_accounts.stdout_lines | join(', ') }}"
+    quiet: true
+
+- name: Read the rules in /etc/sudoers.d
+  ansible.builtin.command:
+    cmd: >-
+      grep -rhv -e '^[[:space:]]*#' -e '^[[:space:]]*$' /etc/sudoers.d
+  register: forge_image_sudoers
+  changed_when: false
+  # grep exits 1 when nothing matches; a missing directory means no rule.
+  failed_when: forge_image_sudoers.rc > 1 and 'No such file' not in forge_image_sudoers.stderr
+
+- name: Check that /etc/sudoers.d holds no rule
+  ansible.builtin.assert:
+    that: forge_image_sudoers.stdout == ''
+    fail_msg: "sudo rules found: {{ forge_image_sudoers.stdout }}"
+    quiet: true
+
+- name: Check that aiuser can create a user namespace
+  ansible.builtin.command:
+    cmd: su - aiuser -c 'unshare -Ur true'
+  changed_when: false
+
+- name: Run Chrome headless with its sandbox, as aiuser
+  ansible.builtin.command:
+    cmd: >-
+      su - aiuser -c 'd=$(mktemp -d) && timeout 60 google-chrome-stable --headless=new --disable-gpu
+      --user-data-dir="$d" --dump-dom about:blank; rc=$?; rm -rf "$d"; exit $rc'
+  register: forge_image_chrome
+  changed_when: false
+
+- name: Check that Chrome rendered the page
+  ansible.builtin.assert:
+    that: "'<html' in forge_image_chrome.stdout"
+    fail_msg: "Chrome printed: {{ forge_image_chrome.stdout }}"
+    quiet: true
+
+- name: Read aiuser's Docker daemon info
+  ansible.builtin.command:
+    cmd: su - aiuser -c 'docker info'
+  register: forge_image_docker
+  changed_when: false
+
+# `rootless` alone on its line is a security option; "Context: rootless" is
+# not enough.
+- name: Check that aiuser's Docker daemon is rootless
+  ansible.builtin.assert:
+    that: forge_image_docker.stdout is search('(?m)^\s+rootless$')
+    fail_msg: "{{ forge_image_docker.stdout }}"
+    quiet: true

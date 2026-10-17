@@ -3,7 +3,7 @@
 import { test, after } from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync, spawnSync } from "node:child_process";
-import { parseSessionStates } from "../../scripts/lib/worktrees.ts";
+import { parseSessionStates } from "../../cli/lib/worktrees.ts";
 
 const SOCKET = "forge-contract-test";
 const tmux = (args: string[]) =>

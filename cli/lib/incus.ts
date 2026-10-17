@@ -1,0 +1,221 @@
+// Couche transport : parle à Incus, ne sait rien de forge. Tout ce qui est
+// spécifique au domaine vit dans containers.ts / worktrees.ts.
+import { ForgeError, type Context, type ExecResult } from "./context.ts";
+
+export type Instance = { name: string; status: string };
+
+export const DEFAULT_PROJECT = "agent-forge";
+
+// Instances, profils et images de forge vivent dans un projet Incus à part :
+// forge ne voit ni ne touche rien d'autre sur l'Incus de l'hôte.
+// FORGE_INCUS_PROJECT pointe le CLI vers un projet jetable : il sert aux
+// tests et n'est délibérément pas documenté pour les utilisateurs.
+export function forgeProject(): string {
+  return process.env.FORGE_INCUS_PROJECT || DEFAULT_PROJECT;
+}
+
+// Préfixe de tout appel qui touche un objet du projet.
+export function incus(...args: string[]): string[] {
+  return ["incus", "--project", forgeProject(), ...args];
+}
+
+// `incus list -f json` est analysé par JSON.parse : le CLI n'a pas besoin de
+// jq sur l'hôte.
+export async function listInstances(ctx: Context): Promise<Instance[]> {
+  const r = await ctx.exec(incus("list", "-f", "json"));
+  if (r.code !== 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(r.stdout);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((i): i is Instance =>
+        typeof i === "object" && i !== null &&
+        typeof (i as Instance).name === "string" &&
+        typeof (i as Instance).status === "string")
+      .map((i) => ({ name: i.name, status: i.status }));
+  } catch {
+    return [];
+  }
+}
+
+export async function instanceStatus(ctx: Context, name: string): Promise<string | null> {
+  const found = (await listInstances(ctx)).find((i) => i.name === name);
+  return found ? found.status : null;
+}
+
+export async function instanceExists(ctx: Context, name: string): Promise<boolean> {
+  return (await ctx.exec(incus("info", name))).code === 0;
+}
+
+export async function configGet(ctx: Context, name: string, key: string): Promise<string> {
+  const r = await ctx.exec(incus("config", "get", name, key));
+  return r.code === 0 ? r.stdout.trim() : "";
+}
+
+// Les mutateurs ci-dessous rendent leur ExecResult au lieu de le jeter :
+// c'est l'appelant qui décide (via mustSucceed) d'échouer bruyamment. Renvoyer
+// void revenait à avaler le code de sortie ET le stderr capturé.
+export function configSet(ctx: Context, name: string, key: string, value: string): Promise<ExecResult> {
+  return ctx.exec(incus("config", "set", name, key, value));
+}
+
+export async function imageProperty(ctx: Context, alias: string, key: string): Promise<string> {
+  const r = await ctx.exec(incus("image", "get-property", alias, key));
+  return r.code === 0 ? r.stdout.trim() : "";
+}
+
+// Le script est un seul élément d'argv : aucun shell hôte ne le réinterprète
+// avant `su`. La validation des noms interpolés dedans reste indispensable
+// (validate.ts).
+export function execAsAgent(ctx: Context, name: string, script: string): Promise<ExecResult> {
+  return ctx.exec(incus("exec", name, "--", "su", "-", "aiuser", "-c", script));
+}
+
+export function startInstance(ctx: Context, name: string): Promise<ExecResult> {
+  return ctx.exec(incus("start", name));
+}
+
+export function stopInstance(ctx: Context, name: string): Promise<ExecResult> {
+  return ctx.exec(incus("stop", name));
+}
+
+export function deleteInstance(ctx: Context, name: string): Promise<ExecResult> {
+  return ctx.exec(incus("delete", name, "--force"));
+}
+
+// tmux DOIT rester la cible directe de `incus exec` : avec un `su - aiuser -c`
+// intermédiaire, SIGWINCH n'atteint jamais le client tmux quand le terminal
+// hôte est redimensionné (diagnostiqué le 2026-08-31, commit c34a145).
+// --user/--group/--cwd remplacent `su - aiuser` + `cd`. HOME vient du profil,
+// mais pas TERM : plus aucun shell de login ne le pose, on le transmet.
+// `exec bash -lc` sous tmux restaure DOCKER_HOST, exporté depuis .bashrc.
+// Le sous-projet 4 remplace tmux par herdr.
+export function attachArgv(container: string, task: string, term: string): string[] {
+  return [
+    ...incus("exec", container),
+    "--user", "1001", "--group", "1001",
+    "--cwd", `/workspace/.trees/${task}`,
+    "--env", `TERM=${term}`,
+    "--", "tmux", "new-session", "-A", "-s", task,
+    `exec bash -lc 'claude --permission-mode auto --remote-control ${container}-${task}'`,
+  ];
+}
+
+export type ServerInfo = { environment?: { firewall?: string } };
+
+// `incus query /1.0` rend les infos du serveur en JSON — les mêmes que
+// `incus info`, sans parseur YAML. Niveau hôte : pas de --project.
+export async function serverInfo(ctx: Context): Promise<{ ok: true; info: ServerInfo } | { ok: false; error: string }> {
+  const r = await ctx.exec(["incus", "query", "/1.0"]);
+  if (r.code !== 0) return { ok: false, error: r.stderr.trim() || `exit code ${r.code}` };
+  try {
+    return { ok: true, info: JSON.parse(r.stdout) as ServerInfo };
+  } catch {
+    return { ok: false, error: "unreadable answer to incus query /1.0" };
+  }
+}
+
+// Sonde : les pools sont globaux, pas de --project.
+export async function storagePoolExists(ctx: Context, name: string): Promise<boolean> {
+  const r = await ctx.exec(["incus", "storage", "list", "-f", "json"]);
+  if (r.code !== 0) return false;
+  try {
+    const pools: unknown = JSON.parse(r.stdout);
+    return Array.isArray(pools) && pools.some((p) => (p as { name?: unknown })?.name === name);
+  } catch {
+    return false;
+  }
+}
+
+// Les objets que `forge setup` possède. Les réseaux et les ACL passent aussi
+// par --project : avec features.networks=false, Incus les résout dans
+// `default`, et un utilisateur restreint (B) ne peut pas forcément nommer ce
+// projet-là. Les projets, eux, sont globaux.
+export type ObjectKind = "project" | "network" | "network acl" | "profile";
+
+export type IncusObject = {
+  name: string;
+  description?: string;
+  config?: Record<string, string>;
+  devices?: Record<string, Record<string, string>>;
+  ingress?: Record<string, string>[];
+  egress?: Record<string, string>[];
+};
+
+function objectArgv(kind: ObjectKind, ...args: string[]): string[] {
+  const words = kind.split(" ");
+  return kind === "project" ? ["incus", ...words, ...args] : incus(...words, ...args);
+}
+
+// Sonde : une liste en échec ou illisible vaut « aucun objet ». La création
+// qui suit échoue alors avec le message d'Incus, remonté par mustSucceed.
+export async function listObjects(ctx: Context, kind: ObjectKind): Promise<IncusObject[]> {
+  const r = await ctx.exec(objectArgv(kind, "list", "-f", "json"));
+  if (r.code !== 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(r.stdout);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((o): o is IncusObject =>
+      typeof o === "object" && o !== null && typeof (o as IncusObject).name === "string");
+  } catch {
+    return [];
+  }
+}
+
+// L'objet entier passe sur stdin, en JSON (YAML 1.2 en est un sur-ensemble).
+// Jamais via ctx.attach : `create`/`edit` lisent stdin dès qu'il n'est pas un
+// terminal, et un stdin vide remplacerait l'objet par un objet vide.
+export function createObject(ctx: Context, kind: ObjectKind, name: string, body: object): Promise<ExecResult> {
+  return ctx.exec(objectArgv(kind, "create", name), { input: JSON.stringify(body) });
+}
+
+export function editObject(ctx: Context, kind: ObjectKind, name: string, body: object): Promise<ExecResult> {
+  return ctx.exec(objectArgv(kind, "edit", name), { input: JSON.stringify(body) });
+}
+
+// Attend que systemd ait fini de démarrer l'instance. `degraded` compte pour
+// prêt : une unité en échec (souvent liée au matériel dans un container) ne
+// doit pas bloquer forge. Partagé par le build d'image et le provisioning.
+// Juste après `launch`, systemctl ne répond rien (le bus n'est pas encore là)
+// ou répond `offline` (systemd n'est pas encore PID 1) avant de donner un vrai
+// état : on réessaie tant que l'état est vide ou `offline`. Tout autre état
+// (maintenance, stopping...) échoue aussitôt.
+export async function waitReady(
+  ctx: Context, name: string, opts: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const attempts = opts.attempts ?? 60;
+  const delayMs = opts.delayMs ?? 1000;
+  for (let i = 1; ; i++) {
+    const r = await ctx.exec(incus("exec", name, "--", "systemctl", "is-system-running", "--wait"));
+    const state = r.stdout.trim();
+    if (state === "running" || state === "degraded") return;
+    if ((state !== "" && state !== "offline") || i >= attempts) {
+      throw new ForgeError(
+        `${name} did not finish booting (systemd state: ${state || "unknown"}): ${r.stderr.trim() || `exit code ${r.code}`}`);
+    }
+    await new Promise((res) => setTimeout(res, delayMs));
+  }
+}
+
+// Sonde : l'empreinte de l'image qui porte l'alias, ou null.
+export async function imageFingerprint(ctx: Context, alias: string): Promise<string | null> {
+  const r = await ctx.exec(incus("image", "list", "-f", "json"));
+  if (r.code !== 0) return null;
+  try {
+    const images = JSON.parse(r.stdout) as { fingerprint?: string; aliases?: { name?: string }[] }[];
+    return images.find((i) => i.aliases?.some((a) => a.name === alias))?.fingerprint ?? null;
+  } catch {
+    return null;
+  }
+}
+
+// Comme execAsAgent, mais sans shell : chaque valeur est un élément d'argv.
+// Pour les valeurs venues de l'hôte (l'identité git : apostrophes, espaces,
+// accents), qui n'ont pas de jeu de caractères à valider.
+export function execAsAgentArgv(ctx: Context, name: string, argv: string[]): Promise<ExecResult> {
+  return ctx.exec(incus("exec", name, "--user", "1001", "--group", "1001", "--env", "HOME=/home/aiuser", "--", ...argv));
+}
+
+export async function imageExists(ctx: Context, alias: string): Promise<boolean> {
+  return (await ctx.exec(incus("image", "info", alias))).code === 0;
+}

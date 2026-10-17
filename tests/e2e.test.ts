@@ -1,4 +1,4 @@
-// Bout-en-bout : le VRAI binaire, avec un faux lxc sur le PATH. Prouve le
+// Bout-en-bout : le VRAI binaire, avec un faux incus sur le PATH. Prouve le
 // câblage que les tests unitaires ne voient pas — parsing d'argv, dispatch,
 // codes de sortie, et la séparation stdout/stderr.
 import { test, before, after } from "node:test";
@@ -9,13 +9,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 let bin: string;
-const ENTRY = resolve("scripts/forge.ts");
+const ENTRY = resolve("cli/forge.ts");
 
 before(() => {
   bin = mkdtempSync(join(tmpdir(), "forge-e2e-bin-"));
-  const stub = resolve("tests/lib/fake-lxc.ts");
-  writeFileSync(join(bin, "lxc"), `#!/bin/sh\nexec node ${stub} "$@"\n`);
-  chmodSync(join(bin, "lxc"), 0o755);
+  const stub = resolve("tests/lib/fake-incus-bin.ts");
+  writeFileSync(join(bin, "incus"), `#!/bin/sh\nexec node ${stub} "$@"\n`);
+  chmodSync(join(bin, "incus"), 0o755);
 });
 
 after(() => rmSync(bin, { recursive: true, force: true }));
@@ -76,14 +76,18 @@ test("an unknown option fails cleanly rather than crashing", () => {
 test("image without a subcommand fails with its usage", () => {
   const r = forge(["image"]);
   assert.equal(r.status, 1);
-  assert.match(r.stderr, /Usage: forge image build\|update/);
+  assert.match(r.stderr, /Usage: forge image build$/m);
 });
 
 test("the bash shim runs the TypeScript entry", () => {
-  const r = spawnSync(resolve("scripts/forge"), ["list"], {
+  const r = spawnSync(resolve("cli/forge"), ["list"], {
     encoding: "utf8",
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   });
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /^REPO\s+MODE\s+STATE\s+BUILD$/m);
+});
+
+test("setup appears in the usage", () => {
+  assert.match(forge([]).stdout, /^\s+setup\s/m);
 });

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash /workspace/.claude/hooks/pre-bash.sh"
+            "command": "bash \"$CLAUDE_PROJECT_DIR\"/container/pre-bash.sh"
           }
         ]
       }

@@ -10,9 +10,10 @@ Tu travailles sur `agent-forge`, un repo d'infrastructure pour déployer des age
 - **Auth** : SSH Ed25519, YubiKey signing, GitHub Deploy Keys
 
 ## Périmètre
-- Scripts dans `scripts/`
-- Templates dans `templates/`
-- Config files dans `config/`
+- CLI dans `cli/` (`cli/forge`, `cli/forge.ts`, `cli/lib/`)
+- Fichiers poussés dans les containers dans `container/`
+- Playbooks et rôles Ansible dans `ansible/`
+- Config files hôte de la v1 dans `config/`
 - Documentation dans `README.md`
 
 ## Conventions
@@ -64,8 +65,8 @@ dont le LXD imbriqué a besoin — `security.privileged` reste `false`. Voir
 - Toute nouvelle règle UFW doit être justifiée en commentaire
 
 ## Ce que tu peux faire
-- Modifier `scripts/forge` et `scripts/lib/forge-*.sh`
-- Mettre à jour le template `CLAUDE.md`
+- Modifier `cli/forge`, `cli/forge.ts` et `cli/lib/`
+- Mettre à jour le template `container/CLAUDE.md`
 - Mettre à jour `README.md`
 - Mettre à jour les config files
 

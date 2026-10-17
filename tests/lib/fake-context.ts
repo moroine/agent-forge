@@ -1,7 +1,8 @@
 // Contexte scripté pour les tests unitaires. `exec` répond selon une table de
 // règles ordonnée (première correspondance gagnante, comme un routeur), et
 // `prompt` sert une file de réponses préparées.
-import type { Context, ExecOptions, ExecResult, Prompt } from "../../scripts/lib/context.ts";
+import type { Context, ExecOptions, ExecResult, Prompt } from "../../cli/lib/context.ts";
+import type { FakeIncus } from "./fake-incus.ts";
 
 export type ExecRule = { match: string; code?: number; stdout?: string; stderr?: string };
 
@@ -9,6 +10,10 @@ export type FakeOptions = {
   rules?: ExecRule[];
   answers?: (number | string | null)[];
   tty?: boolean;
+  // Faux incus à état : reçoit tout appel `incus …` qu'aucune règle n'a pris.
+  incus?: FakeIncus;
+  // Code de sortie rendu par attach (ansible-playbook, tmux) ; 0 par défaut.
+  attachCode?: number;
 };
 
 export type FakeContext = Context & {
@@ -39,6 +44,9 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
         return { code: rule.code ?? 0, stdout: rule.stdout ?? "", stderr: rule.stderr ?? "" };
       }
     }
+    // Après les règles : un test peut toujours forcer la réponse d'un appel
+    // précis, le faux à état répond au reste.
+    if (opts.incus && argv[0] === "incus") return opts.incus.run(argv.slice(1), callOpts?.input);
     return { code: 0, stdout: "", stderr: "" };
   };
 
@@ -65,7 +73,7 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
 
   return {
     exec,
-    attach: async (argv) => { calls.push(argv); return 0; },
+    attach: async (argv) => { calls.push(argv); return opts.attachCode ?? 0; },
     prompt,
     out: (line) => out_lines.push(line),
     err: (line) => err_lines.push(line),

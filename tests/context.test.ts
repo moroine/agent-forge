@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { createContext, ForgeError } from "../scripts/lib/context.ts";
+import { createContext, ForgeError } from "../cli/lib/context.ts";
 
 test("exec captures stdout and the exit code", async () => {
   const r = await createContext().exec(["printf", "hello"]);

@@ -1,0 +1,26 @@
+---
+# The instance's network may come up after systemd reports it ready: the first
+# apt run retries.
+- name: Refresh the apt cache
+  ansible.builtin.apt:
+    update_cache: true
+  register: forge_image_apt_cache
+  retries: 10
+  delay: 6
+  until: forge_image_apt_cache is succeeded
+
+- name: Install the base packages
+  ansible.builtin.apt:
+    name:
+      - git
+      - git-lfs
+      - tmux  # until sub-project 4 replaces it with herdr
+      - curl
+      - wget
+      - unzip
+      - zip
+      - python3
+      - python3-pip
+      - python3-debian  # needed by ansible.builtin.deb822_repository
+      - ca-certificates
+    state: present

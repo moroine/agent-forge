@@ -1,0 +1,60 @@
+---
+# images:ubuntu/26.04 ships a ubuntu account with passwordless sudo
+# (/etc/sudoers.d/90-incus), cloud-init or not. The agent must have no path
+# to root, and the image no account but root and aiuser: remove both.
+- name: Remove the base image's ubuntu account
+  ansible.builtin.user:
+    name: ubuntu
+    state: absent
+    remove: true
+
+- name: Remove the base image's sudo rule for ubuntu
+  ansible.builtin.file:
+    path: /etc/sudoers.d/90-incus
+    state: absent
+
+- name: Create aiuser's group
+  ansible.builtin.group:
+    name: aiuser
+    gid: "{{ forge_image_aiuser_uid }}"
+
+- name: Create aiuser (no password, no sudo)
+  ansible.builtin.user:
+    name: aiuser
+    uid: "{{ forge_image_aiuser_uid }}"
+    group: aiuser
+    shell: /bin/bash
+    create_home: true
+    password: "!"
+
+- name: Create /workspace, where each container mounts its repository
+  ansible.builtin.file:
+    path: /workspace
+    state: directory
+    owner: aiuser
+    group: aiuser
+    mode: "0750"
+
+- name: Create aiuser's directories
+  ansible.builtin.file:
+    path: "/home/aiuser/{{ item }}"
+    state: directory
+    owner: aiuser
+    group: aiuser
+    mode: "0755"
+  loop:
+    - .claude
+    - .local
+    - .local/bin
+
+# The profile's environment.HOME makes every `incus exec`, root's included,
+# use /home/aiuser before useradd runs: earlier root steps (npm's cache) leave
+# root-owned files there, and dockerd later fails on ~/.local/share (v1).
+- name: Give aiuser its whole home
+  ansible.builtin.file:
+    path: /home/aiuser
+    state: directory
+    owner: aiuser
+    group: aiuser
+    mode: go-w
+    recurse: true

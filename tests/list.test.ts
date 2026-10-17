@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { cmdList } from "../scripts/lib/commands/list.ts";
+import { cmdList } from "../cli/lib/commands/list.ts";
 
 const LIST = JSON.stringify([
   { name: "agent-moroine-agent-forge", status: "Running" },
@@ -18,7 +18,7 @@ function ctx() {
       { match: "agent-acme-super-long-repository-name user.forge.image_commit", stdout: "bbbb2222" },
       { match: "agent-acme-super-long-repository-name user.forge.repo", stdout: "acme/super-long-repository-name" },
       { match: "agent-acme-super-long-repository-name user.forge.mode", stdout: "supervised" },
-      { match: "lxc list", stdout: LIST },
+      { match: "incus --project agent-forge list", stdout: LIST },
       { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\nworktree /workspace/.trees/api\n" },
       { match: "list-sessions", stdout: "cli 1\ndocs 0\n" },
     ],
@@ -79,10 +79,10 @@ test("a long repo name widens its column instead of shifting the others", async 
   }
 });
 
-test("forge list runs a single lxc list for the whole command", async () => {
+test("forge list runs a single incus list for the whole command", async () => {
   const c = ctx();
   await cmdList(c);
-  const listings = c.calls.filter((call) => call.join(" ") === "lxc list -f json");
+  const listings = c.calls.filter((call) => call.join(" ") === "incus --project agent-forge list -f json");
   assert.equal(listings.length, 1, `${listings.length} full listings instead of 1`);
 });
 
@@ -95,7 +95,7 @@ test("no line wraps an 80-column terminal", async () => {
 test("a container with no repo metadata falls back to its name", async () => {
   const c = fakeContext({
     rules: [
-      { match: "lxc list", stdout: JSON.stringify([{ name: "agent-orphan", status: "Stopped" }]) },
+      { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-orphan", status: "Stopped" }]) },
       { match: "image get-property", stdout: "" },
     ],
   });
@@ -103,24 +103,9 @@ test("a container with no repo metadata falls back to its name", async () => {
   assert.match(c.out_lines[1], /^agent-orphan\s+-\s+Stopped\s+unknown$/);
 });
 
-test("forge list compares a super container against agent-base-super", async () => {
-  const LIST_SUPER = JSON.stringify([{ name: "agent-o-r", status: "Running" }]);
-  const c = fakeContext({
-    rules: [
-      { match: "lxc list", stdout: LIST_SUPER },
-      // agent-base-super avant agent-base : "agent-base" est sous-chaîne de
-      // "agent-base-super", donc la règle la plus spécifique doit gagner.
-      { match: "image get-property agent-base-super", stdout: "SUPERSHA" },
-      { match: "image get-property agent-base", stdout: "BASESHA" },
-      { match: "agent-o-r user.forge.repo", stdout: "o/r" },
-      { match: "agent-o-r user.forge.mode", stdout: "super" },
-      { match: "agent-o-r user.forge.image_commit", stdout: "SUPERSHA" },
-      { match: "sessions", stdout: "" },
-    ],
-  });
+test("every container is compared against agent-base, read once", async () => {
+  const c = ctx();
   await cmdList(c);
-  const row = c.out_lines.find((l) => l.includes("o/r"));
-  assert.ok(row, "super container row present");
-  assert.ok(row.includes("super"), "MODE column shows super");
-  assert.ok(row.includes("ok"), "BUILD is ok when stamp matches agent-base-super");
+  const reads = c.calls.filter((call) => call.join(" ").includes("image get-property"));
+  assert.deepEqual(reads.map((call) => call.slice(-2)), [["agent-base", "user.forge.commit"]]);
 });

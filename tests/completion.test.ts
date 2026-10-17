@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
-import { ForgeError } from "../scripts/lib/context.ts";
-import { cmdCompletion, completionScript, FORGE_BIN } from "../scripts/lib/commands/completion.ts";
+import { ForgeError } from "../cli/lib/context.ts";
+import { cmdCompletion, completionScript, FORGE_BIN } from "../cli/lib/commands/completion.ts";
 
 const LIST = JSON.stringify([
   { name: "agent-moroine-agent-forge", status: "Running" },
@@ -14,7 +14,7 @@ function ctx() {
     rules: [
       { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
       { match: "agent-acme-widgets user.forge.repo", stdout: "acme/widgets" },
-      { match: "lxc list", stdout: LIST },
+      { match: "incus --project agent-forge list", stdout: LIST },
       { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\n" },
     ],
   });
@@ -86,4 +86,8 @@ test("the emitted script calls forge by absolute path, not by name", async () =>
 test("the completion script offers tasks in third position and --force where it applies", () => {
   assert.ok(completionScript(FORGE_BIN).includes("start|resume|finish"));
   assert.ok(completionScript(FORGE_BIN).includes("--force"));
+});
+
+test("the completion script offers setup", () => {
+  assert.match(completionScript("/x/forge"), /compgen -W "setup start resume finish stop delete list image completion"/);
 });
