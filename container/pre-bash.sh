@@ -5,8 +5,19 @@
 # Regex en ERE POSIX (grep -E) uniquement — jamais grep -P/\s : portable
 # entre BSD grep (tests sur macOS) et GNU grep (containers Ubuntu).
 
+# Fail-closed : un hook qui ne peut pas lire sa commande la refuse. Sans jq,
+# COMMAND restait vide, aucune règle ne correspondait et tout passait (image v2
+# sans jq, constaté le 2026-10-17). FORGE_JQ est overridable pour les tests.
+JQ="${FORGE_JQ:-jq}"
+if ! command -v "$JQ" > /dev/null 2>&1; then
+  echo "BLOCKED: jq introuvable, le hook ne peut pas lire la commande (fail-closed)." >&2
+  exit 2
+fi
 INPUT=$(cat)
-COMMAND=$(echo "$INPUT" | jq -r '.tool_input.command // empty')
+if ! COMMAND=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.command // empty' 2> /dev/null); then
+  echo "BLOCKED: entrée du hook illisible (JSON invalide), commande refusée (fail-closed)." >&2
+  exit 2
+fi
 
 # Journal d'audit persistant dans le workspace (survit à la suppression du container côté host)
 AUDIT_LOG="/workspace/.claude/bash-audit.log"

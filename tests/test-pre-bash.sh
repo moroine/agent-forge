@@ -68,6 +68,24 @@ expect_block_as() {
   fi
 }
 
+# --- fail-closed : un hook qui ne peut pas lire sa commande refuse tout ---
+# Sans jq, la commande lue était vide et rien ne correspondait : tout passait
+# (constaté le 2026-10-17 sur une image v2 sans jq). FORGE_JQ simule un jq absent.
+expect_block_raw() {
+  local label="$1" input="$2" rc=0
+  shift 2
+  printf '%s' "$input" | env "$@" bash "$HOOK" > /dev/null 2>&1 || rc=$?
+  if [ "$rc" -eq 2 ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL (attendu BLOCK, rc=$rc): $label"
+  fi
+}
+expect_block_raw 'jq absent, commande anodine' '{"tool_input":{"command":"ls"}}' FORGE_JQ=/nonexistent/jq
+expect_block_raw 'jq absent, sudo' '{"tool_input":{"command":"sudo ls"}}' FORGE_JQ=/nonexistent/jq
+expect_block_raw 'entrée JSON illisible' 'not json at all'
+
 # --- git push : seule forme autorisée = git push [-u] origin agent/* ---
 expect_allow 'git push origin agent/test-project'
 expect_allow 'git push -u origin agent/test-project'
