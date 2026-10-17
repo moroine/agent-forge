@@ -32,8 +32,9 @@ const IDENTITY: ExecRule[] = [
   { match: "git config --global --includes user.email", stdout: `${EMAIL}\n` },
 ];
 
-// A working hook refuses the probe's forbidden command with exit code 2.
-const HOOK_BLOCKS: ExecRule[] = [{ match: "forge-hook-probe", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" }];
+// A working hook refuses the probe's forbidden command with exit code 2 and
+// lets its harmless command through (the fake's default exit code is 0).
+const HOOK_BLOCKS: ExecRule[] = [{ match: "forge-hook-probe-deny", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" }];
 
 function provision(opts: { rules?: ExecRule[]; fake?: FakeIncus } = {}) {
   const fake = opts.fake ?? FakeIncus.withRuntime({ commit: "IMGSHA" });
@@ -152,20 +153,30 @@ test("files come from container/; the hook and the settings belong to root", asy
 
 // The hook is the agent's guardrail: a hook that cannot read its input (no
 // jq in the image, 2026-10-17) let every command through, silently.
-test("provisioning proves the installed hook blocks a forbidden command, as aiuser", async () => {
+test("provisioning proves the installed hook guards aiuser both ways", async () => {
   const { ctx, run } = provision();
   await run();
   const calls = flat(ctx);
   const pushed = calls.findIndex((l) => l.includes("push") && l.includes("agent-x/home/aiuser/.claude/hooks/pre-bash.sh"));
-  const probe = calls.findIndex((l) => l.includes("forge-hook-probe"));
-  assert.ok(pushed >= 0 && probe > pushed, calls.join("\n"));
-  assert.ok(calls[probe].includes("--user 1001"), calls[probe]);
-  assert.ok(calls[probe].includes("sudo"), calls[probe]);
+  const deny = calls.findIndex((l) => l.includes("forge-hook-probe-deny"));
+  const allow = calls.findIndex((l) => l.includes("forge-hook-probe-allow"));
+  assert.ok(pushed >= 0 && deny > pushed && allow > pushed, calls.join("\n"));
+  for (const probe of [calls[deny], calls[allow]]) assert.ok(probe.includes("--user 1001"), probe);
+  assert.ok(calls[deny].includes("sudo"), calls[deny]);
 });
 
+// The v1 hook without jq: everything got through.
 test("a hook that lets a forbidden command through aborts provisioning", async () => {
-  const { fake, run } = provision({ rules: [{ match: "forge-hook-probe", code: 0, stderr: "pre-bash.sh: line 9: jq: command not found\n" }] });
-  await assert.rejects(run, (e: Error) => /hook/.test(e.message) && /jq: command not found/.test(e.message));
+  const { fake, run } = provision({ rules: [{ match: "forge-hook-probe-deny", code: 0, stderr: "pre-bash.sh: line 9: jq: command not found\n" }] });
+  await assert.rejects(run, (e: Error) => /let a forbidden command through/.test(e.message) && /jq: command not found/.test(e.message));
+  assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], undefined);
+});
+
+// The fail-closed hook without jq: everything is refused, the agent cannot
+// run anything — safe, but useless, and silent unless provisioning says so.
+test("a hook that refuses a harmless command aborts provisioning", async () => {
+  const { fake, run } = provision({ rules: [{ match: "forge-hook-probe-allow", code: 2, stderr: "BLOCKED: jq introuvable, le hook ne peut pas lire la commande (fail-closed).\n" }] });
+  await assert.rejects(run, (e: Error) => /refuses a harmless command/.test(e.message) && /jq introuvable/.test(e.message));
   assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], undefined);
 });
 
