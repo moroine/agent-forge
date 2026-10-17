@@ -71,8 +71,21 @@ function teardownProject(project: string) {
 
 function launch(project: string, name: string) {
   must(`launch ${name}`, incus(project, ["launch", "agent-base", name, "--profile", "agent-forge", "-c", `user.forge.repo=${SENTINEL}`]));
-  const ready = incus(project, ["exec", name, "--", "systemctl", "is-system-running", "--wait"]);
-  assert.match(ready.stdout, /^(running|degraded)$/m, raw(`${name} never became ready`, ready));
+  waitReady(project, name);
+}
+
+// Right after `incus launch`, systemd's bus is not up yet and systemctl
+// answers with nothing: retry until it reports a state (as forge's waitReady).
+function waitReady(project: string, name: string) {
+  let last: Run = { status: null, stdout: "", stderr: "" };
+  for (let i = 0; i < 60; i++) {
+    last = incus(project, ["exec", name, "--", "systemctl", "is-system-running", "--wait"]);
+    const state = last.stdout.trim();
+    if (state === "running" || state === "degraded") return;
+    if (state !== "") assert.fail(raw(`${name} is ${state}`, last));
+    spawnSync("sleep", ["1"]);
+  }
+  assert.fail(raw(`${name} never became ready`, last));
 }
 // Copies agent-base from one project of this server to another.
 // `incus image copy` between two projects of one server needs the server to
