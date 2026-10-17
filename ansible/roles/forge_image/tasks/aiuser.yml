@@ -1,4 +1,18 @@
 ---
+# images:ubuntu/26.04 ships a ubuntu account with passwordless sudo
+# (/etc/sudoers.d/90-incus), cloud-init or not. The agent must have no path
+# to root, and the image no account but root and aiuser: remove both.
+- name: Remove the base image's ubuntu account
+  ansible.builtin.user:
+    name: ubuntu
+    state: absent
+    remove: true
+
+- name: Remove the base image's sudo rule for ubuntu
+  ansible.builtin.file:
+    path: /etc/sudoers.d/90-incus
+    state: absent
+
 - name: Create aiuser's group
   ansible.builtin.group:
     name: aiuser
