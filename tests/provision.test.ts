@@ -32,9 +32,12 @@ const IDENTITY: ExecRule[] = [
   { match: "git config --global --includes user.email", stdout: `${EMAIL}\n` },
 ];
 
+// A working hook refuses the probe's forbidden command with exit code 2.
+const HOOK_BLOCKS: ExecRule[] = [{ match: "forge-hook-probe", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" }];
+
 function provision(opts: { rules?: ExecRule[]; fake?: FakeIncus } = {}) {
   const fake = opts.fake ?? FakeIncus.withRuntime({ commit: "IMGSHA" });
-  const ctx = fakeContext({ incus: fake, rules: [...(opts.rules ?? []), ...IDENTITY] });
+  const ctx = fakeContext({ incus: fake, rules: [...(opts.rules ?? []), ...IDENTITY, ...HOOK_BLOCKS] });
   return { fake, ctx, run: () => provisionContainer(ctx, "agent-x", "o/r") };
 }
 const flat = (ctx: ReturnType<typeof fakeContext>) => ctx.calls.map((c) => c.join(" "));
@@ -145,6 +148,25 @@ test("files come from container/; the hook and the settings belong to root", asy
     assert.ok(c.includes(repo(file)), c.join(" "));
     assert.equal(c[c.indexOf("--uid") + 1], "0");
   }
+});
+
+// The hook is the agent's guardrail: a hook that cannot read its input (no
+// jq in the image, 2026-10-17) let every command through, silently.
+test("provisioning proves the installed hook blocks a forbidden command, as aiuser", async () => {
+  const { ctx, run } = provision();
+  await run();
+  const calls = flat(ctx);
+  const pushed = calls.findIndex((l) => l.includes("push") && l.includes("agent-x/home/aiuser/.claude/hooks/pre-bash.sh"));
+  const probe = calls.findIndex((l) => l.includes("forge-hook-probe"));
+  assert.ok(pushed >= 0 && probe > pushed, calls.join("\n"));
+  assert.ok(calls[probe].includes("--user 1001"), calls[probe]);
+  assert.ok(calls[probe].includes("sudo"), calls[probe]);
+});
+
+test("a hook that lets a forbidden command through aborts provisioning", async () => {
+  const { fake, run } = provision({ rules: [{ match: "forge-hook-probe", code: 0, stderr: "pre-bash.sh: line 9: jq: command not found\n" }] });
+  await assert.rejects(run, (e: Error) => /hook/.test(e.message) && /jq: command not found/.test(e.message));
+  assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], undefined);
 });
 
 test("the mode is supervised, in the marker and in the metadata", async () => {

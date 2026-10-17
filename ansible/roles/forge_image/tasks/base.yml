@@ -23,4 +23,5 @@
       - python3-pip
       - python3-debian  # needed by ansible.builtin.deb822_repository
       - ca-certificates
+      - jq  # container/pre-bash.sh parses its input with it; without jq it refuses everything
     state: present

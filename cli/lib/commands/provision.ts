@@ -81,7 +81,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     "claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git && claude plugin install superpowers@claude-plugins-official"));
 
   // Le hook et les réglages appartiennent à root : l'agent ne peut pas les
-  // modifier.
+  // réécrire en place.
   ctx.out("Installing Claude security hooks...");
   await mustSucceed("create hooks directory",
     ctx.exec(incus("exec", container, "--", "mkdir", "-p", "/home/aiuser/.claude/hooks")));
@@ -89,6 +89,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     container, "/home/aiuser/.claude/hooks/pre-bash.sh", 0, "755");
   await pushFile(ctx, "push Claude settings", join(repoRoot(), "container", "settings.json"),
     container, "/home/aiuser/.claude/settings.json", 0, "644");
+  await requireHookBlocks(ctx, container);
 
   await refreshClaude(ctx, container);
 
@@ -163,6 +164,25 @@ async function requireRuntime(ctx: Context): Promise<void> {
   if (!(await imageExists(ctx, BASE_IMAGE))) {
     throw new ForgeError(`image ${BASE_IMAGE} not found. Run 'forge image build' first.`);
   }
+}
+
+// Preuve que le hook garde vraiment CE container : un hook qui ne peut pas lire
+// sa commande (image sans jq, constaté le 2026-10-17) laissait tout passer, en
+// silence. On lui soumet, en tant qu'aiuser, une commande qu'il doit refuser
+// (exit 2). Le marqueur forge-hook-probe rend la ligne du journal d'audit
+// (/workspace/.claude/bash-audit.log) explicite.
+const HOOK_PROBE = "printf '%s' '{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"sudo true # forge-hook-probe\"}}'"
+  + " | /home/aiuser/.claude/hooks/pre-bash.sh";
+
+async function requireHookBlocks(ctx: Context, container: string): Promise<void> {
+  ctx.out("Checking that the security hook blocks a forbidden command...");
+  const r = await execAsAgentArgv(ctx, container, ["bash", "-c", HOOK_PROBE]);
+  if (r.code === 2) return;
+  const detail = r.stderr.trim() ? `: ${r.stderr.trim()}` : "";
+  throw new ForgeError(
+    `the container's security hook let a forbidden command through (exit code ${r.code}, expected 2)${detail}. ` +
+    "The agent would run unguarded, so provisioning stops. Rebuild the image ('forge image build'), " +
+    `then delete ${container} and start the task again.`);
 }
 
 // `incus file push` avec propriétaire et mode. uid 0 : fichier que l'agent ne
