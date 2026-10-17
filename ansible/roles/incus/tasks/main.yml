@@ -19,6 +19,22 @@
     # Recommends would pull iptables next to nftables.
     install_recommends: false
 
+# os_hardening, an earlier role, gives every system account the nologin
+# shell. The incus account only appears now, with the package: give it the
+# same shell, so that the next run's os_hardening has nothing to change.
+- name: Read the incus system account
+  ansible.builtin.getent:
+    database: passwd
+    key: incus
+    fail_key: false
+
+- name: Give the incus system account the nologin shell, as os_hardening does
+  ansible.builtin.user:
+    name: incus
+    shell: /usr/sbin/nologin
+    create_home: false
+  when: (ansible_facts.getent_passwd | default({})).get('incus')
+
 - name: Look for the storage pool
   ansible.builtin.command:
     cmd: incus storage show {{ incus_pool_name }}

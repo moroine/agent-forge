@@ -39,6 +39,12 @@ expect user-data-missing nonzero 'no such public key' -- --user-data "$TMP/missi
 expect host-without-key nonzero '--host needs --admin-key' -- --host 203.0.113.10
 expect host-missing-key nonzero 'no such private key' -- --host 203.0.113.10 --admin-key "$TMP/missing"
 
+# With --host, the new SSH port must get through the provider's firewall
+# before provisioning moves sshd there (else the machine is locked out). An
+# unroutable documentation address stands for a filtered port.
+ssh-keygen -q -t ed25519 -N "" -C vm-test -f "$TMP/admin"
+expect host-port-filtered nonzero 'port 2222 on 192.0.2.1 is not reachable' -- --host 192.0.2.1 --admin-key "$TMP/admin"
+
 # Options that take a value fail loudly when it is missing.
 expect exposure-last nonzero '--exposure needs a value' -- --exposure
 expect exposure-bad nonzero '--exposure must be public, lan or local' -- --exposure nope

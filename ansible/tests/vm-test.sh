@@ -67,6 +67,22 @@ esac
 if [ -n "$HOST" ]; then
   [ -n "$ADMIN_KEY" ] || die "--host needs --admin-key (the private key the machine's admin accepts)"
   [ -f "$ADMIN_KEY" ] || die "no such private key: $ADMIN_KEY"
+  # The new SSH port must get through the provider's firewall (a security
+  # group, say) before provisioning moves sshd there and the host firewall
+  # closes 22, or the machine is locked out. On a fresh machine nothing
+  # listens there yet, so the connection must be refused; a timeout or no
+  # route means the port is filtered. A login that works means the machine
+  # was already provisioned.
+  probe="$(ssh -F none -o BatchMode=yes -o ConnectTimeout=8 -o IdentitiesOnly=yes \
+    -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o LogLevel=ERROR \
+    -i "$ADMIN_KEY" -p "$FORGE_SSH_PORT" "$ADMIN@$HOST" true 2>&1)" && probe_ok=1 || probe_ok=0
+  if [ "$probe_ok" -eq 1 ]; then
+    die "$HOST already answers SSH on port $FORGE_SSH_PORT: it was provisioned; rebuild it from a fresh Ubuntu 26.04 image"
+  fi
+  case "$probe" in
+    *"Connection refused"*) ;;
+    *) die "port $FORGE_SSH_PORT on $HOST is not reachable (${probe:-no answer}): open TCP 22 and $FORGE_SSH_PORT in the provider's firewall first, or provisioning will lock the machine out" ;;
+  esac
 fi
 
 # --- Preconditions ---------------------------------------------------------
@@ -149,11 +165,6 @@ wait_ssh() {  # $1 = port; succeeds once the admin can log in on it
 # --- Machine ---------------------------------------------------------------
 if [ -n "$HOST" ]; then
   IP="$HOST"
-  # A provisioned machine already has sshd on the new port: the first run
-  # must start from a fresh image, so refuse it.
-  if ssh_admin "$FORGE_SSH_PORT" true 2>/dev/null; then
-    die "$HOST was already provisioned: rebuild it from a fresh Ubuntu 26.04 image"
-  fi
   wait_ssh 22 || die "SSH on $HOST port 22 never let $ADMIN in with the given key"
   if ssh_admin 22 test -e /opt/agent-forge; then
     die "$HOST was already provisioned: rebuild it from a fresh Ubuntu 26.04 image"
