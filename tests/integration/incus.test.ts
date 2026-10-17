@@ -10,13 +10,13 @@
 // double guard). forgebr0 and forge-egress live in the default project and
 // may be shared with a real agent-forge project: they are left in place.
 //
-// Without FORGE_INTEGRATION_IMAGE, the tests that need a container copy
-// agent-base from the agent-forge project (built once with `forge image
+// Without FORGE_INTEGRATION_IMAGE, the tests that need a container export and
+// import agent-base from the agent-forge project (built once with `forge image
 // build`); when there is none, they are skipped with a message.
 import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { homedir, networkInterfaces } from "node:os";
 import { join, resolve } from "node:path";
 
@@ -74,6 +74,22 @@ function launch(project: string, name: string) {
   const ready = incus(project, ["exec", name, "--", "systemctl", "is-system-running", "--wait"]);
   assert.match(ready.stdout, /^(running|degraded)$/m, raw(`${name} never became ready`, ready));
 }
+// Copies agent-base from one project of this server to another.
+// `incus image copy` between two projects of one server needs the server to
+// listen on the network (pull) or a client temp dir as big as the image
+// (relay, in a small tmpfs /tmp): export and import through the disk instead.
+function copyImage(from: string, to: string): Run {
+  const dir = mkdtempSync(join(homedir(), "forge-selftest-img-"));
+  try {
+    const exported = incus(from, ["image", "export", "agent-base", dir]);
+    if (exported.status !== 0) return exported;
+    const file = readdirSync(dir).find((f) => f.endsWith(".tar.gz") || f.endsWith(".tar.xz") || f.endsWith(".tar.zst"));
+    if (!file) return { status: 1, stdout: "", stderr: `no exported image file in ${dir}: ${readdirSync(dir).join(", ")}` };
+    return incus(to, ["image", "import", join(dir, file), "--alias", "agent-base"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
 const asAgent = (project: string, name: string, cmd: string) =>
   incus(project, ["exec", name, "--", "su", "-", "aiuser", "-c", cmd]);
 
@@ -120,8 +136,7 @@ test("agent-base is available in the test project", { skip: !ENABLED }, () => {
     haveImage = true;
     return;
   }
-  const copy = run("incus", ["image", "copy", "agent-base", "local:", "--project", "agent-forge",
-    "--target-project", PROJECT, "--alias", "agent-base"]);
+  const copy = copyImage("agent-forge", PROJECT);
   // A failed copy fails the run: a run that tests nothing must not look green.
   if (copy.status !== 0) {
     assert.fail(`no agent-base in project agent-forge to copy (run 'forge image build' once, or set FORGE_INTEGRATION_IMAGE=1): ${copy.stderr}`);
@@ -234,8 +249,7 @@ test("restricted project: setup drops raw.lxc, and an instance runs with its wor
   assert.match(setup.stderr, /^NOTICE: .*raw\.lxc/m, raw("expected the raw.lxc notice", setup));
   const rawLxc = incus(RESTRICTED, ["profile", "get", "agent-forge", "raw.lxc"]);
   assert.equal(rawLxc.stdout.trim(), "", raw("raw.lxc must be absent", rawLxc));
-  must("copy agent-base", run("incus", ["image", "copy", "agent-base", "local:", "--project", PROJECT,
-    "--target-project", RESTRICTED, "--alias", "agent-base"]));
+  must("copy agent-base", copyImage(PROJECT, RESTRICTED));
   const name = `${PREFIX}${Math.random().toString(36).slice(2, 8)}-r`;
   launch(RESTRICTED, name);
   const dir = join(workspaces, "restricted");
