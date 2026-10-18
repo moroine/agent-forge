@@ -359,7 +359,7 @@ cases where tools differ:
 | `incus exec` sessions (attach, `execAsAgentArgv`, apt as root) | Instance keys `environment.HTTP_PROXY`, `environment.HTTPS_PROXY`, `environment.http_proxy`, `environment.https_proxy`, `environment.NO_PROXY` and `environment.no_proxy` (`localhost,127.0.0.1,::1`), `environment.NODE_USE_ENV_PROXY=1` |
 | Login shells and `su - aiuser -c` (`execAsAgent`), which reset the environment | The same variables in a root-owned file read by every login (pam_env's `/etc/environment`, or `/etc/profile.d/`; builder's choice, verified by the integration test through `execAsAgent`) |
 | apt (root) | `/etc/apt/apt.conf.d/90agent-forge-proxy` (`Acquire::http::Proxy`, `Acquire::https::Proxy`) |
-| aiuser's rootless Docker daemon (pulls) | systemd user drop-in `~/.config/systemd/user/docker.service.d/agent-forge-proxy.conf` with the variables; the user daemon is restarted when the drop-in changes |
+| aiuser's rootless Docker daemon (pulls) | system-wide systemd user drop-in `/etc/systemd/user/docker.service.d/agent-forge-proxy.conf` (root, 644; systemd applies it to the `docker.service` of every user manager) with the variables; the user daemon is restarted when the drop-in changes |
 | Containers and builds run by that daemon | **Nothing by default.** They get no proxy, so they reach nothing outside, while traffic between Compose services by name and to Docker networks keeps working. A build or container that needs an allowlisted domain is handed the variables explicitly (`--build-arg HTTPS_PROXY`, `-e HTTPS_PROXY`, or the project's Compose file); `container/CLAUDE.md` tells the agent so |
 | Chrome (chrome-devtools-mcp) | Reads the environment variables itself when no desktop environment runs (Chromium's `proxy_config_service_linux`); verified by the integration test. If it fails, forge adds `--proxy-server` to the MCP arguments in strict containers |
 
@@ -368,11 +368,13 @@ cases where tools differ:
   `NO_PROXY` then sends calls between Compose services (`http://api:8080`) to
   squid, which refuses them. `NO_PROXY` cannot list service names, and CIDRs in
   it are handled unevenly across clients.
-- Files written by forge are owned by root where the agent need not change them
-  (`/etc/…`), and by aiuser where the tool requires it
-  (`~/.config/systemd/user`). An agent that edits or deletes them only breaks
-  its own access: the ACL is what enforces, the variables only make tools use
-  the proxy.
+- Files written by forge are all owned by root, under `/etc/…`. forge writes
+  them as root at every start, after the agent has run, so it never writes (or
+  reads) through a path the agent owns, such as its home: a symlink planted
+  there would turn the write into one to `/etc/passwd`. An agent that masks
+  them (a drop-in of the same name in `~/.config/systemd/user`) only breaks its
+  own access: the ACL is what enforces, the variables only make tools use the
+  proxy.
 - The container is marked `user.forge.egress=strict`. `forge list` does not
   trust this key alone (see "`forge list`").
 

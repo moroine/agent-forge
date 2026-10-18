@@ -10,13 +10,18 @@ import {
   startInstance,
 } from "./incus.ts";
 import { proxyPlan, type ProxyPlan } from "./ipv4.ts";
-import { AGENT_UID, PROXY_INSTANCE, PROXY_PORT, egressNames, type EgressMode, type EgressNames } from "./objects.ts";
+import { PROXY_INSTANCE, PROXY_PORT, egressNames, type EgressMode, type EgressNames } from "./objects.ts";
 import { configPath } from "./paths.ts";
 
+// All three are root's, under /etc. forge writes them as root at every start,
+// after the agent has run: never as root through a path the agent owns (its
+// home), where a symlink would redirect the write to /etc/passwd or a FIFO
+// would hang the read. systemd applies drop-ins in /etc/systemd/user/<unit>.d/
+// to that unit of every user manager, aiuser's rootless Docker included.
 export const PROXY_FILES = {
   profile: "/etc/profile.d/agent-forge-proxy.sh",
   apt: "/etc/apt/apt.conf.d/90agent-forge-proxy",
-  docker: "/home/aiuser/.config/systemd/user/docker.service.d/agent-forge-proxy.conf",
+  docker: "/etc/systemd/user/docker.service.d/agent-forge-proxy.conf",
 } as const;
 
 const EGRESS_KEY = "user.forge.egress";
@@ -51,7 +56,8 @@ export function aptConf(plan: ProxyPlan): string {
 }
 
 // The rootless Docker daemon runs as a systemd user unit, which does not see
-// the instance environment: it gets the variables through a drop-in.
+// the instance environment: it gets the variables through a drop-in
+// (PROXY_FILES.docker, system-wide, read by aiuser's user manager).
 export function dockerDropIn(env: Record<string, string>): string {
   return `[Service]\n${Object.entries(env).map(([k, v]) => `Environment="${k}=${v}"\n`).join("")}`;
 }
@@ -106,23 +112,24 @@ export async function applyStrictSettings(ctx: Context, container: string, plan:
   if (Object.keys(differing).length > 0) {
     await mustSucceed(`setting the proxy environment of ${container}`, configSetMany(ctx, container, differing));
   }
-  const files: [string, string, number][] = [
-    [PROXY_FILES.profile, profileScript(env), 0],
-    [PROXY_FILES.apt, aptConf(plan), 0],
-    [PROXY_FILES.docker, dockerDropIn(env), AGENT_UID],
+  const files: [string, string][] = [
+    [PROXY_FILES.profile, profileScript(env)],
+    [PROXY_FILES.apt, aptConf(plan)],
+    [PROXY_FILES.docker, dockerDropIn(env)],
   ];
   let dockerChanged = false;
-  for (const [path, content, id] of files) {
+  for (const [path, content] of files) {
     if ((await pullText(ctx, container, path)) === content) continue;
-    await mustSucceed(`writing ${path} in ${container}`, pushText(ctx, container, path, content, { uid: id, gid: id, mode: "644" }));
+    await mustSucceed(`writing ${path} in ${container}`, pushText(ctx, container, path, content, { uid: 0, gid: 0, mode: "644" }));
     if (path === PROXY_FILES.docker) dockerChanged = true;
   }
   if (dockerChanged) await restartDocker(ctx, container);
 }
 
-// Removes only forge's own files. The instance environment keys are not
-// touched: an open container never had them, and a former strict one keeps
-// them harmlessly until recreated (unsetting an absent key would fail).
+// Removes only forge's own files, by their fixed paths under /etc (`rm -f`
+// removes a link itself, never what it points to). The instance environment
+// keys are not touched: an open container never had them, and a former strict
+// one keeps them harmlessly until recreated (unsetting an absent key would fail).
 export async function clearStrictSettings(ctx: Context, container: string): Promise<void> {
   const hadDockerDropIn = (await execArgv(ctx, container, ["test", "-e", PROXY_FILES.docker])).code === 0;
   await mustSucceed(`removing the proxy settings of ${container}`,
