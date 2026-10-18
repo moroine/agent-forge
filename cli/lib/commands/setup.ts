@@ -1,21 +1,27 @@
 // forge setup (spec "forge setup"): converges everything forge owns inside
 // Incus. Idempotent: run it once per host, and again after changing the
-// config. Every mode runs it (VM, local Linux, Lima).
+// config. Every mode runs it (a VM provisioned by Ansible, remote or Lima); a
+// bare-metal run outside Ansible warns that no VM protects this machine.
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Context } from "../context.ts";
 import { loadConfig } from "../config.ts";
 import { converge, ensureProject, type Outcome } from "../converge.ts";
-import { checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, type ProcPaths } from "../host.ts";
+import {
+  checkHost, checkIpForward, checkStoragePool, detectVirt, exposedHostAddresses, runsOnBareMetalOutsideAnsible,
+  type ProcPaths,
+} from "../host.ts";
 import { forgeProject, listInstances } from "../incus.ts";
 import {
   ACL, BRIDGE, PROFILE, desiredAcl, desiredBridge, desiredProfile, desiredProject, rawLxcAllowed,
 } from "../objects.ts";
-import { configPath } from "../paths.ts";
+import { configPath, repoRoot } from "../paths.ts";
 
 export type SetupOptions = {
   proc?: ProcPaths;
   ids?: { uid: number; gid: number };
   interfaces?: () => NodeJS.Dict<NetworkInterfaceInfo[]>;
+  virt?: () => string | null;
+  releaseRoot?: string;
 };
 
 export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<number> {
@@ -61,6 +67,13 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
   for (const address of exposedHostAddresses((opts.interfaces ?? networkInterfaces)(), config.network.ipv4Address)) {
     ctx.err(`WARNING: host address ${address} is outside the ranges ${ACL} rejects: containers can reach host ` +
       `services listening on it, unless a host firewall drops traffic from ${BRIDGE}.`);
+  }
+
+  // 6. No VM between the containers and this machine (spec sub-project 5,
+  // "forge setup on bare metal"): only the Lima VM is documented locally.
+  if (runsOnBareMetalOutsideAnsible(opts.releaseRoot ?? repoRoot(), (opts.virt ?? detectVirt)())) {
+    ctx.err("WARNING: forge runs directly on this machine, not in a VM: an agent that escapes its container " +
+      "lands here, with this machine's keys and sessions. The supported local mode is a Lima VM (see the README).");
   }
   return 0;
 }

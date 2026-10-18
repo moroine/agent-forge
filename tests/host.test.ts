@@ -4,7 +4,9 @@ import type { NetworkInterfaceInfo } from "node:os";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { fakeProc } from "./lib/fake-host.ts";
-import { checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, readProc } from "../cli/lib/host.ts";
+import {
+  checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, readProc, runsOnBareMetalOutsideAnsible,
+} from "../cli/lib/host.ts";
 
 const USER = 1000;
 const ctx = (fake = new FakeIncus()) => fakeContext({ incus: fake });
@@ -95,4 +97,16 @@ test("host addresses the ACL covers raise nothing", () => {
 
 test("a public host address is reported", () => {
   assert.deepEqual(exposedHostAddresses({ eth0: [v4("203.0.113.7"), v4("192.168.1.2")] }, "10.77.0.1/24"), ["203.0.113.7"]);
+});
+
+// No VM between the containers and this machine, and no Ansible host either:
+// the undocumented "Linux directly on the dev machine" case.
+test("bare metal from a checkout is flagged", () => {
+  assert.equal(runsOnBareMetalOutsideAnsible("/home/alice/agent-forge", "none"), true);
+  assert.equal(runsOnBareMetalOutsideAnsible("/home/alice/agent-forge", null), true);
+});
+
+test("a VM or an Ansible release is not", () => {
+  assert.equal(runsOnBareMetalOutsideAnsible("/home/alice/agent-forge", "kvm"), false);
+  assert.equal(runsOnBareMetalOutsideAnsible("/opt/agent-forge/releases/abc123", "none"), false);
 });
