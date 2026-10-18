@@ -118,6 +118,8 @@ async function main(): Promise<number> {
       return 0;
     }
     cmd = positionals[0];
+    // Seul resume connaît --all : ailleurs, il serait ignoré en silence.
+    if (values.all && cmd !== "resume") throw new ForgeError("--all only goes with resume: forge resume --all");
     const code = await dispatch(ctx, positionals, values.force === true, values.strict === true, values.all === true);
     if (code !== 0 && attachInHerdrPane(cmd)) {
       ctx.err(`the agent exited with code ${code}`);

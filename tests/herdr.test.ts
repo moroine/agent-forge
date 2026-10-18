@@ -62,7 +62,31 @@ test("an ack with an empty answer succeeds (real herdr prints nothing for pane r
   const ctx = fakeContext({ rules: [{ match: "pane run", stdout: "" }] });
   await paneRun(ctx, h, "w1:p1", "ls");
   const bad = fakeContext({ rules: [{ match: "pane run", stdout: '{"error":{"message":"no pane"}}' }] });
-  await assert.rejects(paneRun(bad, h, "w1:p1", "ls"), /pane run w1:p1 ls failed: no pane/);
+  await assert.rejects(paneRun(bad, h, "w1:p1", "ls"), (e: Error) => e.message === "herdr pane run failed: no pane");
+});
+
+// The command's words name the failure; its values (ids, labels, the typed
+// attach command) stay out of the message.
+test("a failure names the herdr command without its values", async () => {
+  const ctx = fakeContext({ rules: [{ match: "pane run", code: 1, stderr: "boom\n" }] });
+  await assert.rejects(paneRun(ctx, h, "w1:p1", "exec env HERDR_AGENT=claude 'forge' attach agent-x cli"),
+    (e: Error) => e.message === "herdr pane run failed: boom");
+});
+
+test("a non-zero exit with a JSON error on stdout gives the error's message", async () => {
+  const ctx = fakeContext({ rules: [{ match: "tab focus", code: 1, stdout: '{"id":"1","error":{"code":"not_found","message":"no such tab"}}\n' }] });
+  await assert.rejects(focusTab(ctx, h, "w1:t9"), (e: Error) => e.message === "herdr tab focus failed: no such tab");
+});
+
+test("an error given as a string fails with it", async () => {
+  const ctx = fakeContext({ rules: [{ match: "workspace list", stdout: '{"error":"server busy"}' }] });
+  await assert.rejects(listWorkspaces(ctx, h), (e: Error) => e.message === "herdr workspace list failed: server busy");
+});
+
+test("an unreadable answer quotes at most 200 characters of it", async () => {
+  const ctx = fakeContext({ rules: [{ match: "workspace list", stdout: "x".repeat(1000) }] });
+  await assert.rejects(listWorkspaces(ctx, h),
+    (e: Error) => e.message === `herdr workspace list: unreadable answer: ${"x".repeat(200)}…`);
 });
 
 test("paneForeground", async () => {
@@ -73,9 +97,9 @@ test("paneForeground", async () => {
 
 test("a failing herdr call quotes stderr, or stdout when stderr is empty", async () => {
   const a = fakeContext({ rules: [{ match: "tab create", code: 1, stderr: " bad things \n" }] });
-  await assert.rejects(createTab(a, h, "w", "l", "/c"), /herdr tab create --workspace w .* failed: bad things$/);
+  await assert.rejects(createTab(a, h, "w", "l", "/c"), (e: Error) => e.message === "herdr tab create failed: bad things");
   const b = fakeContext({ rules: [{ match: "tab create", code: 1, stdout: "from stdout" }] });
-  await assert.rejects(createTab(b, h, "w", "l", "/c"), /herdr tab create .* failed: from stdout$/);
+  await assert.rejects(createTab(b, h, "w", "l", "/c"), (e: Error) => e.message === "herdr tab create failed: from stdout");
 });
 
 test("an unreadable answer names the command and quotes the output", async () => {

@@ -21,6 +21,7 @@ let home = "";
 let env: NodeJS.ProcessEnv = process.env;
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+const saved = { home: process.env.HOME, sock: process.env.HERDR_SOCKET_PATH };
 
 before(async () => {
   if (skip) return;
@@ -41,6 +42,10 @@ after(() => {
   if (skip || !home) return;
   spawnSync("herdr", ["server", "stop"], { env, stdio: "ignore" });
   rmSync(home, { recursive: true, force: true });
+  for (const [k, v] of [["HOME", saved.home], ["HERDR_SOCKET_PATH", saved.sock]] as const) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 test("herdr accepts the config block forge setup writes", { skip }, () => {

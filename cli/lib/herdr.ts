@@ -28,8 +28,21 @@ const str = (v: unknown): string => {
   return v;
 };
 
+// What a herdr `error` field says: its message, the string itself, or null
+// when there is no error.
+function errorText(error: unknown): string | null {
+  if (typeof error === "string") return error || null;
+  if (error === null || typeof error !== "object") return null;
+  const message = (error as { message?: unknown }).message;
+  return typeof message === "string" ? message : JSON.stringify(error);
+}
+
+// herdr's output quoted in a message, cut to a readable length.
+const MAX_QUOTE = 200;
+const quote = (s: string): string => (s.length > MAX_QUOTE ? `${s.slice(0, MAX_QUOTE)}…` : s);
+
 // Runs one herdr command, checks the exit code, parses stdout, rejects an
-// `error` object, and extracts the wanted fields with `pick`.
+// `error` field, and extracts the wanted fields with `pick`.
 async function herdrJson<T>(
   ctx: Context,
   h: HerdrEnv,
@@ -39,23 +52,23 @@ async function herdrJson<T>(
   // Acks may answer with nothing at all (pane run does).
   allowEmpty = false,
 ): Promise<T> {
-  const cmd = `herdr ${args.join(" ")}`;
+  // The command's words only: its values (ids, labels, the typed command)
+  // would bury the cause.
+  const cmd = `herdr ${args.slice(0, 2).join(" ")}`;
   const r = await ctx.exec([h.bin, ...args]);
-  if (r.code !== 0) {
-    throw new ForgeError(`${cmd} failed: ${r.stderr.trim() || r.stdout.trim()}`);
-  }
-  const unreadable = () => new ForgeError(`${cmd}: unreadable answer: ${r.stdout.trim()}`);
-  if (allowEmpty && r.stdout.trim() === "") return pick(undefined);
-  let parsed: any;
+  let parsed: any = null;
   try {
     parsed = JSON.parse(r.stdout);
-  } catch {
-    throw unreadable();
+  } catch { /* not JSON: handled below */ }
+  const readable = parsed !== null && typeof parsed === "object";
+  const error = readable ? errorText(parsed.error) : null;
+  if (r.code !== 0) {
+    throw new ForgeError(`${cmd} failed: ${error ?? quote(r.stderr.trim() || r.stdout.trim())}`);
   }
-  if (parsed === null || typeof parsed !== "object") throw unreadable();
-  if (parsed.error && typeof parsed.error === "object") {
-    throw new ForgeError(`${cmd} failed: ${parsed.error.message ?? JSON.stringify(parsed.error)}`);
-  }
+  const unreadable = () => new ForgeError(`${cmd}: unreadable answer: ${quote(r.stdout.trim())}`);
+  if (allowEmpty && r.stdout.trim() === "") return pick(undefined);
+  if (!readable) throw unreadable();
+  if (error !== null) throw new ForgeError(`${cmd} failed: ${error}`);
   try {
     const value = pick(parsed.result);
     if (value === undefined) throw new Error("undefined");
