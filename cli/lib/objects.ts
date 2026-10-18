@@ -3,7 +3,7 @@
 // Objects"). converge.ts compares them with what Incus holds; nothing here
 // talks to Incus.
 import type { ForgeConfig } from "./config.ts";
-import { DEFAULT_PROJECT } from "./incus.ts";
+import { DEFAULT_PROJECT, forgeProject } from "./incus.ts";
 import { REJECTED_RANGES, dhcpRanges, type ProxyPlan } from "./ipv4.ts";
 
 // Shared with sub-project 1: the host firewall matches the bridge by name.
@@ -105,6 +105,14 @@ export function desiredProfile(cfg: ForgeConfig, ids: Ids, opts: { rawLxc: boole
 // low-level container keys (spec "Restricted-project compatibility").
 export function rawLxcAllowed(projectConfig: Record<string, string>): boolean {
   return projectConfig.restricted !== "true" || projectConfig["restricted.containers.lowlevel"] === "allow";
+}
+
+// The proxy instance of `project`. Incus derives the DNS name from the instance
+// name and refuses two instances of the same name on one bridge, whatever
+// their projects: another project's proxy takes the project suffix, like its
+// ACLs below, so it can run next to the real one.
+export function proxyInstance(project: string = forgeProject()): string {
+  return project === DEFAULT_PROJECT ? PROXY_INSTANCE : `${PROXY_INSTANCE}-${project}`;
 }
 
 export type EgressNames = { slot: number; proxyAcl: string; strictAcl: string };

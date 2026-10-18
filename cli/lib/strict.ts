@@ -11,7 +11,7 @@ import {
 } from "./incus.ts";
 import { proxyPlan, type ProxyPlan } from "./ipv4.ts";
 import {
-  PROXY_INSTANCE, PROXY_PORT, effectiveEgress, egressNames, type EgressMode, type EgressNames,
+  PROXY_PORT, effectiveEgress, egressNames, proxyInstance, type EgressMode, type EgressNames,
 } from "./objects.ts";
 import { configPath } from "./paths.ts";
 
@@ -89,9 +89,9 @@ export async function requireStrictRuntime(ctx: Context): Promise<ProxyPlan> {
   if (!(await listObjects(ctx, "network acl")).some((a) => a.name === names.strictAcl)) {
     throw new ForgeError(`the network ACL ${names.strictAcl} does not exist. Run 'forge setup'.`);
   }
-  const proxy = (await listInstances(ctx)).find((i) => i.name === PROXY_INSTANCE);
+  const proxy = (await listInstances(ctx)).find((i) => i.name === proxyInstance());
   if (!proxy || !proxy.config[PROXY_RECIPE_KEY]) {
-    throw new ForgeError(`${PROXY_INSTANCE} does not exist or is incomplete. Run 'forge setup'.`);
+    throw new ForgeError(`${proxyInstance()} does not exist or is incomplete. Run 'forge setup'.`);
   }
   return currentPlan();
 }
@@ -182,13 +182,13 @@ export async function egressBeforeStart(ctx: Context, container: string): Promis
   if (mismatch !== null) throw new ForgeError(`refusing to start ${container}: ${mismatch}`);
   if (mode !== "strict") return mode;
   await requireStrictIncus(ctx);
-  const proxy = instances.find((i) => i.name === PROXY_INSTANCE);
+  const proxy = instances.find((i) => i.name === proxyInstance());
   if (!proxy) {
-    ctx.err(`WARNING: ${PROXY_INSTANCE} is missing: ${container} starts without any egress. Run 'forge setup'.`);
+    ctx.err(`WARNING: ${proxyInstance()} is missing: ${container} starts without any egress. Run 'forge setup'.`);
   } else if (proxy.status !== "Running") {
-    const r = await startInstance(ctx, PROXY_INSTANCE);
+    const r = await startInstance(ctx, proxyInstance());
     if (r.code !== 0) {
-      ctx.err(`WARNING: could not start ${PROXY_INSTANCE} (${r.stderr.trim() || `exit code ${r.code}`}): ` +
+      ctx.err(`WARNING: could not start ${proxyInstance()} (${r.stderr.trim() || `exit code ${r.code}`}): ` +
         `${container} has no egress until it runs. Run 'forge setup'.`);
     }
   }

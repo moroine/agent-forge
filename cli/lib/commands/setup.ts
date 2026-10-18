@@ -13,8 +13,8 @@ import {
 import { forgeProject, listInstances, serverInfo } from "../incus.ts";
 import { proxyPlan } from "../ipv4.ts";
 import {
-  ACL, BRIDGE, PROFILE, PROXY_INSTANCE, PROXY_PROFILE, desiredAcl, desiredBridge, desiredProfile, desiredProject,
-  desiredProxyAcl, desiredProxyProfile, desiredStrictAcl, effectiveEgress, egressNames, rawLxcAllowed,
+  ACL, BRIDGE, PROFILE, PROXY_PROFILE, desiredAcl, desiredBridge, desiredProfile, desiredProject,
+  desiredProxyAcl, desiredProxyProfile, desiredStrictAcl, effectiveEgress, egressNames, proxyInstance, rawLxcAllowed,
 } from "../objects.ts";
 import { allowlistPath, configPath } from "../paths.ts";
 import { convergeProxy } from "../proxy.ts";
@@ -95,23 +95,23 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
 
     // Another container sitting on the proxy's fixed address would shadow it.
     const instances = await listInstances(ctx);
-    const holder = instances.find((i) => i.name !== PROXY_INSTANCE && i.ipv4.includes(plan.proxyAddress));
+    const holder = instances.find((i) => i.name !== proxyInstance() && i.ipv4.includes(plan.proxyAddress));
     if (holder) {
-      throw new ForgeError(`${holder.name} holds ${plan.proxyAddress}, the address reserved for ${PROXY_INSTANCE}. ` +
+      throw new ForgeError(`${holder.name} holds ${plan.proxyAddress}, the address reserved for ${proxyInstance()}. ` +
         `Stop it, then restart it (forge stop, forge start) so it takes a DHCP address, and run forge setup again.`);
     }
 
     const nic = { ...proxyProfile.devices.eth0, "ipv4.address": plan.proxyAddress };
     const proxy = await convergeProxy(ctx, { plan, entries, nic },
       { aptAttempts: opts.aptAttempts, aptDelayMs: opts.aptDelayMs, waitDelayMs: opts.waitDelayMs });
-    report("instance", PROXY_INSTANCE, proxy.outcome);
+    report("instance", proxyInstance(), proxy.outcome);
 
     if (proxy.previousAddress !== null) {
       const strict = instances
-        .filter((i) => i.name !== PROXY_INSTANCE && effectiveEgress(i.expandedDevices, names) === "strict")
+        .filter((i) => i.name !== proxyInstance() && effectiveEgress(i.expandedDevices, names) === "strict")
         .map((i) => i.name);
       if (strict.length > 0) {
-        ctx.err(`NOTICE: ${PROXY_INSTANCE} moved from ${proxy.previousAddress} to ${plan.proxyAddress}: ` +
+        ctx.err(`NOTICE: ${proxyInstance()} moved from ${proxy.previousAddress} to ${plan.proxyAddress}: ` +
           `${strict.join(", ")} still point at the old address and pick up the new one at their next start ` +
           "(forge stop, then forge start).");
       }
