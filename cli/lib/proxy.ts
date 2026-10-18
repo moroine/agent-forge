@@ -65,9 +65,12 @@ export function squidConfig(plan: ProxyPlan, opts: { hasEntries: boolean }): str
     "http_access deny CONNECT !SSL_ports",
     "http_access deny ftp",
     "http_access deny iplit",
-    "http_access deny privdst",
   );
-  if (opts.hasEntries) out.push("http_access allow agents allowed");
+  // privdst is a `dst` ACL: matching it makes squid resolve the name. ACLs on
+  // one line are ANDed left to right and stop at the first mismatch, so after
+  // `allowed` it is only looked up for a listed name: a refused name never
+  // makes squid query DNS (no DNS channel through the proxy).
+  if (opts.hasEntries) out.push("http_access allow agents allowed !privdst");
   out.push("http_access deny all", "");
   return out.join("\n");
 }

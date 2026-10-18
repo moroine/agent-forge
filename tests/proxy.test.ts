@@ -19,16 +19,16 @@ test("squid listens on the proxy address only, with ICP, HTCP and the cache off"
   assert.equal(SQUID_ACCESS_LOG, "/var/log/squid/access.log");
 });
 
-test("http_access denies bad ports, non-443 CONNECT, IP literals and private destinations before the allowlist", () => {
-  assert.equal(access.length, 7);
-  assert.match(access[0], /deny !Safe_ports/);
-  assert.match(access[1], /deny CONNECT !SSL_ports/);
-  assert.equal(access[2], "http_access deny ftp");
+test("http_access denies bad ports, non-443 CONNECT and IP literals, then allows listed names to public destinations only", () => {
+  assert.deepEqual(access, [
+    "http_access deny !Safe_ports",
+    "http_access deny CONNECT !SSL_ports",
+    "http_access deny ftp",
+    "http_access deny iplit",
+    "http_access allow agents allowed !privdst",
+    "http_access deny all",
+  ]);
   assert.ok(lines.includes("acl ftp proto FTP"));
-  assert.match(access[3], /deny iplit/);
-  assert.match(access[4], /deny privdst/);
-  assert.equal(access[5], "http_access allow agents allowed");
-  assert.equal(access[6], "http_access deny all");
   assert.ok(conf.includes('acl allowed dstdomain -n "/etc/squid/allowlist"'));
   assert.match(conf, /^acl iplit dstdom_regex -n /m);
   const priv = lines.find((l) => l.startsWith("acl privdst dst"))!;
@@ -36,11 +36,29 @@ test("http_access denies bad ports, non-443 CONNECT, IP literals and private des
     "0.0.0.0/8", "224.0.0.0/4", "::1", "::/128", "fc00::/7", "fe80::/10", "ff00::/8"]) assert.ok(priv.split(" ").includes(net), net);
 });
 
+// squid resolves a name to match a `dst` ACL. ACLs on one line are ANDed left
+// to right and stop at the first mismatch, so privdst after `allowed` is only
+// ever looked up for a listed name: no DNS query for a refused one.
+test("the only rule that needs DNS (privdst) is reached for listed names only", () => {
+  const usesPrivdst = access.filter((l) => l.split(" ").some((w) => w.replace(/^!/, "") === "privdst"));
+  assert.equal(usesPrivdst.length, 1);
+  const words = usesPrivdst[0].split(" ");
+  assert.ok(words.indexOf("allowed") >= 0 && words.indexOf("allowed") < words.indexOf("!privdst"), usesPrivdst[0]);
+  const empty = squidConfig(plan, { hasEntries: false }).split("\n").filter((l) => l.startsWith("http_access"));
+  assert.ok(!empty.some((l) => l.includes("privdst")), empty.join("\n"));
+});
+
 test("an empty allowlist drops the allow rule and the allowlist ACL", () => {
   const empty = squidConfig(plan, { hasEntries: false });
+  assert.deepEqual(empty.split("\n").filter((l) => l.startsWith("http_access")), [
+    "http_access deny !Safe_ports",
+    "http_access deny CONNECT !SSL_ports",
+    "http_access deny ftp",
+    "http_access deny iplit",
+    "http_access deny all",
+  ]);
   assert.ok(!empty.includes("allow agents"));
   assert.ok(!empty.includes("dstdomain"));
-  assert.ok(empty.includes("http_access deny all"));
 });
 
 test("allowlistText is one entry per line with a final newline, empty when empty", () => {
