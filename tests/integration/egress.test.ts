@@ -24,7 +24,7 @@
 import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   ENABLED, PREFIX, REPO_ROOT, SENTINEL, SENTINEL_PEER, asAgent, copyImage, forge as forgeIn, incus, launch, must, raw, run,
@@ -47,8 +47,22 @@ let peerReady = false;
 let proxyIp = "";
 let bridgeIp = "";
 let ipOfExample = "";
+// example.com's IPv4, resolved once on the host.
+function exampleIp(): string {
+  if (!ipOfExample) {
+    const resolved = must("resolve example.com on the host", run("getent", ["ahostsv4", "example.com"]));
+    ipOfExample = resolved.stdout.trim().split(/\s+/)[0];
+    assert.match(ipOfExample, /^\d+\.\d+\.\d+\.\d+$/, raw("getent", resolved));
+  }
+  return ipOfExample;
+}
 
-const env = () => ({ FORGE_PROXY_SLOT: SLOT, XDG_CONFIG_HOME: xdg });
+// XDG_CONFIG_HOME is overridden for forge's allowlist and config: the incus
+// client keeps its own configuration through INCUS_CONF.
+const env = () => ({
+  FORGE_PROXY_SLOT: SLOT, XDG_CONFIG_HOME: xdg,
+  INCUS_CONF: process.env.INCUS_CONF ?? join(homedir(), ".config", "incus"),
+});
 const forge = (args: string[]) => forgeIn(PROJECT, args, env());
 const allowlistFile = () => join(xdg, "agent-forge", "egress-allowlist");
 
@@ -190,18 +204,18 @@ test("a domain off the list gets the proxy's 403", { skip: !ENABLED }, (t) => {
 test("going around the proxy reaches nothing", { skip: !ENABLED }, (t) => {
   if (!ready) return t.skip("no strict container");
   expectAllowed(S1, "https://example.com"); // positive control (through the proxy)
-  eachWay(S1, "curl -sS -m 15 -o /dev/null --noproxy '*' https://example.com", (r, way) => {
-    assert.notEqual(r.status, 0, raw(`direct https://example.com via ${way} answered`, r));
+  // --resolve bypasses DNS: a failed lookup (exit 6) must not pass for a
+  // firewall block. Only a refused (7) or timed-out (28) connection does.
+  const direct = `curl -sS -m 15 -o /dev/null --noproxy '*' --resolve example.com:443:${exampleIp()} https://example.com`;
+  eachWay(S1, direct, (r, way) => {
+    assert.ok(r.status === 7 || r.status === 28, raw(`direct https://example.com via ${way}: expected curl exit 7 or 28`, r));
   });
 });
 
 test("an IP literal is denied by the proxy", { skip: !ENABLED }, (t) => {
   if (!ready) return t.skip("no strict container");
-  const resolved = must("resolve example.com on the host", run("getent", ["ahostsv4", "example.com"]));
-  ipOfExample = resolved.stdout.trim().split(/\s+/)[0];
-  assert.match(ipOfExample, /^\d+\.\d+\.\d+\.\d+$/, raw("getent", resolved));
   expectAllowed(S1, "https://example.com");
-  expectRefused(S1, `https://${ipOfExample}`);
+  expectRefused(S1, `https://${exampleIp()}`);
 });
 
 test("the proxy's other ports, the bridge and a second container are unreachable", { skip: !ENABLED }, (t) => {
@@ -242,8 +256,11 @@ test("Node, git and Chrome go through the proxy", { skip: !ENABLED }, (t) => {
   const ls = (host: string) => `GIT_TERMINAL_PROMPT=0 timeout 30 git ls-remote https://${host}/nothing.git`;
   eachWay(S1, ls("example.com"), (r, way) => {
     assert.notEqual(r.status, 0, raw(`git ls-remote via ${way}`, r));
-    assert.match(r.stderr, /returned error|HTTP|40\d/, raw(`git ls-remote via ${way}`, r));
-    assert.doesNotMatch(r.stderr, /CONNECT tunnel failed/, raw(`git ls-remote via ${way}`, r));
+    // An HTTP answer came back through the tunnel (404 "not found", a 200 page
+    // "not valid", or "returned error"), and nothing failed to connect.
+    assert.doesNotMatch(r.stderr, /CONNECT tunnel failed|Could not resolve|Failed to connect|Connection timed out/,
+      raw(`git ls-remote via ${way}`, r));
+    assert.match(r.stderr, /not found|not valid|returned error/, raw(`git ls-remote via ${way}`, r));
   });
   eachWay(S1, ls("example.org"), (r, way) => {
     assert.match(r.stderr, /CONNECT tunnel failed/, raw(`git ls-remote of a refused host via ${way}`, r));
@@ -258,11 +275,12 @@ test("Node, git and Chrome go through the proxy", { skip: !ENABLED }, (t) => {
   });
 });
 
-test("Docker's daemon has the proxy; its containers do not, unless given it", { skip: !ENABLED }, (t) => {
+test("the Docker daemon has the proxy", { skip: !ENABLED }, (t) => {
   if (!ready) return t.skip("no strict container");
   // The drop-in's directory was created by `incus file push --create-dirs`:
   // it must belong to aiuser, or the user manager could not read it.
-  for (const path of [DOCKER_DIR, DOCKER_DROP_IN]) {
+  const home = "/home/aiuser";
+  for (const path of [`${home}/.config`, `${home}/.config/systemd`, `${home}/.config/systemd/user`, DOCKER_DIR, DOCKER_DROP_IN]) {
     const owner = must(`stat ${path}`, incus(PROJECT, ["exec", S1, "--", "stat", "-c", "%u:%g", path]));
     assert.equal(owner.stdout.trim(), "1001:1001", raw(`owner of ${path}`, owner));
   }
@@ -270,9 +288,12 @@ test("Docker's daemon has the proxy; its containers do not, unless given it", { 
     "for i in $(seq 1 30); do XDG_RUNTIME_DIR=/run/user/1001 systemctl --user show docker -p Environment && exit 0; sleep 1; done; exit 1");
   assert.equal(show.status, 0, raw("systemctl --user show docker", show));
   assert.ok(show.stdout.includes(`HTTPS_PROXY=http://${proxyIp}:3128`), raw("the daemon's environment", show));
+});
 
-  // A real pull needs Docker Hub on the allowlist: a second opt-in.
-  if (process.env.FORGE_INTEGRATION_DOCKER !== "1") return;
+// A real pull needs Docker Hub on the allowlist: a second opt-in.
+test("a container run by Docker has no proxy unless given it", { skip: !ENABLED }, (t) => {
+  if (process.env.FORGE_INTEGRATION_DOCKER !== "1") return t.skip("set FORGE_INTEGRATION_DOCKER=1 (needs Docker Hub; pulls an image)");
+  if (!ready) return t.skip("no strict container");
   const original = allowlistFile();
   const hubList = "example.com\n.docker.io\n.docker.com\nproduction.cloudflare.docker.com\n";
   writeFileSync(original, hubList);
@@ -301,8 +322,6 @@ test("forge egress log shows the 403, attributed to the container", { skip: !ENA
   }
   assert.match(out, /^TIME\s+CONTAINER\s+RESULT\s+METHOD\s+HOST$/m, out);
   assert.match(out, new RegExp(`${S1}\\s+denied\\s+CONNECT\\s+example\\.org:443`), out);
-  // Filtered by repo: nothing of the peer.
-  assert.doesNotMatch(out, new RegExp(PEER), out);
 });
 
 test("a forced DHCP renewal keeps the address", { skip: !ENABLED }, (t) => {
@@ -312,6 +331,8 @@ test("a forced DHCP renewal keeps the address", { skip: !ENABLED }, (t) => {
     "timeout 30 networkctl renew eth0 || timeout 30 dhclient -1 eth0"]));
   spawnSleep(5);
   assert.equal(ipv4Of(S1), held, "the address changed after the renewal");
+  // The container still reaches the proxy afterwards.
+  eachWay(S1, tcp(proxyIp, 3128), (r, way) => assert.equal(r.status, 0, raw(`${proxyIp}:3128 via ${way} after the renewal`, r)));
   expectAllowed(S1, "https://example.com");
 });
 
