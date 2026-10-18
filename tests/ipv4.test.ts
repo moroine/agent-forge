@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { addressIn, cidrWithin, isHostAddress, parseAddress, parseCidr, REJECTED_RANGES } from "../cli/lib/ipv4.ts";
+import { addressIn, cidrWithin, isHostAddress, parseAddress, parseCidr, proxyPlan, REJECTED_RANGES } from "../cli/lib/ipv4.ts";
 
 const cidr = (text: string) => parseCidr(text)!;
 
@@ -40,4 +40,28 @@ test("the ACL's ranges, in order", () => {
   assert.deepEqual([...REJECTED_RANGES], [
     "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "169.254.0.0/16", "100.64.0.0/10", "224.0.0.0/4",
   ]);
+});
+
+test("the default bridge gives the proxy 10.77.0.2 and DHCP from .10 to .254", () => {
+  assert.deepEqual(proxyPlan("10.77.0.1/24", 0), {
+    bridgeAddress: "10.77.0.1", subnet: "10.77.0.0/24", proxyAddress: "10.77.0.2", dhcpRanges: "10.77.0.10-10.77.0.254",
+  });
+});
+
+test("a bridge address inside the reserved block is skipped when picking slots", () => {
+  assert.equal(proxyPlan("10.77.0.2/24", 0).proxyAddress, "10.77.0.3");
+  assert.equal(proxyPlan("10.77.0.2/24", 1).proxyAddress, "10.77.0.4");
+});
+
+test("slot 1 is the next reserved address", () => assert.equal(proxyPlan("10.77.0.1/24", 1).proxyAddress, "10.77.0.3"));
+
+test("a /27 keeps 21 dynamic addresses", () =>
+  assert.equal(proxyPlan("192.168.50.1/27", 0).dhcpRanges, "192.168.50.10-192.168.50.30"));
+
+test("a bridge address that is not the first of its subnet still plans from the network", () =>
+  assert.equal(proxyPlan("172.20.3.200/16", 0).proxyAddress, "172.20.0.2"));
+
+test("a slot beyond the reserved block throws", () => {
+  assert.throws(() => proxyPlan("10.77.0.1/24", 8), /slot/);
+  assert.throws(() => proxyPlan("10.77.0.5/24", 7), /slot/);
 });

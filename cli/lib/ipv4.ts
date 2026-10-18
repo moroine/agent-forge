@@ -60,3 +60,45 @@ export function isHostAddress(c: Cidr): boolean {
   const last = first + 2 ** (32 - c.prefix) - 1;
   return c.address !== first && c.address !== last;
 }
+
+export function formatAddress(n: number): string {
+  return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join(".");
+}
+
+export type ProxyPlan = { bridgeAddress: string; subnet: string; proxyAddress: string; dhcpRanges: string };
+
+// The proxy block: network+2 … network+9, eight addresses kept out of DHCP.
+const RESERVED_FIRST = 2;
+const RESERVED_LAST = 9;
+
+// DHCP hands out network+10 … broadcast-1 ("<first>-<last>"). A /27 keeps 21.
+export function dhcpRanges(bridgeCidr: string): string {
+  const c = parseCidr(bridgeCidr);
+  if (!c) throw new Error(`invalid CIDR ${bridgeCidr}`);
+  const first = network(c);
+  const broadcast = first + 2 ** (32 - c.prefix) - 1;
+  return `${formatAddress(first + RESERVED_LAST + 1)}-${formatAddress(broadcast - 1)}`;
+}
+
+// Where the proxy of `slot` lives. Slot n is the n-th reserved address; the
+// bridge's own address is skipped if it falls inside the block. A slot beyond
+// the block is a programming error, not a user error.
+export function proxyPlan(bridgeCidr: string, slot: number): ProxyPlan {
+  const c = parseCidr(bridgeCidr);
+  if (!c) throw new Error(`invalid CIDR ${bridgeCidr}`);
+  const first = network(c);
+  const reserved: number[] = [];
+  for (let a = first + RESERVED_FIRST; a <= first + RESERVED_LAST; a++) {
+    if (a !== c.address) reserved.push(a);
+  }
+  const proxy = reserved[slot];
+  if (!Number.isInteger(slot) || slot < 0 || proxy === undefined) {
+    throw new Error(`proxy slot ${slot} is outside the reserved block`);
+  }
+  return {
+    bridgeAddress: formatAddress(c.address),
+    subnet: `${formatAddress(first)}/${c.prefix}`,
+    proxyAddress: formatAddress(proxy),
+    dhcpRanges: dhcpRanges(bridgeCidr),
+  };
+}

@@ -117,3 +117,8 @@ test("limits.rootDisk is a size", () => {
 test("storagePool is a pool name", () => {
   for (const bad of ["", "-x", 3]) rejects({ storagePool: bad }, /storagePool/);
 });
+
+test("a bridge narrower than /27 is refused", () => {
+  assert.throws(() => parseConfig("f", { network: { ipv4Address: "10.77.0.1/28" } }), /network\.ipv4Address/);
+  assert.doesNotThrow(() => parseConfig("f", { network: { ipv4Address: "10.77.0.1/27" } }));
+});

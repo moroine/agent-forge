@@ -3,12 +3,17 @@
 // Objects"). converge.ts compares them with what Incus holds; nothing here
 // talks to Incus.
 import type { ForgeConfig } from "./config.ts";
+import { DEFAULT_PROJECT } from "./incus.ts";
 import { REJECTED_RANGES } from "./ipv4.ts";
 
 // Shared with sub-project 1: the host firewall matches the bridge by name.
 export const BRIDGE = "forgebr0";
 export const ACL = "forge-egress";
 export const PROFILE = "agent-forge";
+// The strict-mode proxy: its instance, its profile and its listening port.
+export const PROXY_INSTANCE = "forge-proxy";
+export const PROXY_PROFILE = "forge-proxy";
+export const PROXY_PORT = 3128;
 // aiuser in the image (role forge_image).
 export const AGENT_UID = 1001;
 
@@ -97,4 +102,18 @@ export function desiredProfile(cfg: ForgeConfig, ids: Ids, opts: { rawLxc: boole
 // low-level container keys (spec "Restricted-project compatibility").
 export function rawLxcAllowed(projectConfig: Record<string, string>): boolean {
   return projectConfig.restricted !== "true" || projectConfig["restricted.containers.lowlevel"] === "allow";
+}
+
+export type EgressNames = { slot: number; proxyAcl: string; strictAcl: string };
+
+// agent-forge owns slot 0 and the plain ACL names. Any other project (the
+// disposable ones of the tests) takes FORGE_PROXY_SLOT (1-7, default 1) and
+// suffixed names, so it never collides with the real proxy. FORGE_PROXY_SLOT is
+// test-only and deliberately undocumented, like FORGE_INCUS_PROJECT.
+export function egressNames(project: string): EgressNames {
+  if (project === DEFAULT_PROJECT) return { slot: 0, proxyAcl: "forge-proxy", strictAcl: "forge-egress-strict" };
+  const raw = process.env.FORGE_PROXY_SLOT ?? "1";
+  const slot = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
+  if (!(slot >= 1 && slot <= 7)) throw new Error(`FORGE_PROXY_SLOT must be an integer from 1 to 7, got "${raw}"`);
+  return { slot, proxyAcl: `forge-proxy-${project}`, strictAcl: `forge-egress-strict-${project}` };
 }
