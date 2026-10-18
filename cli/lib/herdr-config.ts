@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, w
 import { dirname, join } from "node:path";
 import { ForgeError, type Context } from "./context.ts";
 import { forgeCommand, forgeHome, herdrConfigPath } from "./paths.ts";
-import { shellQuote } from "./tabs.ts";
+import { shellQuote } from "./shell.ts";
 
 export const BLOCK_START = "# >>> agent-forge >>>";
 export const BLOCK_END = "# <<< agent-forge <<<";
