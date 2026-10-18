@@ -17,7 +17,8 @@ import { cmdCompletion } from "./lib/commands/completion.ts";
 const USAGE = `Usage: forge <command> [args]
 
 Commands:
-  setup                             Create or update forge's Incus project, bridge, ACL and profile
+  setup                             Create or update forge's Incus project, bridge, ACLs and profiles,
+                                    the egress proxy (forge-proxy) and its allowlist
   start [--strict] [<owner/repo>] [<task>]
                                     Provision (if needed) and start/attach a task session
   resume [<owner/repo>] [<task>]    Re-attach an existing task's session

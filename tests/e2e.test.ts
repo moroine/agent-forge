@@ -32,6 +32,9 @@ test("no argument prints the usage and exits 0", () => {
   const r = forge([]);
   assert.equal(r.status, 0);
   assert.match(r.stdout, /Usage: forge <command>/);
+  // setup also creates the egress proxy and the allowlist (its entry, up to the next command).
+  const setup = r.stdout.match(/^ {2}setup [\s\S]*?(?=^ {2}\S)/m)?.[0] ?? "";
+  assert.match(setup, /proxy[\s\S]*allowlist/, r.stdout);
 });
 
 test("an unknown command exits 1 with Error: on stderr", () => {

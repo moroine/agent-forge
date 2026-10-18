@@ -73,7 +73,7 @@ const covers = (a: string, b: string) => a.startsWith(".") && (b === a.slice(1) 
 
 export function parseAllowlist(path: string, text: string): string[] {
   const entries: { value: string; line: number }[] = [];
-  const lines = text.replace(/^﻿/, "").split(/\r?\n/);
+  const lines = text.replace(/^\uFEFF/, "").split(/\r?\n/);
   lines.forEach((raw, i) => {
     const line = i + 1;
     const value = raw.split("#")[0].replace(/^[ \t]+|[ \t]+$/g, "");
