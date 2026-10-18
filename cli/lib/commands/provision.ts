@@ -1,11 +1,11 @@
 // Provisioning d'un container neuf (spec v2, « Provisioning »). C'est la
-// seule commande qui modifie l'hôte : elle crée ~/workspaces/<container> et y
-// clone par SSH, avec l'agent de l'humain. Un seul mode : supervised — aucun
+// seule commande qui modifie l'hôte : elle crée un miroir nu de GitHub (par
+// SSH, avec l'agent de l'humain) et ~/workspaces/<container>, cloné ensuite
+// depuis le container. Un seul mode : supervised — aucun
 // credential GitHub, aucune clé de signature, aucun compte bot dans le
 // container. Les chemins hôte restent surchargeables par variable
 // d'environnement (paths.ts) pour que les tests ne touchent jamais un vrai home.
 import { existsSync, mkdirSync, readdirSync } from "node:fs";
-import { userInfo } from "node:os";
 import { join } from "node:path";
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
@@ -13,15 +13,19 @@ import { BASE_IMAGE, latestImageCommit } from "../containers.ts";
 import {
   configSet, execAsAgent, execAsAgentArgv, forgeProject, imageExists, incus, listObjects, waitReady,
 } from "../incus.ts";
-import { remoteRepo } from "../mirror.ts";
+import {
+  cloneWorkspace, ensureMirror, MIRROR_MOUNT, mirrorRepo, ORIGIN_DEVICE, pointOriginAtMirror,
+} from "../mirror.ts";
 import { PROFILE } from "../objects.ts";
-import { forgeHome, repoRoot, workspacesDir } from "../paths.ts";
+import { forgeHome, mirrorPath, repoRoot, workspacesDir } from "../paths.ts";
 
 // Le concept de mode reste (pre-bash.sh, CLAUDE.md, user.forge.mode) : le mode
 // autonome pourra revenir sans restructurer. v2 n'en provisionne qu'un.
 const MODE = "supervised";
 
-export async function provisionContainer(ctx: Context, container: string, ownerRepo: string): Promise<void> {
+export async function provisionContainer(
+  ctx: Context, container: string, ownerRepo: string,
+): Promise<{ mirror: "created" | "kept" }> {
   // Préconditions, toutes vérifiées avant de rien créer.
   const credentials = join(forgeHome(), ".claude", ".credentials.json");
   if (!existsSync(credentials)) {
@@ -30,29 +34,44 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   const identity = await hostGitIdentity(ctx);
   await requireRuntime(ctx);
   const workspaceDir = join(workspacesDir(), container);
-  const reuseWorkspace = await workspaceIsReusable(ctx, workspaceDir, ownerRepo);
+  const mirror = mirrorPath(container);
+  // Seul le miroir (possédé par forge) se questionne avec git : le workspace,
+  // lui, est écrit par l'agent, donc l'hôte n'y lance jamais git.
+  const existing = await mirrorRepo(ctx, mirror);
+  if (existsSync(mirror) && existing !== ownerRepo.toLowerCase()) {
+    throw new ForgeError(
+      `${mirror} is a mirror of ${existing ?? "an unknown repository"}, not ${ownerRepo}: ` +
+      "two repos share the container name. Move it aside and run the command again.");
+  }
+  const reuseWorkspace = workspaceIsReusable(workspaceDir, mirror, ownerRepo, existing);
+
+  // Le miroir se crée avant le lancement : un échec SSH ne laisse pas de container.
+  ctx.out(existing ? `Reusing the host mirror ${mirror}...` : `Fetching ${ownerRepo} into the host mirror...`);
+  const mirrorOutcome = await ensureMirror(ctx, mirror, ownerRepo);
 
   ctx.out(`Creating container ${container}...`);
   await mustSucceed("incus launch", ctx.exec(incus("launch", BASE_IMAGE, container, "--profile", PROFILE)));
   await waitReady(ctx, container);
 
-  // Le clone vit sur l'hôte : le container n'a jamais de credential GitHub.
-  const remote = `git@github.com:${ownerRepo}.git`;
   mkdirSync(workspaceDir, { recursive: true });
-  if (reuseWorkspace) {
-    // Le clone survivant a pu être fait par un container v1 autonome (origin
-    // en HTTPS) : on le réaligne sur l'URL SSH du clone hôte.
-    ctx.out(`Reusing the existing clone in ${workspaceDir}...`);
-    await mustSucceed("realign origin remote", ctx.exec(["git", "-C", workspaceDir, "remote", "set-url", "origin", remote]));
-  } else {
-    ctx.out(`Cloning ${ownerRepo} on the host...`);
-    await mustSucceed("clone repository", ctx.exec(["git", "clone", remote, workspaceDir]));
-  }
-  ctx.out("Mounting workspace...");
+  // Le miroir est monté en lecture seule : le container clone depuis lui et
+  // n'a jamais de credential GitHub.
+  ctx.out("Mounting the mirror and the workspace...");
+  await mustSucceed("mount mirror", ctx.exec(incus("config", "device", "add", container, ORIGIN_DEVICE, "disk",
+    `source=${mirror}`, `path=${MIRROR_MOUNT}`, "readonly=true")));
   // raw.idmap (profil agent-forge) mappe l'utilisateur hôte sur aiuser : pas
   // de shift sur ce device — un projet restreint l'interdirait de toute façon.
   await mustSucceed("mount workspace", ctx.exec(incus("config", "device", "add", container, "workspace", "disk",
     `source=${workspaceDir}`, "path=/workspace")));
+  if (reuseWorkspace) {
+    // Le clone survivant a pu être fait par un container v1 (origin sur GitHub) :
+    // on le réaligne sur le miroir, depuis le container.
+    ctx.out(`Reusing the existing clone in ${workspaceDir}...`);
+    await mustSucceed("realign origin remote", pointOriginAtMirror(ctx, container));
+  } else {
+    ctx.out(`Cloning ${ownerRepo} in the container...`);
+    await mustSucceed("clone repository", cloneWorkspace(ctx, container));
+  }
 
   // L'agent commite sous l'identité de l'humain, sans signature : l'humain
   // re-signe en publiant. Le trailer Co-Authored-By de Claude Code marque
@@ -138,8 +157,11 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   // L'hôte de forge n'est connu que de l'humain ; le sous-projet 5 affine.
   ctx.err("");
   ctx.err("Retrieve this container's work from your machine with:");
-  ctx.err(`  git remote add ${container} ssh://${userInfo().username}@<forge-host>${workspaceDir}`);
+  ctx.err(`  git remote add ${container} <forge-host>:${container}`);
+  ctx.err(`  git config remote.${container}.uploadpack "forge upload-pack ${container}"`);
+  ctx.err(`  git fetch ${container}`);
   ctx.out(`Container ${container} provisioned.`);
+  return { mirror: mirrorOutcome };
 }
 
 // Sondes : un code non nul veut dire « pas réglé ».
@@ -206,21 +228,18 @@ async function refreshClaude(ctx: Context, container: string): Promise<void> {
   }
 }
 
-// `forge delete` ne supprime QUE le container : ~/workspaces/<container> est
-// monté depuis l'hôte et survit délibérément (delete.ts). On tranche ici,
-// avant de rien créer :
-//   - clone du même repo  -> on le réutilise (le travail supervised non
-//     récupéré est la seule copie qui existe : on n'efface rien) ;
+// `forge delete` ne supprime QUE le container : ~/workspaces/<container> et le
+// miroir survivent délibérément (delete.ts). On tranche ici, avant de rien
+// créer, sans jamais lancer git dans le workspace :
+//   - vide ou absent       -> on clone dedans ;
+//   - non vide, miroir du même repo -> on le réutilise (le travail supervised
+//     non récupéré est la seule copie qui existe : on n'efface rien) ;
 //   - autre chose non vide -> on s'arrête sans y toucher.
-async function workspaceIsReusable(ctx: Context, workspaceDir: string, ownerRepo: string): Promise<boolean> {
+function workspaceIsReusable(workspaceDir: string, mirror: string, ownerRepo: string, existing: string | null): boolean {
   if (!existsSync(workspaceDir) || readdirSync(workspaceDir).length === 0) return false;
-
-  // Sonde : un code non nul est une réponse (« pas un dépôt git »), pas une
-  // panne — d'où l'absence de mustSucceed.
-  const origin = await ctx.exec(["git", "-C", workspaceDir, "remote", "get-url", "origin"]);
-  if (origin.code !== 0 || remoteRepo(origin.stdout) !== ownerRepo.toLowerCase()) {
+  if (existing !== ownerRepo.toLowerCase()) {
     throw new ForgeError(
-      `${workspaceDir} already exists, is not empty, and is not a clone of ${ownerRepo}. ` +
+      `${workspaceDir} already exists and is not empty, and no mirror of ${ownerRepo} vouches for it (${mirror}). ` +
       "It is the only copy of whatever it contains, so provisioning stops rather than overwrite it: " +
       "move it aside (or remove it) and run the command again.");
   }

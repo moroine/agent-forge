@@ -5,11 +5,13 @@
 // (provision.ts, workspaceIsReusable) : ce contrôle existe pour révéler du
 // travail *oublié* tant que le container est encore là, pas pour empêcher une
 // perte de données.
+import { join } from "node:path";
 import type { Context } from "../context.ts";
 import { mustSucceed } from "../context.ts";
 import { validateRepo } from "../validate.ts";
 import { requireContainerForRepo } from "../containers.ts";
 import { deleteInstance, instanceStatus } from "../incus.ts";
+import { mirrorPath, workspacesDir } from "../paths.ts";
 import { checkAllWorktrees } from "../wip.ts";
 import { resolveRepo } from "./resolve.ts";
 
@@ -26,5 +28,7 @@ export async function cmdDelete(ctx: Context, repo: string | undefined, force: b
 
   ctx.out(`Deleting container ${container}...`);
   await mustSucceed("incus delete", deleteInstance(ctx, container));
+  // Le workspace et le miroir sont hors du container : ils survivent.
+  ctx.out(`Kept ${join(workspacesDir(), container)} and ${mirrorPath(container)}: 'forge start ${ownerRepo}' reuses them.`);
   return 0;
 }

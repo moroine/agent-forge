@@ -1,10 +1,12 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync, rmSync, mkdirSync } from "node:fs";
-import { tmpdir, userInfo } from "node:os";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
+import { assertNoHostGitIn } from "./lib/host-git.ts";
+import { mirrorPath } from "../cli/lib/paths.ts";
 import { provisionContainer } from "../cli/lib/commands/provision.ts";
 
 let home: string;
@@ -15,12 +17,14 @@ beforeEach(() => {
   process.env.FORGE_HOME = home;
   process.env.FORGE_REPO_DIR = process.cwd();
   process.env.FORGE_WORKSPACES = join(home, "workspaces");
+  process.env.FORGE_MIRRORS = join(home, "mirrors");
 });
 afterEach(() => {
   rmSync(home, { recursive: true, force: true });
   delete process.env.FORGE_HOME;
   delete process.env.FORGE_REPO_DIR;
   delete process.env.FORGE_WORKSPACES;
+  delete process.env.FORGE_MIRRORS;
 });
 
 // Quotes, spaces and a command substitution: the identity must reach git as
@@ -49,7 +53,12 @@ function seedWorkspace(...files: string[]) {
   for (const f of files) writeFileSync(join(dir, f), "x");
   return dir;
 }
-const ORIGIN = (url: string): ExecRule => ({ match: "remote get-url", stdout: `${url}\n` });
+// A mirror left by a previous container, cloned from `url`.
+function seedMirror(url: string): ExecRule {
+  mkdirSync(mirrorPath("agent-x"), { recursive: true });
+  return { match: "--get remote.origin.url", stdout: `${url}\n` };
+}
+const WORKSPACE = () => join(home, "workspaces", "agent-x");
 
 test("a new container is launched from agent-base under the agent-forge profile, then waited for", async () => {
   const { ctx, run } = provision();
@@ -118,15 +127,6 @@ test("no autonomous remnant: no prompt, no gh, no signing key, no cloud-init cle
     assert.ok(!all.includes(gone), gone);
   }
   assert.ok(!ctx.err_lines.some((l) => l.endsWith("> ") || l.endsWith(": ")), "no question is asked");
-});
-
-test("the clone happens on the host over SSH, before the metadata", async () => {
-  const { ctx, run } = provision();
-  await run();
-  const calls = flat(ctx);
-  const clone = calls.indexOf(`git clone git@github.com:o/r.git ${join(home, "workspaces", "agent-x")}`);
-  const meta = calls.findIndex((l) => l.includes("user.forge.repo"));
-  assert.ok(clone >= 0 && meta > clone, calls.join("\n"));
 });
 
 test("the workspace is mounted without shift", async () => {
@@ -200,12 +200,18 @@ test("Claude Code is upgraded only when the package lists were refreshed", async
   assert.ok(update >= 0 && upgrade > update, calls.join("\n"));
 });
 
-test("the retrieval hint names the host user and no fixed port", async () => {
+test("the retrieval hint goes through forge upload-pack, with no ssh:// path", async () => {
   const { ctx, run } = provision();
   await run();
-  const hint = `  git remote add agent-x ssh://${userInfo().username}@<forge-host>${join(home, "workspaces", "agent-x")}`;
-  assert.ok(ctx.err_lines.includes(hint), ctx.err_lines.join("\n"));
-  assert.ok(!ctx.err_lines.join("\n").includes(":2222"));
+  const at = ctx.err_lines.indexOf("Retrieve this container's work from your machine with:");
+  assert.ok(at >= 0, ctx.err_lines.join("\n"));
+  assert.deepEqual(ctx.err_lines.slice(at, at + 4), [
+    "Retrieve this container's work from your machine with:",
+    "  git remote add agent-x <forge-host>:agent-x",
+    '  git config remote.agent-x.uploadpack "forge upload-pack agent-x"',
+    "  git fetch agent-x",
+  ]);
+  assert.ok(!ctx.err_lines.join("\n").includes("ssh://"));
 });
 
 test("the plugin marketplace is added over HTTPS, never over SSH", async () => {
@@ -244,39 +250,66 @@ test("the worktree exclude is its own step, written even when the hooks step fai
   assert.ok(!calls.some((l) => l.includes("lfs install") && l.includes("info/exclude")));
 });
 
-test("a failing clone aborts provisioning before the metadata", async () => {
-  const { ctx, run } = provision({ rules: [{ match: "git clone git@github.com", code: 1, stderr: "Permission denied (publickey)\n" }] });
-  await assert.rejects(run, /clone repository failed: Permission denied/);
-  assert.ok(!flat(ctx).some((l) => l.includes("user.forge.repo")));
-  assert.ok(!flat(ctx).some((l) => l.includes("git lfs install")));
-});
 
-test("a workspace left by a deleted container is reused, its origin realigned", async () => {
-  seedWorkspace("README.md");
-  const { ctx, run } = provision({ rules: [ORIGIN("https://github.com/o/r.git")] });
-  await run();
-  const calls = flat(ctx);
-  assert.ok(!calls.some((l) => l.includes("git clone")));
-  assert.ok(calls.some((l) => l.includes("remote set-url origin git@github.com:o/r.git")));
-});
-
-test("a non-empty workspace of another repo stops everything before the launch", async () => {
-  seedWorkspace("README.md");
-  const { ctx, run } = provision({ rules: [ORIGIN("git@github.com:someone/else.git")] });
-  await assert.rejects(run, /not a clone of o\/r/);
-  assert.equal(launched(ctx), false);
-});
-
-test("a non-empty workspace that is not a git repository stops everything before the launch", async () => {
-  seedWorkspace("notes.txt");
-  const { ctx, run } = provision({ rules: [{ match: "remote get-url", code: 128 }] });
-  await assert.rejects(run, /not a clone of o\/r/);
-  assert.equal(launched(ctx), false);
-});
-
-test("an empty workspace directory is cloned into", async () => {
-  seedWorkspace();
+test("the mirror is created on the host before the launch", async () => {
   const { ctx, run } = provision();
   await run();
-  assert.ok(flat(ctx).some((l) => l.startsWith("git clone git@github.com:o/r.git")));
+  const calls = flat(ctx);
+  const clone = calls.findIndex((l) => l.startsWith("git ") && l.includes("clone --bare"));
+  const launch = calls.findIndex((l) => l.includes(" launch "));
+  assert.ok(clone >= 0 && launch > clone, calls.join("\n"));
+  assert.ok(calls[clone].endsWith(`git@github.com:o/r.git ${mirrorPath("agent-x")}`), calls[clone]);
+});
+
+test("the workspace is cloned inside the container, after both devices", async () => {
+  const { fake, ctx, run } = provision();
+  assert.deepEqual(await run(), { mirror: "created" });
+  const devices = fake.instances.get("agent-forge")!.get("agent-x")!.devices;
+  assert.deepEqual(devices.origin,
+    { type: "disk", source: mirrorPath("agent-x"), path: "/forge/origin.git", readonly: "true" });
+  assert.deepEqual(devices.workspace, { type: "disk", source: WORKSPACE(), path: "/workspace" });
+  const calls = flat(ctx);
+  const adds = calls.map((l, i) => (l.includes("device add") ? i : -1)).filter((i) => i >= 0);
+  const clone = calls.findIndex((l) => l.endsWith("env GIT_LFS_SKIP_SMUDGE=1 git clone --no-local /forge/origin.git /workspace"));
+  assert.equal(adds.length, 2, calls.join("\n"));
+  assert.ok(clone > Math.max(...adds), calls.join("\n"));
+});
+
+test("no host git touches the workspace, new container or reuse", async () => {
+  const fresh = provision();
+  await fresh.run();
+  assertNoHostGitIn(fresh.ctx.calls, WORKSPACE());
+
+  seedWorkspace("README.md");
+  const reuse = provision({ rules: [seedMirror("git@github.com:o/r.git")] });
+  await reuse.run();
+  assertNoHostGitIn(reuse.ctx.calls, WORKSPACE());
+});
+
+test("a workspace with a matching mirror is reused", async () => {
+  seedWorkspace("README.md");
+  const { ctx, run } = provision({ rules: [seedMirror("git@github.com:o/r.git")] });
+  assert.deepEqual(await run(), { mirror: "kept" });
+  const calls = flat(ctx);
+  assert.ok(!calls.some((l) => l.includes("clone")), calls.join("\n"));
+  assert.equal(calls.filter((l) => l.endsWith("remote set-url origin /forge/origin.git")).length, 1);
+});
+
+test("a non-empty workspace without a mirror stops before the launch", async () => {
+  seedWorkspace("README.md");
+  const { ctx, run } = provision();
+  await assert.rejects(run, /no mirror of o\/r/);
+  assert.equal(launched(ctx), false);
+});
+
+test("a mirror of another repo stops before the launch", async () => {
+  const { ctx, run } = provision({ rules: [seedMirror("git@github.com:a/b.git")] });
+  await assert.rejects(run, /mirror of a\/b/);
+  assert.equal(launched(ctx), false);
+});
+
+test("a failing mirror clone stops before the launch", async () => {
+  const { ctx, run } = provision({ rules: [{ match: "clone --bare", code: 128, stderr: "Permission denied (publickey)\n" }] });
+  await assert.rejects(run, /create mirror failed: Permission denied/);
+  assert.equal(launched(ctx), false);
 });

@@ -3,6 +3,8 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import { cmdStop } from "../cli/lib/commands/stop.ts";
 import { cmdDelete } from "../cli/lib/commands/delete.ts";
+import { join } from "node:path";
+import { mirrorPath, workspacesDir } from "../cli/lib/paths.ts";
 
 const RULES = [
   { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
@@ -77,4 +79,19 @@ test("delete fails loudly when incus delete fails, surfacing its stderr", async 
     () => cmdDelete(c, "o/r", false),
     /incus delete failed: Error: Instance is protected/,
   );
+});
+
+test("delete says the workspace and the mirror are kept", async () => {
+  const c = fakeContext({
+    rules: [
+      { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
+      { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
+    ],
+  });
+  await cmdDelete(c, "moroine/agent-forge", false);
+  const line = c.out_lines.find((l) => l.startsWith("Kept "));
+  assert.ok(line, c.out_lines.join("\n"));
+  assert.ok(line.includes(join(workspacesDir(), "agent-moroine-agent-forge")), line);
+  assert.ok(line.includes(mirrorPath("agent-moroine-agent-forge")), line);
+  assert.ok(line.includes("forge start moroine/agent-forge"), line);
 });
