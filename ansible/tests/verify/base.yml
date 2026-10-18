@@ -39,6 +39,16 @@
     path: /var/log/journal
   register: verify_journal_dir
 
+- name: Read the cloud-init drop-in that keeps the host keys
+  ansible.builtin.slurp:
+    src: /etc/cloud/cloud.cfg.d/99-agent-forge-keep-host-keys.cfg
+  register: verify_keep_keys
+
+- name: Check cloud-init keeps the host keys
+  ansible.builtin.assert:
+    that:
+      - "(verify_keep_keys.content | b64decode | from_yaml) == {'ssh_deletekeys': false}"
+
 - name: Check the host is headless, keeps its journal and syncs its clock
   ansible.builtin.assert:
     that:

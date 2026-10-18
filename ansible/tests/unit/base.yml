@@ -62,6 +62,15 @@
         loop_var: unit_case
         label: "{{ unit_case.name }}"
 
+    # Lima gives cloud-init a new instance id at every boot; without this,
+    # cloud-init replaces the host keys and SSH clients refuse the host.
+    - name: Check the cloud-init drop-in keeps the host keys
+      ansible.builtin.assert:
+        that:
+          - "unit_keep_keys == {'ssh_deletekeys': false}"
+      vars:
+        unit_keep_keys: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/base/files/99-agent-forge-keep-host-keys.cfg') | from_yaml }}"
+
     - name: Remove the scratch directory
       ansible.builtin.file:
         path: "{{ unit_tmp.path }}"
