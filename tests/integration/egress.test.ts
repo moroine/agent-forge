@@ -32,8 +32,10 @@ import {
   ENABLED, PREFIX, REPO_ROOT, SENTINEL, SENTINEL_PEER, asAgent, copyImage, forge as forgeIn, incus, incusBelowGate, launch, must, raw, run,
   teardownProject, throwawayXdg, waitReady, type Run,
 } from "./lib.ts";
+import { proxyInstance } from "../../cli/lib/objects.ts";
 
 const PROJECT = "forge-selftest-egress";
+const PROXY = proxyInstance(PROJECT);
 const SLOT = "3";
 // sanitizeContainerName("forge-selftest/throwaway") and ("forge-selftest/peer").
 const S1 = "agent-forge-selftest-throwaway";
@@ -147,14 +149,14 @@ test("setup creates the proxy, then reports unchanged", { skip: !ENABLED }, () =
   assert.match(out, new RegExp(`^network acl forge-egress-strict-${PROJECT}: created$`, "m"), raw("first setup", first));
   assert.match(out, /^profile forge-proxy: created$/m, raw("first setup", first));
   assert.match(out, /^allowlist: 1 entries$/m, raw("first setup", first));
-  assert.match(out, /^instance forge-proxy: created$/m, raw("first setup", first));
+  assert.match(out, new RegExp(`^instance ${PROXY}: created$`, "m"), raw("first setup", first));
   const second = must("second forge setup", forge(["setup"]));
   const lines = second.stdout.trim().split("\n");
   assert.ok(lines.length >= 7, raw("second setup", second));
   for (const line of lines) assert.match(line, /(: unchanged|^allowlist: \d+ entries)$/, raw("second setup", second));
 
-  const proxy = JSON.parse(must("list forge-proxy", incus(PROJECT, ["list", "forge-proxy", "-f", "json"])).stdout);
-  assert.equal(proxy[0]?.status, "Running", raw("forge-proxy", first));
+  const proxy = JSON.parse(must(`list ${PROXY}`, incus(PROJECT, ["list", PROXY, "-f", "json"])).stdout);
+  assert.equal(proxy[0]?.status, "Running", raw(PROXY, first));
 
   // Addresses for the probes below, from forge's own plan.
   const plan = JSON.parse(must("plan", nodeEval(
@@ -359,13 +361,13 @@ test("a forced DHCP renewal keeps the address", { skip: !ENABLED }, (t) => {
 test("with the proxy stopped, nothing answers (fails closed)", { skip: !ENABLED }, (t) => {
   if (!ready) return t.skip("no strict container");
   expectAllowed(S1, "https://example.com"); // positive control
-  must("stop forge-proxy", incus(PROJECT, ["stop", "forge-proxy"]));
+  must(`stop ${PROXY}`, incus(PROJECT, ["stop", PROXY]));
   try {
     eachWay(S1, "curl -sS -m 10 -o /dev/null https://example.com", (r, way) => {
       assert.notEqual(r.status, 0, raw(`https://example.com via ${way} answered with the proxy stopped`, r));
     });
   } finally {
-    must("start forge-proxy", incus(PROJECT, ["start", "forge-proxy"]));
+    must(`start ${PROXY}`, incus(PROJECT, ["start", PROXY]));
   }
   waitProxyServes(S1);
 });

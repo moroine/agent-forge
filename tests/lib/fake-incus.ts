@@ -320,6 +320,14 @@ export class FakeIncus {
       } else return fail(`fake incus: unsupported launch flag ${flags[i]}`);
     }
     if (this.instances.get(p)!.has(name)) return fail(`Instance "${name}" already exists`);
+    // Incus derives the DNS name from the instance name and refuses two of the
+    // same name on one managed bridge, whatever their projects (bridges live in
+    // `default`). Every forge instance is on forgebr0.
+    for (const [other, instances] of this.instances) {
+      if (other !== p && [...instances.keys()].some((n) => n.toLowerCase() === name.toLowerCase())) {
+        return fail(`Failed instance creation: Failed start validation for device "eth0": Instance DNS name "${name.toLowerCase()}" already used on network`);
+      }
+    }
     if (!image.startsWith("images:") && !this.findImage(p, image)) return fail("Image not found");
     for (const profile of profiles) {
       if (!this.profiles.get(p)!.has(profile)) return fail(`Profile "${profile}" not found`);

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { DEFAULT_CONFIG, type ForgeConfig, type Limits } from "../cli/lib/config.ts";
 import {
   ACL, BRIDGE, PROFILE, RAW_LXC, desiredAcl, desiredBridge, desiredProfile, desiredProject, desiredProxyAcl,
-  desiredProxyProfile, desiredStrictAcl, effectiveEgress, egressNames, rawLxcAllowed,
+  desiredProxyProfile, desiredStrictAcl, effectiveEgress, egressNames, proxyInstance, rawLxcAllowed,
 } from "../cli/lib/objects.ts";
 import { parseAddress, parseCidr, proxyPlan } from "../cli/lib/ipv4.ts";
 
@@ -107,6 +107,12 @@ test("raw.lxc is allowed unless the project is restricted without lowlevel", () 
 
 test("agent-forge uses slot 0 and the spec's ACL names", () =>
   assert.deepEqual(egressNames("agent-forge"), { slot: 0, proxyAcl: "forge-proxy", strictAcl: "forge-egress-strict" }));
+
+// Incus refuses two instances of the same name on one bridge, across projects.
+test("the proxy instance is forge-proxy in agent-forge, suffixed with the project elsewhere", () => {
+  assert.equal(proxyInstance("agent-forge"), "forge-proxy");
+  assert.equal(proxyInstance("forge-selftest"), "forge-proxy-forge-selftest");
+});
 
 test("another project gets FORGE_PROXY_SLOT (default 1) and suffixed names", () => {
   const saved = process.env.FORGE_PROXY_SLOT;

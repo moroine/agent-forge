@@ -215,6 +215,12 @@ provisioning and at each start (update check).
   (`10.77.0.2` by default). It is a slot: slot 0 for project `agent-forge`, slot
   1 for the test-only `FORGE_INCUS_PROJECT` override (see "Testing"); the other
   slots are free for later (multi-user B: one proxy per user).
+- **Proxy name:** `forge-proxy` in project `agent-forge`, `forge-proxy-<project>`
+  in any other. Incus derives an instance's DNS name from its name and refuses
+  two instances of the same name on one managed bridge, whatever their projects
+  (`nic_bridged.go`, "Instance DNS name already used on network"): a second
+  `forge-proxy` on `forgebr0` cannot start. Seen on 2026-10-18, once the
+  integration suite ran on an Incus that passes the version gate.
 - `network.ipv4Address` validation tightens from `/30` to **`/27` at most**, so
   that the reserved block and a DHCP range of at least 20 addresses fit. v2 is
   unreleased; no migration.
@@ -596,8 +602,8 @@ Not built in v2.0; recorded so B does not need a restructure.
     override|remove|set`, `file pull … -`, `expanded_devices` and IPv4
     addresses in `list -f json`, `server_version` in `query /1.0`.
 - **Integration** (`FORGE_INTEGRATION=1`, a real Incus that passes the version gate, project
-  `forge-selftest`, proxy slot 1 with ACLs suffixed by the project so a real
-  agent-forge setup on the same host is untouched; `XDG_CONFIG_HOME` points at a
+  `forge-selftest`, proxy slot 1 with the proxy instance and ACLs suffixed by
+  the project so a real agent-forge setup on the same host is untouched; `XDG_CONFIG_HOME` points at a
   throwaway allowlist allowing `example.com` only):
   - `forge setup` twice; the second run reports only `unchanged`.
   - From a strict container, as aiuser, through `incus exec` **and** through

@@ -7,6 +7,7 @@ import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync }
 import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { strictModeSupported } from "../../cli/lib/host.ts";
+import { proxyInstance } from "../../cli/lib/objects.ts";
 import { configPath } from "../../cli/lib/paths.ts";
 
 export const ENABLED = process.env.FORGE_INTEGRATION === "1";
@@ -58,8 +59,9 @@ export function must(label: string, r: Run): Run {
 
 // Removes what a previous run (or this one) left in a test project, then the
 // project. Instances: only ours (prefix and sentinel), plus the build
-// instance a failed image build leaves and forge-proxy (created by `forge
-// setup`, so ours in a test project). Images and the profiles: the project is
+// instance a failed image build leaves and the project's proxy (created by
+// `forge setup`, so ours in a test project; plain forge-proxy is what runs
+// before the proxy name carried the project left behind). Images and the profiles: the project is
 // a test project, all of it is ours. The two ACLs named after the project live
 // in `default`: they are ours too, nothing else is touched there.
 export function teardownProject(project: string) {
@@ -73,7 +75,7 @@ export function teardownProject(project: string) {
   for (const inst of JSON.parse(list.stdout) as { name: string }[]) {
     const repo = incus(project, ["config", "get", inst.name, "user.forge.repo"]).stdout.trim();
     const ours = inst.name.startsWith(PREFIX) && (repo === SENTINEL || repo === SENTINEL_PEER);
-    if (ours || inst.name === "forge-image-build" || inst.name === "forge-proxy") {
+    if (ours || inst.name === "forge-image-build" || inst.name === proxyInstance(project) || inst.name === "forge-proxy") {
       incus(project, ["delete", inst.name, "--force"]);
     } else {
       console.error(`WARNING: leaving ${inst.name} in ${project} alone (repo=${JSON.stringify(repo)})`);

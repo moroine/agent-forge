@@ -115,6 +115,24 @@ test("the test override creates the strict objects on a 7.0.1 Incus, with a WARN
   }
 });
 
+// Seen on Incus 7.5.1 (integration suite, 2026-10-18): a second forge-proxy on
+// the bridge, in a test project, failed with "Instance DNS name already used".
+test("a test project's proxy gets its own name, next to the real one on the same bridge", async () => {
+  const fake = new FakeIncus();
+  assert.equal(await cmdSetup(fakeContext({ incus: fake }), opts()), 0);
+  assert.ok(fake.instances.get("agent-forge")!.has("forge-proxy"));
+  process.env.FORGE_INCUS_PROJECT = "forge-selftest";
+  try {
+    const c = fakeContext({ incus: fake });
+    assert.equal(await cmdSetup(c, opts()), 0, c.err_lines.join("\n"));
+    assert.ok(c.out_lines.includes("instance forge-proxy-forge-selftest: created"), c.out_lines.join("\n"));
+    assert.ok(fake.instances.get("forge-selftest")!.has("forge-proxy-forge-selftest"));
+    assert.equal(fake.instances.get("forge-selftest")!.has("forge-proxy"), false);
+  } finally {
+    delete process.env.FORGE_INCUS_PROJECT;
+  }
+});
+
 test("the override set for the default project still gives the notice and no strict objects", async () => {
   process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE = "1";
   try {

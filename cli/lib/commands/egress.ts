@@ -15,7 +15,7 @@ import {
   configSet, configSetMany, configUnset, deviceOverride, deviceRemove, deviceSet, execArgv, forgeProject,
   listInstances, listLeases, type Instance,
 } from "../incus.ts";
-import { BRIDGE, PROXY_INSTANCE, effectiveEgress, egressNames, type EgressMode } from "../objects.ts";
+import { BRIDGE, effectiveEgress, egressNames, proxyInstance, type EgressMode } from "../objects.ts";
 import { SQUID_ACCESS_LOG } from "../proxy.ts";
 import { ENV_KEYS, currentPlan, egressMismatch, proxyEnv, requireStrictRuntime } from "../strict.ts";
 import { columnWidths, formatRow } from "../table.ts";
@@ -74,9 +74,9 @@ async function cmdLog(ctx: Context, repo: string | undefined): Promise<number> {
     validateRepo(repo);
     only = await requireContainerForRepo(ctx, repo);
   }
-  const r = await execArgv(ctx, PROXY_INSTANCE, ["tail", "-n", "200", SQUID_ACCESS_LOG]);
+  const r = await execArgv(ctx, proxyInstance(), ["tail", "-n", "200", SQUID_ACCESS_LOG]);
   if (r.code !== 0) {
-    throw new ForgeError(`${PROXY_INSTANCE} is not reachable; run 'forge setup' (${r.stderr.trim() || `exit code ${r.code}`})`);
+    throw new ForgeError(`${proxyInstance()} is not reachable; run 'forge setup' (${r.stderr.trim() || `exit code ${r.code}`})`);
   }
   // The holder of each address: the DHCP leases first (a stopped instance
   // keeps its lease but `incus list` shows it no address), then the current

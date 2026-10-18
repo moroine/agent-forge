@@ -10,7 +10,7 @@ import {
   startInstance, waitReady,
 } from "./incus.ts";
 import type { ProxyPlan } from "./ipv4.ts";
-import { PROXY_INSTANCE, PROXY_PORT, PROXY_PROFILE } from "./objects.ts";
+import { PROXY_PORT, PROXY_PROFILE, proxyInstance } from "./objects.ts";
 
 // Versions the package set and installation steps; bump it to replace every
 // existing proxy instance on the next `forge setup`.
@@ -96,16 +96,16 @@ async function waitListening(ctx: Context, plan: ProxyPlan, after: string, opts:
   const delayMs = opts.waitDelayMs ?? 1000;
   const probe = ["timeout", "2", "bash", "-c", '< "/dev/tcp/$0/$1"', plan.proxyAddress, String(PROXY_PORT)];
   for (let i = 1; i <= WAIT_ATTEMPTS; i++) {
-    if ((await execArgv(ctx, PROXY_INSTANCE, probe)).code === 0) return;
+    if ((await execArgv(ctx, proxyInstance(), probe)).code === 0) return;
     if (i < WAIT_ATTEMPTS) await sleep(delayMs);
   }
   throw new ForgeError(`squid did not come back on ${plan.proxyAddress}:${PROXY_PORT} after ${after} ` +
     `(${WAIT_ATTEMPTS} attempts). Run forge setup again; if it persists, inspect it: ` +
-    `incus --project ${forgeProject()} exec ${PROXY_INSTANCE} -- journalctl -u squid`);
+    `incus --project ${forgeProject()} exec ${proxyInstance()} -- journalctl -u squid`);
 }
 
 async function apt(ctx: Context, step: string, argv: string[]) {
-  return mustSucceed(step, execArgv(ctx, PROXY_INSTANCE, ["apt-get", ...argv], { DEBIAN_FRONTEND: "noninteractive" }));
+  return mustSucceed(step, execArgv(ctx, proxyInstance(), ["apt-get", ...argv], { DEBIAN_FRONTEND: "noninteractive" }));
 }
 
 // The network of a fresh container comes up after the first exec answers.
@@ -113,11 +113,11 @@ async function aptUpdate(ctx: Context, opts: ProxyOpts): Promise<void> {
   const attempts = opts.aptAttempts ?? 10;
   const delayMs = opts.aptDelayMs ?? 6000;
   for (let i = 1; i < attempts; i++) {
-    const r = await execArgv(ctx, PROXY_INSTANCE, ["apt-get", "update"], { DEBIAN_FRONTEND: "noninteractive" });
+    const r = await execArgv(ctx, proxyInstance(), ["apt-get", "update"], { DEBIAN_FRONTEND: "noninteractive" });
     if (r.code === 0) return;
     await sleep(delayMs);
   }
-  await apt(ctx, "apt-get update in forge-proxy", ["update"]);
+  await apt(ctx, `apt-get update in ${proxyInstance()}`, ["update"]);
 }
 
 const configHash = (conf: string, allowlist: string) =>
@@ -128,34 +128,34 @@ const configHash = (conf: string, allowlist: string) =>
 // key is unset first, so a failure after this point is retried next run.
 // Incus refuses to unset an absent key: the caller says whether it is set.
 async function pushConfig(ctx: Context, conf: string, allowlist: string, unsetLoaded: boolean): Promise<void> {
-  if (unsetLoaded) await mustSucceed("unset proxy_config", configUnset(ctx, PROXY_INSTANCE, CONFIG_KEY));
+  if (unsetLoaded) await mustSucceed("unset proxy_config", configUnset(ctx, proxyInstance(), CONFIG_KEY));
   const owner = { uid: 0, gid: 0, mode: "644" };
-  await mustSucceed(`push ${SQUID_CONF}`, pushText(ctx, PROXY_INSTANCE, SQUID_CONF, conf, owner));
-  await mustSucceed(`push ${SQUID_ALLOWLIST}`, pushText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST, allowlist, owner));
-  await mustSucceed("squid -k parse", execArgv(ctx, PROXY_INSTANCE, ["squid", "-k", "parse"]));
+  await mustSucceed(`push ${SQUID_CONF}`, pushText(ctx, proxyInstance(), SQUID_CONF, conf, owner));
+  await mustSucceed(`push ${SQUID_ALLOWLIST}`, pushText(ctx, proxyInstance(), SQUID_ALLOWLIST, allowlist, owner));
+  await mustSucceed("squid -k parse", execArgv(ctx, proxyInstance(), ["squid", "-k", "parse"]));
 }
 
 async function create(ctx: Context, plan: ProxyPlan, conf: string, allowlist: string, opts: ProxyOpts): Promise<void> {
-  await mustSucceed("launch forge-proxy", ctx.exec(incus(
-    "launch", PROXY_SOURCE_IMAGE, PROXY_INSTANCE, "--profile", PROXY_PROFILE,
+  await mustSucceed(`launch ${proxyInstance()}`, ctx.exec(incus(
+    "launch", PROXY_SOURCE_IMAGE, proxyInstance(), "--profile", PROXY_PROFILE,
     "-d", `eth0,ipv4.address=${plan.proxyAddress}`)));
   try {
-    await waitReady(ctx, PROXY_INSTANCE);
+    await waitReady(ctx, proxyInstance());
     await aptUpdate(ctx, opts);
-    await apt(ctx, "apt-get install in forge-proxy", ["install", "-y", "squid", "unattended-upgrades"]);
+    await apt(ctx, `apt-get install in ${proxyInstance()}`, ["install", "-y", "squid", "unattended-upgrades"]);
     const owner = { uid: 0, gid: 0, mode: "644" };
-    await mustSucceed(`push ${AUTO_UPGRADES}`, pushText(ctx, PROXY_INSTANCE, AUTO_UPGRADES, AUTO_UPGRADES_TEXT, owner));
-    await mustSucceed(`push ${KEEP_CONFFILES}`, pushText(ctx, PROXY_INSTANCE, KEEP_CONFFILES, KEEP_CONFFILES_TEXT, owner));
+    await mustSucceed(`push ${AUTO_UPGRADES}`, pushText(ctx, proxyInstance(), AUTO_UPGRADES, AUTO_UPGRADES_TEXT, owner));
+    await mustSucceed(`push ${KEEP_CONFFILES}`, pushText(ctx, proxyInstance(), KEEP_CONFFILES, KEEP_CONFFILES_TEXT, owner));
     await pushConfig(ctx, conf, allowlist, false);
-    await mustSucceed("enable squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "enable", "squid"]));
-    await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
+    await mustSucceed("enable squid", execArgv(ctx, proxyInstance(), ["systemctl", "enable", "squid"]));
+    await mustSucceed("restart squid", execArgv(ctx, proxyInstance(), ["systemctl", "restart", "squid"]));
     await waitListening(ctx, plan, "systemctl restart squid", opts);
-    await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, configHash(conf, allowlist)));
+    await mustSucceed("record proxy_config", configSet(ctx, proxyInstance(), CONFIG_KEY, configHash(conf, allowlist)));
     // Last step: its absence marks an incomplete instance.
-    await mustSucceed("stamp forge-proxy", configSet(ctx, PROXY_INSTANCE, RECIPE_KEY, String(PROXY_RECIPE)));
+    await mustSucceed(`stamp ${proxyInstance()}`, configSet(ctx, proxyInstance(), RECIPE_KEY, String(PROXY_RECIPE)));
   } catch (e) {
     if (!(e instanceof ForgeError)) throw e;
-    throw new ForgeError(`${e.message}\nThe incomplete ${PROXY_INSTANCE} instance is left in place for debugging; the next forge setup replaces it.`);
+    throw new ForgeError(`${e.message}\nThe incomplete ${proxyInstance()} instance is left in place for debugging; the next forge setup replaces it.`);
   }
 }
 
@@ -173,14 +173,14 @@ export async function convergeProxy(
   const allowlist = allowlistText(entries);
   const hash = configHash(conf, allowlist);
 
-  const inst = (await listInstances(ctx)).find((i) => i.name === PROXY_INSTANCE);
+  const inst = (await listInstances(ctx)).find((i) => i.name === proxyInstance());
   const recipe = inst?.config[RECIPE_KEY];
   if (!inst || recipe !== String(PROXY_RECIPE) || !sameNic(inst.expandedDevices.eth0, nic)) {
     let previousAddress: string | null = null;
     if (inst) {
       const old = inst.expandedDevices.eth0?.["ipv4.address"];
       if (old !== undefined && old !== plan.proxyAddress) previousAddress = old;
-      await mustSucceed(`delete ${PROXY_INSTANCE}`, deleteInstance(ctx, PROXY_INSTANCE));
+      await mustSucceed(`delete ${proxyInstance()}`, deleteInstance(ctx, proxyInstance()));
     }
     await create(ctx, plan, conf, allowlist, opts);
     return { outcome: inst && recipe !== undefined ? "updated" : "created", previousAddress };
@@ -188,25 +188,25 @@ export async function convergeProxy(
 
   let changed = false;
   if (inst.status !== "Running") {
-    await mustSucceed("start forge-proxy", startInstance(ctx, PROXY_INSTANCE));
-    await waitReady(ctx, PROXY_INSTANCE);
+    await mustSucceed(`start ${proxyInstance()}`, startInstance(ctx, proxyInstance()));
+    await waitReady(ctx, proxyInstance());
     changed = true;
   }
   // Probe: squid may be down although the container runs.
-  const active = (await execArgv(ctx, PROXY_INSTANCE, ["systemctl", "is-active", "--quiet", "squid"])).code === 0;
+  const active = (await execArgv(ctx, proxyInstance(), ["systemctl", "is-active", "--quiet", "squid"])).code === 0;
 
-  const same = (await pullText(ctx, PROXY_INSTANCE, SQUID_CONF)) === conf
-    && (await pullText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST)) === allowlist
+  const same = (await pullText(ctx, proxyInstance(), SQUID_CONF)) === conf
+    && (await pullText(ctx, proxyInstance(), SQUID_ALLOWLIST)) === allowlist
     && inst.config[CONFIG_KEY] === hash;
   if (!same) {
     await pushConfig(ctx, conf, allowlist, inst.config[CONFIG_KEY] !== undefined);
     const action = active ? ["squid", "-k", "reconfigure"] : ["systemctl", "restart", "squid"];
-    await mustSucceed(action.join(" "), execArgv(ctx, PROXY_INSTANCE, action));
+    await mustSucceed(action.join(" "), execArgv(ctx, proxyInstance(), action));
     await waitListening(ctx, plan, action.join(" "), opts);
-    await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, hash));
+    await mustSucceed("record proxy_config", configSet(ctx, proxyInstance(), CONFIG_KEY, hash));
     changed = true;
   } else if (!active) {
-    await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
+    await mustSucceed("restart squid", execArgv(ctx, proxyInstance(), ["systemctl", "restart", "squid"]));
     await waitListening(ctx, plan, "systemctl restart squid", opts);
     changed = true;
   }
