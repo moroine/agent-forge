@@ -124,6 +124,11 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
   const allPanes = await listPanes(ctx, h);
   let printed = 0;
   const line = (s: string) => { ctx.out(s); printed++; };
+  // Per container, for the whole run: two workspaces whose labels differ only
+  // by case map to one container. A task is typed into at most once: never
+  // when the running probe has it, and never again once a tab of this run
+  // found it live or launched it (`launched`); such a later tab is a duplicate.
+  const probed = new Map<string, { tasks: Set<string>; running: Set<string>; launched: Set<string> }>();
 
   for (const w of workspaces) {
     const known = byRepo.get(w.label.toLowerCase());
@@ -131,24 +136,35 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
     const wsTabs = allTabs.filter((t) => t.workspaceId === w.id);
     if (wsTabs.length === 0) continue;
     const { container, repo } = known;
-    try {
-      await ensureRunning(ctx, container);
-    } catch (e) {
-      line(`${repo}: skipped (container did not start: ${e instanceof Error ? e.message : String(e)})`);
-      continue;
+    let run = probed.get(container);
+    if (!run) {
+      try {
+        await ensureRunning(ctx, container);
+      } catch (e) {
+        line(`${repo}: skipped (container did not start: ${e instanceof Error ? e.message : String(e)})`);
+        continue;
+      }
+      const tasks = new Set(await taskNames(ctx, container));
+      run = { tasks, running: await runningTasks(ctx, container), launched: new Set() };
+      probed.set(container, run);
     }
-    const tasks = new Set(await taskNames(ctx, container));
-    const running = await runningTasks(ctx, container);
     for (const tab of wsTabs) {
-      if (!tasks.has(tab.label)) continue;
+      if (!run.tasks.has(tab.label)) continue;
+      const label = `${repo} ${tab.label}`;
+      if (run.launched.has(tab.label)) {
+        line(`${label}: skipped (duplicate tab)`);
+        continue;
+      }
       const panes = allPanes.filter((p) => p.tabId === tab.id);
       const state = await tabState(ctx, h, panes, container, tab.label);
-      const label = `${repo} ${tab.label}`;
-      if (state === "live") line(`${label}: already running`);
-      else if (running.has(tab.label)) line(`${label}: skipped (agent runs outside this herdr)`);
+      if (state === "live") {
+        line(`${label}: already running`);
+        run.launched.add(tab.label);
+      } else if (run.running.has(tab.label)) line(`${label}: skipped (agent runs outside this herdr)`);
       else if (state === "shell" && panes[0]) {
         await paneRun(ctx, h, panes[0].id, attachCommand(container, tab.label));
         line(`${label}: resumed`);
+        run.launched.add(tab.label);
       } else line(`${label}: skipped (tab is busy)`);
     }
   }
