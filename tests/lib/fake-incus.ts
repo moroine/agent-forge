@@ -362,6 +362,8 @@ export class FakeIncus {
       return ok();
     }
     if (sub === "unset") {
+      // Real Incus refuses to unset a key that is not set.
+      if (!(key in inst.config)) return fail(`Can't unset key '${key}', it's not currently set`);
       delete inst.config[key];
       return ok();
     }
