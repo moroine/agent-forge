@@ -10,12 +10,13 @@ const BASE = [
   { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\n" },
 ];
 
-test("resume attaches the task's tmux session", async () => {
+test("resume attaches the task's agent", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
   assert.equal(await cmdResume(c, "moroine/agent-forge", "cli"), 0);
-  const attach = c.calls.find((call) => call.includes("tmux"));
+  const attach = c.attachCalls[0]?.argv;
   assert.ok(attach, "no attach happened");
-  assert.ok(attach.includes("new-session") && attach.includes("cli"));
+  assert.ok(attach.includes("bash") && attach.includes("--cwd") && attach.includes("/workspace/.trees/cli"));
+  assert.match(attach.at(-1) ?? "", /^exec claude /);
 });
 
 test("resume never creates a worktree", async () => {
@@ -32,8 +33,8 @@ test("resume errors when the worktree is absent, pointing at start", async () =>
 test("resume asks for repo then task when both are missing", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }], answers: [1, 2] });
   await cmdResume(c, undefined, undefined);
-  const attach = c.calls.find((call) => call.includes("tmux"));
-  assert.ok(attach?.includes("docs"), `attached to the wrong session: ${attach?.join(" ")}`);
+  const attach = c.attachCalls[0]?.argv;
+  assert.ok(attach?.includes("/workspace/.trees/docs"), `attached to the wrong session: ${attach?.join(" ")}`);
 });
 
 test("finish removes the worktree after the pre-flight", async () => {
@@ -102,5 +103,5 @@ test("resume fails when the container refuses to start", async () => {
     () => cmdResume(c, "moroine/agent-forge", "cli"),
     /incus start failed: Error: Failed to start device/,
   );
-  assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec du démarrage");
+  assert.equal(c.attachCalls.length, 0, "attaché malgré l'échec du démarrage");
 });

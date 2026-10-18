@@ -32,7 +32,7 @@ test("an existing worktree is attached, not refused", async () => {
   const c = fakeContext({ rules: rules([{ match: "test -e /workspace/.trees/cli", code: 0 }]) });
   assert.equal(await cmdStart(c, "moroine/agent-forge", "cli"), 0);
   assert.equal(added(c), "", "aucun worktree ne doit être créé");
-  assert.ok(c.calls.some((call) => call.includes("tmux")));
+  assert.ok(c.attachCalls.length > 0);
 });
 
 test("an existing local branch is resumed in a new worktree", async () => {
@@ -180,7 +180,7 @@ test("a failing worktree add aborts instead of attaching to a missing directory"
     () => cmdStart(c, "moroine/agent-forge", "fresh"),
     /git worktree add failed: fatal: invalid reference: origin\/main/,
   );
-  assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec de la création");
+  assert.equal(c.attachCalls.length, 0, "attaché malgré l'échec de la création");
   assert.ok(!c.out_lines.some((l) => l.includes("Attaching to")), c.out_lines.join(" | "));
 });
 

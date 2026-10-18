@@ -1,11 +1,12 @@
 // forge resume [<owner/repo>] [<task>]
-// Rattache la session tmux d'une tâche existante. Ni fetch ni rebranch —
+// Rattache l'agent d'une tâche existante. Ni fetch ni rebranch —
 // c'est le rôle de `forge start`.
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
 import { isRunning, requireContainerForRepo } from "../containers.ts";
-import { attachArgv, execAsAgent, startInstance } from "../incus.ts";
+import { attachTask } from "../session.ts";
+import { execAsAgent, startInstance } from "../incus.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
 const USAGE = "Usage: forge resume <owner/repo> <task>";
@@ -29,5 +30,5 @@ export async function cmdResume(ctx: Context, repo?: string, task?: string): Pro
   }
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
-  return ctx.attach(attachArgv(container, taskName, process.env.TERM ?? "xterm-256color"));
+  return attachTask(ctx, container, taskName);
 }

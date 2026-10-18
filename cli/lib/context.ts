@@ -5,6 +5,7 @@ import { createPrompt } from "./prompt.ts";
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
 export type ExecOptions = { input?: string; env?: Record<string, string> };
+export type AttachOptions = { env?: Record<string, string> };
 
 export type Prompt = {
   pick(label: string, items: string[]): Promise<number | null>;
@@ -14,7 +15,7 @@ export type Prompt = {
 
 export type Context = {
   exec(argv: string[], opts?: ExecOptions): Promise<ExecResult>;
-  attach(argv: string[]): Promise<number>;
+  attach(argv: string[], opts?: AttachOptions): Promise<number>;
   prompt: Prompt;
   out(line: string): void;
   err(line: string): void;
@@ -73,12 +74,15 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   });
 }
 
-// Hérite du terminal au lieu de capturer : c'est le cas tmux. Voir §4 de la
-// spec — tmux doit rester la cible directe de `incus exec`, sinon SIGWINCH
-// n'atteint jamais le client au redimensionnement.
-function attach(argv: string[]): Promise<number> {
+// Hérite du terminal au lieu de capturer : c'est le cas de l'agent. Il doit
+// rester la cible directe de `incus exec`, sinon SIGWINCH n'atteint jamais le
+// client au redimensionnement. opts.env se superpose à l'environnement hérité.
+function attach(argv: string[], opts?: AttachOptions): Promise<number> {
   return new Promise((resolve) => {
-    const child = spawn(argv[0], argv.slice(1), { stdio: "inherit" });
+    const child = spawn(argv[0], argv.slice(1), {
+      stdio: "inherit",
+      env: opts?.env ? { ...process.env, ...opts.env } : process.env,
+    });
     child.on("error", () => resolve(127));
     child.on("close", (code) => resolve(code ?? 0));
   });

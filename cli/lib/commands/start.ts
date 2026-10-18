@@ -11,7 +11,8 @@ import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName }
 import { checkNameCollision, forgeRepos, isRunning } from "../containers.ts";
 import { hasOriginDevice, refreshMirror } from "../mirror.ts";
 import { mirrorPath, workspacesDir } from "../paths.ts";
-import { attachArgv, execAsAgent, instanceExists, startInstance } from "../incus.ts";
+import { attachTask } from "../session.ts";
+import { execAsAgent, instanceExists, startInstance } from "../incus.ts";
 import { agentBranches, branchExists, taskNames } from "../worktrees.ts";
 import { provisionContainer } from "./provision.ts";
 
@@ -71,7 +72,7 @@ export async function cmdStart(ctx: Context, repo?: string, task?: string): Prom
   await addWorktree(ctx, container, taskName, ref);
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
-  return ctx.attach(attachArgv(container, taskName, process.env.TERM ?? "xterm-256color"));
+  return attachTask(ctx, container, taskName);
 }
 
 // Comme resolveRepo, mais avec une entrée de plus : `forge start` est la seule

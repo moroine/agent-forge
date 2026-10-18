@@ -90,21 +90,18 @@ export function deleteInstance(ctx: Context, name: string): Promise<ExecResult> 
   return ctx.exec(incus("delete", name, "--force"));
 }
 
-// tmux DOIT rester la cible directe de `incus exec` : avec un `su - aiuser -c`
-// intermédiaire, SIGWINCH n'atteint jamais le client tmux quand le terminal
-// hôte est redimensionné (diagnostiqué le 2026-08-31, commit c34a145).
+// La commande de l'agent doit rester l'enfant direct de `incus exec` : avec un
+// `su - aiuser -c` intermédiaire, SIGWINCH n'atteint jamais l'agent quand le
+// terminal hôte est redimensionné (diagnostiqué le 2026-08-31, commit c34a145).
 // --user/--group/--cwd remplacent `su - aiuser` + `cd`. HOME vient du profil,
 // mais pas TERM : plus aucun shell de login ne le pose, on le transmet.
-// `exec bash -lc` sous tmux restaure DOCKER_HOST, exporté depuis .bashrc.
-// Le sous-projet 4 remplace tmux par herdr.
-export function attachArgv(container: string, task: string, term: string): string[] {
+export function attachArgv(container: string, task: string, term: string, command: string[]): string[] {
   return [
     ...incus("exec", container),
     "--user", "1001", "--group", "1001",
     "--cwd", `/workspace/.trees/${task}`,
     "--env", `TERM=${term}`,
-    "--", "tmux", "new-session", "-A", "-s", task,
-    `exec bash -lc 'claude --permission-mode auto --remote-control ${container}-${task}'`,
+    "--", ...command,
   ];
 }
 

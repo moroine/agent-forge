@@ -41,6 +41,13 @@ test("an unknown command exits 1 with Error: on stderr", () => {
   assert.equal(r.stdout, "");
 });
 
+test("attach with no arguments exits 1 with its usage", () => {
+  const r = forge(["attach"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Usage: forge attach/);
+  assert.equal(r.stdout, "");
+});
+
 test("list renders the table on stdout", () => {
   const r = forge(["list"]);
   assert.equal(r.status, 0);
