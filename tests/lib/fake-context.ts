@@ -31,6 +31,8 @@ export type FakeContext = Context & {
   attachCalls: { argv: string[]; opts?: AttachOptions }[];
   out_lines: string[];
   err_lines: string[];
+  // Nombre d'appels à ctx.attention().
+  attentions: number;
 };
 
 export function fakeContext(opts: FakeOptions = {}): FakeContext {
@@ -79,16 +81,19 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
     },
   };
 
-  return {
+  const fake: FakeContext = {
     exec,
     attach: async (argv, attachOpts) => { calls.push(argv); attachCalls.push({ argv, opts: attachOpts }); return opts.attachCode ?? 0; },
     prompt,
     out: (line) => out_lines.push(line),
     err: (line) => err_lines.push(line),
+    attention: () => { fake.attentions++; },
     calls,
     execOptions,
     attachCalls,
     out_lines,
     err_lines,
+    attentions: 0,
   };
+  return fake;
 }

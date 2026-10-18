@@ -190,6 +190,15 @@ test("resumeAll says so when nothing is to resume", async () => {
   assert.deepEqual(c.out_lines, ["no forge tab to resume."]);
 });
 
+test("resumeAll keeps a herdr popup open on its result lines", async () => {
+  const some = fakeContext({ rules: resumeRules() });
+  await resumeAll(some, h);
+  assert.equal(some.attentions, 1);
+  const none = fakeContext({ rules: [...resumeRules().slice(0, 2), ws(["w3", "misc"]), tabs(), panes()] });
+  await resumeAll(none, h);
+  assert.equal(none.attentions, 1);
+});
+
 test("resumeAll reports a container that does not start and goes on", async () => {
   const c = fakeContext({ rules: [
     { match: "incus --project agent-forge start agent-s", code: 1, stderr: "Error: no space" },
