@@ -22,12 +22,12 @@ const USAGE = `Usage: forge <command> [args]
 Commands:
   setup                             Create or update forge's Incus project, bridge, ACL and profile
   start [<owner/repo>] [<task>]     Provision (if needed) and start/attach a task session
-  resume [<owner/repo>] [<task>]    Re-attach an existing task's session
+  resume [<owner/repo>] [<task>]    Re-attach a task's agent (--all: every forge tab left bare by a herdr restart)
   finish [<owner/repo>] [<task>]    Remove a finished task's worktree
   stop [<owner/repo>] [--force]     Stop a container (blocked on dirty/unpushed WIP unless --force)
   delete [<owner/repo>] [--force]   Delete a container (blocked on dirty/unpushed WIP unless --force)
   list                              Show all containers: repo, mode, state, build
-  attach <container> <task>          Run a task's agent in this terminal (what herdr tabs run)
+  attach <container> <task>         Run a task's agent in this terminal (what herdr tabs run)
   upload-pack <container> [<path>]  Serve a container's repository to git fetch (see forge start's retrieval hint)
   image build                       Build the agent-base image (Ansible, through Incus)
   completion bash                   Print a bash completion function (eval it in ~/.bashrc)
@@ -38,12 +38,12 @@ A bracketed argument is asked for when you leave it out, as a numbered menu.
 With no terminal on stdin (scripts, CI) nothing is asked and the command
 exits with this usage instead.`;
 
-function dispatch(ctx: Context, positionals: string[], force: boolean): Promise<number> {
+function dispatch(ctx: Context, positionals: string[], force: boolean, all: boolean): Promise<number> {
   const [cmd, a, b] = positionals;
   switch (cmd) {
     case "setup": return cmdSetup(ctx);
     case "start": return cmdStart(ctx, a, b);
-    case "resume": return cmdResume(ctx, a, b);
+    case "resume": return cmdResume(ctx, a, b, all);
     case "finish": return cmdFinish(ctx, a, b, force);
     case "stop": return cmdStop(ctx, a, force);
     case "delete": return cmdDelete(ctx, a, force);
@@ -71,14 +71,14 @@ async function main(): Promise<number> {
   try {
     const { values, positionals } = parseArgs({
       args: process.argv.slice(2),
-      options: { force: { type: "boolean" }, help: { type: "boolean", short: "h" } },
+      options: { force: { type: "boolean" }, all: { type: "boolean" }, help: { type: "boolean", short: "h" } },
       allowPositionals: true,
     });
     if (values.help || positionals.length === 0) {
       ctx.out(USAGE);
       return 0;
     }
-    return await dispatch(ctx, positionals, values.force === true);
+    return await dispatch(ctx, positionals, values.force === true, values.all === true);
   } catch (e) {
     // Le préfixe "Error: " est ajouté ici, une seule fois : une ForgeError ne
     // porte que son message.
