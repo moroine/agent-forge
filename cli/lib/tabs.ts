@@ -156,12 +156,15 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
   return 0;
 }
 
-// Closes the task's tab when it is left as a bare shell; never a live or busy one.
+// Closes the task's tab only when every pane is a bare shell; a tab with a
+// live or busy pane (split tabs included) is never closed.
 export async function closeBareTab(ctx: Context, h: HerdrEnv, t: TaskRef): Promise<void> {
   const { tab, panes } = await findTaskTab(ctx, h, t.ownerRepo, t.task);
   if (!tab || panes.length === 0) return;
-  const state = classifyPane(await paneForeground(ctx, h, panes[0].id), t.container, t.task);
-  if (state === "shell") await closeTab(ctx, h, tab.id);
+  for (const p of panes) {
+    if (classifyPane(await paneForeground(ctx, h, p.id), t.container, t.task) !== "shell") return;
+  }
+  await closeTab(ctx, h, tab.id);
 }
 
 export async function runTask(ctx: Context, t: TaskRef): Promise<number> {

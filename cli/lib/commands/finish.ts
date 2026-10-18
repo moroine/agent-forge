@@ -48,8 +48,14 @@ export async function cmdFinish(
 
   // Dans herdr, l'onglet de la tâche n'a plus de raison d'être s'il est
   // retombé sur un shell nu.
-  const h = herdrEnv();
-  if (h) await closeBareTab(ctx, h, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
+  // Au mieux : le worktree est déjà retiré, un échec ici ne doit pas faire
+  // échouer le finish.
+  try {
+    const h = herdrEnv();
+    if (h) await closeBareTab(ctx, h, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
+  } catch (e) {
+    ctx.err(`WARNING: closing the herdr tab of ${taskName} failed: ${e instanceof Error ? e.message : String(e)}`);
+  }
 
   ctx.out(`Finished task ${taskName} (branch agent/${taskName} retained).`);
   return 0;
