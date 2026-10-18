@@ -1,10 +1,11 @@
-// Worktrees, branches agent/*, et sessions tmux d'un container.
+// Worktrees, branches agent/* et tâches en cours d'un container.
 //
 // Les fonctions parse* sont pures et exportées à part : ce sont elles que les
 // tests de contrat (couche 2) alimentent avec la sortie d'un *vrai* git et
-// d'un *vrai* tmux, sans LXD.
+// de `ps`, sans LXD.
 import type { Context } from "./context.ts";
-import { execAsAgent } from "./incus.ts";
+import { execAsAgent, execAsAgentArgv } from "./incus.ts";
+import { AGENT } from "./agent.ts";
 
 const SAFE_NAME = /^[A-Za-z0-9._-]+$/;
 
@@ -45,17 +46,23 @@ export function parseAgentBranches(refs: string): string[] {
     .filter((name) => SAFE_NAME.test(name));
 }
 
-// `tmux has-session` ne disait que « la session existe », donc une session que
-// personne n'a ouverte était rapportée attachée. #{session_attached} distingue
-// vraiment les deux. Sans serveur, tmux sort en 1 avec un message sur stderr :
-// stdout est vide, la map l'est aussi.
-export function parseSessionStates(output: string): Map<string, boolean> {
-  const states = new Map<string, boolean>();
-  for (const line of output.split("\n")) {
-    const [name, flag] = line.trim().split(/\s+/);
-    if (name && (flag === "0" || flag === "1")) states.set(name, flag === "1");
+// Une tâche tourne tant que le processus de son agent existe : sa ligne de
+// commande porte `--remote-control <container>-<task>` (AGENT.marker). Le nom
+// doit finir à un blanc ou en fin de ligne, sinon `agent-x-a;rm` passerait pour
+// la tâche « a » ; un nom hors du charset sûr est ignoré.
+export function parseRunningTasks(ps: string, container: string): Set<string> {
+  const flag = AGENT.marker(container, "").trimEnd().split(" ")[0];
+  const prefix = `${container}-`;
+  const tasks = new Set<string>();
+  for (const line of ps.split("\n")) {
+    const tokens = line.trim().split(/\s+/);
+    for (let i = 0; i + 1 < tokens.length; i++) {
+      if (tokens[i] !== flag || !tokens[i + 1].startsWith(prefix)) continue;
+      const task = tokens[i + 1].slice(prefix.length);
+      if (task && SAFE_NAME.test(task)) tasks.add(task);
+    }
   }
-  return states;
+  return tasks;
 }
 
 export async function worktreeDirs(ctx: Context, container: string): Promise<string[]> {
@@ -80,10 +87,8 @@ export async function branchExists(ctx: Context, container: string, ref: string)
   return r.code === 0;
 }
 
-export async function sessionStates(ctx: Context, container: string): Promise<Map<string, boolean>> {
-  const r = await execAsAgent(
-    ctx, container,
-    "tmux list-sessions -F '#{session_name} #{session_attached}'",
-  );
-  return parseSessionStates(r.code === 0 ? r.stdout : "");
+// Sonde : un `ps` en échec (container qui s'arrête) donne « rien ne tourne ».
+export async function runningTasks(ctx: Context, container: string): Promise<Set<string>> {
+  const r = await execAsAgentArgv(ctx, container, ["ps", "-u", "1001", "-o", "args="]);
+  return parseRunningTasks(r.code === 0 ? r.stdout : "", container);
 }
