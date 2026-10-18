@@ -17,3 +17,5 @@ kinds:
   - playbook: "**/ansible/tests/unit/*.yml"
   - yaml: "**/ansible/tests/unit-inventory.yml"
   - yaml: "**/ansible/inventory.example.yml"
+  - yaml: "**/ansible/inventory.lima.example.yml"
+  - yaml: "**/ansible/lima/*.yaml"
