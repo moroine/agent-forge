@@ -47,7 +47,7 @@ export async function mustSucceed(step: string, result: Promise<ExecResult>): Pr
 }
 
 // Ne rejette jamais sur un code non nul : plusieurs sondes (show-ref, test -e,
-// tmux list-sessions) se servent du code de sortie comme réponse. Un binaire
+// pkill) se servent du code de sortie comme réponse. Un binaire
 // absent est rapporté de la même façon, par un code non nul.
 function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
@@ -74,7 +74,8 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   });
 }
 
-// Hérite du terminal au lieu de capturer : c'est le cas de l'agent. Il doit
+// Hérite du terminal au lieu de capturer : c'est le cas de l'agent et
+// d'ansible-playbook. L'agent doit
 // rester la cible directe de `incus exec`, sinon SIGWINCH n'atteint jamais le
 // client au redimensionnement. opts.env se superpose à l'environnement hérité.
 function attach(argv: string[], opts?: AttachOptions): Promise<number> {

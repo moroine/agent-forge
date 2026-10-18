@@ -2,11 +2,12 @@
 // Rattache l'agent d'une tâche existante. Ni fetch ni rebranch —
 // c'est le rôle de `forge start`.
 import type { Context } from "../context.ts";
-import { ForgeError, mustSucceed } from "../context.ts";
+import { ForgeError } from "../context.ts";
+import { ensureRunning } from "../session.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
-import { isRunning, requireContainerForRepo } from "../containers.ts";
-import { attachTask } from "../session.ts";
-import { execAsAgent, startInstance } from "../incus.ts";
+import { containerRepo, requireContainerForRepo } from "../containers.ts";
+import { runTask } from "../tabs.ts";
+import { execAsAgent } from "../incus.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
 const USAGE = "Usage: forge resume <owner/repo> <task>";
@@ -17,7 +18,7 @@ export async function cmdResume(ctx: Context, repo?: string, task?: string): Pro
   const container = await requireContainerForRepo(ctx, ownerRepo);
 
   ctx.out(`Starting container ${container}...`);
-  if (!(await isRunning(ctx, container))) await mustSucceed("incus start", startInstance(ctx, container));
+  await ensureRunning(ctx, container);
 
   const taskName = await resolveTask(ctx, container, task, USAGE);
   validateTaskName(taskName);
@@ -30,5 +31,5 @@ export async function cmdResume(ctx: Context, repo?: string, task?: string): Pro
   }
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
-  return attachTask(ctx, container, taskName);
+  return runTask(ctx, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
 }

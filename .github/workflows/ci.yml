@@ -26,10 +26,9 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      # tmux: the contract tests use a real server (until sub-project 4
-      # removes tmux); jq: tests/test-pre-bash.sh.
+      # jq: tests/test-pre-bash.sh.
       - name: Install the test tools
-        run: sudo apt-get update && sudo apt-get install -y tmux jq
+        run: sudo apt-get update && sudo apt-get install -y jq
       - run: npm ci
       - run: npm test
       - run: npm run check

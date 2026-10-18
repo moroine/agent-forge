@@ -16,7 +16,8 @@ test("resume attaches the task's agent", async () => {
   assert.equal(await cmdResume(c, "moroine/agent-forge", "cli"), 0);
   const attach = c.attachCalls[0]?.argv;
   assert.ok(attach, "no attach happened");
-  assert.ok(attach.includes("bash") && attach.includes("--cwd") && attach.includes("/workspace/.trees/cli"));
+  const cwd = attach.indexOf("--cwd");
+  assert.equal(attach[cwd + 1], "/workspace/.trees/cli");
   assert.match(attach.at(-1) ?? "", /^exec claude /);
 });
 
@@ -24,6 +25,12 @@ test("resume never creates a worktree", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
   await cmdResume(c, "moroine/agent-forge", "cli");
   assert.ok(!c.calls.some((call) => call.join(" ").includes("worktree add")));
+});
+
+test("resume runs no host git", async () => {
+  const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
+  await cmdResume(c, "moroine/agent-forge", "cli");
+  assert.ok(!c.calls.some((call) => call[0] === "git"));
 });
 
 test("resume errors when the worktree is absent, pointing at start", async () => {
@@ -35,7 +42,7 @@ test("resume asks for repo then task when both are missing", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }], answers: [1, 2] });
   await cmdResume(c, undefined, undefined);
   const attach = c.attachCalls[0]?.argv;
-  assert.ok(attach?.includes("/workspace/.trees/docs"), `attached to the wrong session: ${attach?.join(" ")}`);
+  assert.equal(attach?.[(attach?.indexOf("--cwd") ?? -2) + 1], "/workspace/.trees/docs", `attached to the wrong session: ${attach?.join(" ")}`);
 });
 
 test("finish removes the worktree after the pre-flight", async () => {
@@ -72,7 +79,6 @@ test("finish keeps the branch, stops the agent, removes the worktree, then moves
   const c = fakeContext({ rules: FINISH_RULES });
   await cmdFinish(c, "moroine/agent-forge", "cli", false);
   assert.ok(!c.calls.some((call) => call.join(" ").includes("branch -D")));
-  assert.ok(!c.calls.some((call) => call.join(" ").includes("tmux")));
   const pkill = c.calls.findIndex((call) => call.includes("pkill"));
   const remove = c.calls.findIndex((call) => call.join(" ").includes("worktree remove"));
   const aside = c.calls.findIndex((call) => call.includes("sh") && call.join(" ").includes(".finished-"));

@@ -35,6 +35,28 @@ test("an existing worktree is attached, not refused", async () => {
   assert.ok(c.attachCalls.length > 0);
 });
 
+test("the task's agent is attached in the foreground outside herdr", async () => {
+  const c = fakeContext({ rules: rules([{ match: ".jsonl", code: 1 }]) });
+  await cmdStart(c, "moroine/agent-forge", "fresh");
+  const attach = c.attachCalls.at(-1)?.argv ?? [];
+  assert.deepEqual(attach.slice(-3), [
+    "bash", "-lc", "exec claude --permission-mode auto --remote-control agent-moroine-agent-forge-fresh",
+  ]);
+  assert.ok(c.err_lines.includes("outside herdr: the agent stops when this terminal closes"), c.err_lines.join(" | "));
+});
+
+test("a new task whose transcript folder would collide with an existing task is refused", async () => {
+  const c = fakeContext({
+    rules: rules([{ match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/fix.v2\n" }]),
+  });
+  await assert.rejects(
+    () => cmdStart(c, "moroine/agent-forge", "fix-v2"),
+    /share Claude's transcript folder with 'fix.v2'/,
+  );
+  assert.ok(!c.calls.some((call) => call.join(" ").includes("worktree add")));
+  assert.equal(c.attachCalls.length, 0);
+});
+
 test("an existing local branch is resumed in a new worktree", async () => {
   const c = fakeContext({ rules: rules([{ match: "show-ref --verify --quiet refs/heads/agent/docs", code: 0 }]) });
   await cmdStart(c, "moroine/agent-forge", "docs");

@@ -15,7 +15,6 @@
     - docker --version
     - docker compose version
     - git lfs version
-    - tmux -V
     - jq --version
   changed_when: false
 
