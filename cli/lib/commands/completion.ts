@@ -21,6 +21,8 @@ export const FORGE_BIN = join(dirname(fileURLToPath(import.meta.url)), "..", "..
 // silencieusement sur les noms de fichiers. Ancrer le chemin supprime cette
 // dependance a l'ordre, et rend la fonction independante de la maniere dont
 // `forge` est resolu au moment de la complétion.
+//
+// `resume` propose aussi `--all` à la place du repo ; rien ne le suit.
 export function completionScript(forgeBin: string): string {
   return `_forge_completions() {
   local cur cmd
@@ -34,8 +36,13 @@ export function completionScript(forgeBin: string): string {
 
   case "$cmd" in
     start|resume|finish|stop|delete)
+      [ "$cmd" = "resume" ] && [ "\${COMP_WORDS[2]}" = "--all" ] && [ "$COMP_CWORD" -gt 2 ] && return 0
       case "$COMP_CWORD" in
-        2) COMPREPLY=($(compgen -W "$(${forgeBin} completion repos 2>/dev/null)" -- "$cur")) ;;
+        2)
+          local words
+          words="$(${forgeBin} completion repos 2>/dev/null)"
+          [ "$cmd" = "resume" ] && words="$words --all"
+          COMPREPLY=($(compgen -W "$words" -- "$cur")) ;;
         3)
           case "$cmd" in
             start|resume|finish)
