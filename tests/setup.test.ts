@@ -162,3 +162,13 @@ test("an Ansible release on bare metal is not warned about", async () => {
   await cmdSetup(c, opts({ virt: () => "none", releaseRoot: "/opt/agent-forge/releases/abc" }));
   assert.ok(!c.err_lines.some((l) => l.includes("not in a VM")), c.err_lines.join("\n"));
 });
+
+// A stock laptop fails the host contract first (userns sysctl at 1): the
+// warning must come before the steps that would weaken the machine.
+test("the bare-metal warning comes before a failing host contract", async () => {
+  const c = fakeContext({ incus: new FakeIncus() });
+  await assert.rejects(() => cmdSetup(c, opts({
+    proc: fakeProc({ restrictUserns: "1" }), virt: () => "none", releaseRoot: "/home/alice/agent-forge",
+  })));
+  assert.ok(c.err_lines.includes(BARE_METAL_WARNING), c.err_lines.join("\n"));
+});
