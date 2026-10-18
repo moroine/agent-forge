@@ -9,6 +9,8 @@ export type Instance = {
   name: string;
   status: string;
   config: Record<string, string>;
+  // Les devices locaux de l'instance, sans ceux de ses profils.
+  devices: Record<string, Record<string, string>>;
   expandedDevices: Record<string, Record<string, string>>;
   ipv4: string[];
 };
@@ -38,6 +40,7 @@ export async function listInstances(ctx: Context): Promise<Instance[]> {
     if (!Array.isArray(parsed)) return [];
     type Raw = {
       name: string; status: string; config?: Record<string, string>;
+      devices?: Record<string, Record<string, string>>;
       expanded_devices?: Record<string, Record<string, string>>;
       state?: { network?: { eth0?: { addresses?: { family?: string; address?: string }[] } } };
     };
@@ -50,6 +53,7 @@ export async function listInstances(ctx: Context): Promise<Instance[]> {
         name: i.name,
         status: i.status,
         config: i.config ?? {},
+        devices: i.devices ?? {},
         expandedDevices: i.expanded_devices ?? {},
         // Les JSON minimaux (tests) n'ont ni state ni adresses.
         ipv4: (i.state?.network?.eth0?.addresses ?? [])

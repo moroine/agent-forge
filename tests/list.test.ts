@@ -25,16 +25,16 @@ function ctx() {
   });
 }
 
-test("the header names the four columns, repo first", async () => {
+test("the header names the five columns, repo first", async () => {
   const c = ctx();
   await cmdList(c);
-  assert.match(c.out_lines[0], /^REPO\s+MODE\s+STATE\s+BUILD$/);
+  assert.match(c.out_lines[0], /^REPO\s+MODE\s+EGRESS\s+STATE\s+BUILD$/);
 });
 
 test("a behind container is reported without the two sha", async () => {
   const c = ctx();
   await cmdList(c);
-  assert.match(c.out_lines[1], /^moroine\/agent-forge\s+autonomous\s+Running\s+behind$/);
+  assert.match(c.out_lines[1], /^moroine\/agent-forge\s+autonomous\s+\?\s+Running\s+behind$/);
 });
 
 test("the three session states are distinguished", async () => {
@@ -48,7 +48,7 @@ test("the three session states are distinguished", async () => {
 test("a stopped container yields no task rows and is not inspected", async () => {
   const c = ctx();
   await cmdList(c);
-  assert.match(c.out_lines[5], /^acme\/super-long-repository-name\s+supervised\s+Stopped\s+ok$/);
+  assert.match(c.out_lines[5], /^acme\/super-long-repository-name\s+supervised\s+\?\s+Stopped\s+ok$/);
   assert.equal(c.out_lines.length, 6);
 });
 
@@ -61,9 +61,9 @@ test("a long repo name widens its column instead of shifting the others", async 
   // ne prouvait rien : un formatRow complétant un caractère de trop court le
   // passe (démontré sur table.test.ts, d'où la même approche par tranches).
   const rows = [
-    ["REPO", "MODE", "STATE", "BUILD"],
-    ["moroine/agent-forge", "autonomous", "Running", "behind"],
-    ["acme/super-long-repository-name", "supervised", "Stopped", "ok"],
+    ["REPO", "MODE", "EGRESS", "STATE", "BUILD"],
+    ["moroine/agent-forge", "autonomous", "?", "Running", "behind"],
+    ["acme/super-long-repository-name", "supervised", "?", "Stopped", "ok"],
   ];
   const widths = rows[0].map((_, col) => Math.max(...rows.map((r) => r[col].length)));
   const lines = c.out_lines.filter((l) => !l.startsWith(" "));
@@ -100,7 +100,7 @@ test("a container with no repo metadata falls back to its name", async () => {
     ],
   });
   await cmdList(c);
-  assert.match(c.out_lines[1], /^agent-orphan\s+-\s+Stopped\s+unknown$/);
+  assert.match(c.out_lines[1], /^agent-orphan\s+-\s+\?\s+Stopped\s+unknown$/);
 });
 
 test("every container is compared against agent-base, read once", async () => {
@@ -108,4 +108,22 @@ test("every container is compared against agent-base, read once", async () => {
   await cmdList(c);
   const reads = c.calls.filter((call) => call.join(" ").includes("image get-property"));
   assert.deepEqual(reads.map((call) => call.slice(-2)), [["agent-base", "user.forge.commit"]]);
+});
+
+test("the EGRESS column comes from the effective NIC", async () => {
+  const nic = (acl: string, egress: string) => ({ eth0: { type: "nic", "security.acls": acl, "security.acls.default.egress.action": egress } });
+  const c = fakeContext({
+    rules: [
+      { match: "incus --project agent-forge list", stdout: JSON.stringify([
+        { name: "agent-a", status: "Stopped", expanded_devices: nic("forge-egress-strict", "reject") },
+        { name: "agent-b", status: "Stopped", expanded_devices: nic("forge-egress", "allow") },
+        { name: "agent-c", status: "Stopped", expanded_devices: nic("mine", "allow") },
+      ]) },
+      { match: "image get-property", stdout: "" },
+    ],
+  });
+  await cmdList(c);
+  assert.match(c.out_lines[1], /^agent-a\s+-\s+strict\s+Stopped/);
+  assert.match(c.out_lines[2], /^agent-b\s+-\s+open\s+Stopped/);
+  assert.match(c.out_lines[3], /^agent-c\s+-\s+\?\s+Stopped/);
 });

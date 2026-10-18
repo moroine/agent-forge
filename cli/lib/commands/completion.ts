@@ -28,7 +28,7 @@ export function completionScript(forgeBin: string): string {
   cmd="\${COMP_WORDS[1]}"
 
   if [ "$COMP_CWORD" -eq 1 ]; then
-    COMPREPLY=($(compgen -W "setup start resume finish stop delete list image completion" -- "$cur"))
+    COMPREPLY=($(compgen -W "setup start resume finish stop delete list egress image completion" -- "$cur"))
     return
   fi
 
@@ -45,6 +45,18 @@ export function completionScript(forgeBin: string): string {
           esac
           ;;
         4) [ "$cmd" = "finish" ] && COMPREPLY=($(compgen -W "--force" -- "$cur")) ;;
+      esac
+      ;;
+    egress)
+      case "$COMP_CWORD" in
+        2) COMPREPLY=($(compgen -W "log $(${forgeBin} completion repos 2>/dev/null)" -- "$cur")) ;;
+        3)
+          if [ "\${COMP_WORDS[2]}" = "log" ]; then
+            COMPREPLY=($(compgen -W "$(${forgeBin} completion repos 2>/dev/null)" -- "$cur"))
+          else
+            COMPREPLY=($(compgen -W "strict open" -- "$cur"))
+          fi
+          ;;
       esac
       ;;
     image)      [ "$COMP_CWORD" -eq 2 ] && COMPREPLY=($(compgen -W "build" -- "$cur")) ;;

@@ -10,6 +10,7 @@ import { cmdFinish } from "./lib/commands/finish.ts";
 import { cmdStop } from "./lib/commands/stop.ts";
 import { cmdDelete } from "./lib/commands/delete.ts";
 import { cmdList } from "./lib/commands/list.ts";
+import { cmdEgress } from "./lib/commands/egress.ts";
 import { cmdImage } from "./lib/commands/image.ts";
 import { cmdCompletion } from "./lib/commands/completion.ts";
 
@@ -23,7 +24,10 @@ Commands:
   finish [<owner/repo>] [<task>]    Remove a finished task's worktree
   stop [<owner/repo>] [--force]     Stop a container (blocked on dirty/unpushed WIP unless --force)
   delete [<owner/repo>] [--force]   Delete a container (blocked on dirty/unpushed WIP unless --force)
-  list                              Show all containers: repo, mode, state, build
+  list                              Show all containers: repo, mode, egress, state, build
+  egress [<owner/repo>] [strict|open]   Show or switch a stopped container's egress
+  egress log [<owner/repo>]         Show the proxy's recent requests (old lines may name the
+                                    wrong container: addresses are reused)
   image build                       Build the agent-base image (Ansible, through Incus)
   completion bash                   Print a bash completion function (eval it in ~/.bashrc)
   completion repos                  List managed owner/repo, one per line (machine-readable)
@@ -45,6 +49,7 @@ function dispatch(ctx: Context, positionals: string[], force: boolean, strict: b
     case "stop": return cmdStop(ctx, a, force);
     case "delete": return cmdDelete(ctx, a, force);
     case "list": return cmdList(ctx);
+    case "egress": return cmdEgress(ctx, a, b);
     case "image": return cmdImage(ctx, a, b);
     case "completion": return cmdCompletion(ctx, a, b);
     default: throw new ForgeError(`unknown command '${cmd}'\n${USAGE}`);

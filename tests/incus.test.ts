@@ -46,8 +46,8 @@ test("FORGE_INCUS_PROJECT points every call at another project", async () => {
 test("listInstances parses incus list -f json without jq", async () => {
   const ctx = fakeContext({ rules: [{ match: "incus --project agent-forge list", stdout: LIST_JSON }] });
   assert.deepEqual(await listInstances(ctx), [
-    { name: "agent-moroine-agent-forge", status: "Running", config: {}, expandedDevices: {}, ipv4: [] },
-    { name: "agent-acme-widgets", status: "Stopped", config: {}, expandedDevices: {}, ipv4: [] },
+    { name: "agent-moroine-agent-forge", status: "Running", config: {}, devices: {}, expandedDevices: {}, ipv4: [] },
+    { name: "agent-acme-widgets", status: "Stopped", config: {}, devices: {}, expandedDevices: {}, ipv4: [] },
   ]);
   assert.ok(!ctx.calls.some((c) => c.includes("jq")), "must not shell out to jq");
 });
@@ -125,7 +125,7 @@ test("the fake incus answers the transport, project included", async () => {
   fake.addInstance("agent-forge", "agent-x", { status: "Stopped", config: { "user.forge.repo": "o/r" } });
   const ctx = fakeContext({ incus: fake });
   assert.deepEqual(await listInstances(ctx), [
-    { name: "agent-x", status: "Stopped", config: { "user.forge.repo": "o/r" }, expandedDevices: {}, ipv4: [] },
+    { name: "agent-x", status: "Stopped", config: { "user.forge.repo": "o/r" }, devices: {}, expandedDevices: {}, ipv4: [] },
   ]);
   assert.equal(await configGet(ctx, "agent-x", "user.forge.repo"), "o/r");
   assert.equal(await imageProperty(ctx, "agent-base", "user.forge.commit"), "aaaa1111");
