@@ -40,6 +40,14 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
   const project = forgeProject();
   const report = (kind: string, name: string, outcome: Outcome) => ctx.out(`${kind} ${name}: ${outcome}`);
 
+  // 0. No VM between the containers and this machine (spec sub-project 5,
+  // "forge setup on bare metal"): only the Lima VM is documented locally. Said
+  // first, before the host contract asks for changes that weaken the machine.
+  if (runsOnBareMetalOutsideAnsible(opts.releaseRoot ?? repoRoot(), (opts.virt ?? detectVirt)())) {
+    ctx.err("WARNING: forge runs directly on this machine, not in a VM: an agent that escapes its container " +
+      "lands here, with this machine's keys and sessions. The supported local mode is a Lima VM (see the README).");
+  }
+
   // 1-2. The host contract, then the config. The pool comes from the config,
   // so it is checked right after it; IPv4 forwarding comes last (step 4).
   await checkHost(ctx, { proc: opts.proc, uid: ids.uid });
@@ -127,13 +135,6 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
   for (const address of exposedHostAddresses((opts.interfaces ?? networkInterfaces)(), config.network.ipv4Address)) {
     ctx.err(`WARNING: host address ${address} is outside the ranges ${ACL} rejects: containers can reach host ` +
       `services listening on it, unless a host firewall drops traffic from ${BRIDGE}.`);
-  }
-
-  // 6. No VM between the containers and this machine (spec sub-project 5,
-  // "forge setup on bare metal"): only the Lima VM is documented locally.
-  if (runsOnBareMetalOutsideAnsible(opts.releaseRoot ?? repoRoot(), (opts.virt ?? detectVirt)())) {
-    ctx.err("WARNING: forge runs directly on this machine, not in a VM: an agent that escapes its container " +
-      "lands here, with this machine's keys and sessions. The supported local mode is a Lima VM (see the README).");
   }
 
   // Last: forge's herdr bindings.
