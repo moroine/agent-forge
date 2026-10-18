@@ -2,7 +2,7 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { configPath, forgeHome, repoRoot, workspacesDir } from "../cli/lib/paths.ts";
+import { allowlistPath, configPath, forgeHome, repoRoot, workspacesDir } from "../cli/lib/paths.ts";
 
 const KEYS = ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "XDG_CONFIG_HOME"];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
@@ -32,6 +32,14 @@ test("workspaces live in the home", () => {
 test("the config file honours XDG_CONFIG_HOME", () => {
   process.env.XDG_CONFIG_HOME = "/x";
   assert.equal(configPath(), join("/x", "agent-forge", "config.json"));
+});
+
+test("the allowlist sits next to the config and honours XDG_CONFIG_HOME", () => {
+  process.env.XDG_CONFIG_HOME = "/x";
+  assert.equal(allowlistPath(), join("/x", "agent-forge", "egress-allowlist"));
+  process.env.XDG_CONFIG_HOME = "";
+  process.env.FORGE_HOME = "/h";
+  assert.equal(allowlistPath(), "/h/.config/agent-forge/egress-allowlist");
 });
 
 test("an empty XDG_CONFIG_HOME means unset", () => {
