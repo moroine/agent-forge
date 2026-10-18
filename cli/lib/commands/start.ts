@@ -14,7 +14,7 @@ import { mirrorPath, workspacesDir } from "../paths.ts";
 import { claudeSlug } from "../session.ts";
 import { runTask } from "../tabs.ts";
 import { execAsAgent, instanceExists, startInstance } from "../incus.ts";
-import { agentBranches, branchExists, taskNames, worktreeAbsPath } from "../worktrees.ts";
+import { agentBranches, branchExists, taskNames, worktreeAbsPath, worktreeExists } from "../worktrees.ts";
 import { provisionContainer } from "./provision.ts";
 
 const USAGE = "Usage: forge start <owner/repo> [<task>]";
@@ -214,7 +214,7 @@ async function pickStartTask(ctx: Context, container: string): Promise<Choice> {
 }
 
 async function addWorktree(ctx: Context, container: string, task: string, ref: string): Promise<void> {
-  if ((await execAsAgent(ctx, container, `test -e /workspace/.trees/${task}`)).code === 0) {
+  if (await worktreeExists(ctx, container, task)) {
     ctx.out(`Worktree .trees/${task} is already there — attaching to it.`);
     return;
   }

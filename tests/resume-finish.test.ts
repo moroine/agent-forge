@@ -31,6 +31,15 @@ test("resume outside herdr refuses while the task's agent already runs", async (
   assert.equal(c.attachCalls.length, 0);
 });
 
+// runTask reçoit le user.forge.repo enregistré : c'est lui que nomme la sortie.
+test("resume names the stored repo, not the case typed", async () => {
+  const c = fakeContext({ rules: [
+    { match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-moroine-agent-forge-cli\n" },
+    ...BASE, { match: "test -e", code: 0 },
+  ] });
+  await assert.rejects(() => cmdResume(c, "Moroine/Agent-Forge", "cli"), /'forge stop moroine\/agent-forge'\./);
+});
+
 test("resume outside herdr fails closed when the agent probe fails", async () => {
   const c = fakeContext({ rules: [
     { match: "ps -u 1001 -o args=", code: 1, stderr: "Error: Instance is not running" },
@@ -117,6 +126,14 @@ test("finish keeps the branch, stops the agent, removes the worktree, then moves
 test("finish succeeds when no agent process was running (pkill exit 1)", async () => {
   const c = fakeContext({ rules: [{ match: "pkill", code: 1 }, ...FINISH_RULES] });
   assert.equal(await cmdFinish(c, "moroine/agent-forge", "cli", false), 0);
+});
+
+// Le worktree est le cwd de l'agent : jamais retiré sous un agent qu'on n'a
+// pas pu arrêter.
+test("finish keeps the worktree when stopping the agent fails", async () => {
+  const c = fakeContext({ rules: [{ match: "pkill", code: 3, stderr: "pkill: fatal error\n" }, ...FINISH_RULES] });
+  await assert.rejects(() => cmdFinish(c, "moroine/agent-forge", "cli", false), /stopping the agent for cli failed/);
+  assert.ok(!c.calls.some((call) => call.join(" ").includes("worktree remove")));
 });
 
 test("finish only warns when moving the transcripts aside fails", async () => {

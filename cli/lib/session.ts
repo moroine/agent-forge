@@ -18,10 +18,11 @@ export function transcriptDir(task: string): string {
 }
 
 // A probe: the exit code is the answer, never an error. Path passed as $1 so
-// no value is interpolated into the shell script.
+// no value is interpolated into the shell script. Only a non-empty .jsonl
+// counts: an empty one gives `--continue` nothing to continue.
 export async function hasConversation(ctx: Context, container: string, task: string): Promise<boolean> {
   const r = await execAsAgentArgv(ctx, container, [
-    "sh", "-c", 'ls "$1"/*.jsonl >/dev/null 2>&1', "sh", transcriptDir(task),
+    "sh", "-c", 'for f in "$1"/*.jsonl; do [ -s "$f" ] && exit 0; done; exit 1', "sh", transcriptDir(task),
   ]);
   return r.code === 0;
 }
@@ -66,11 +67,30 @@ function ereEscape(s: string): string {
   return s.replace(/[.[\]()*+?{}|^$\\]/g, "\\$&");
 }
 
-// Stops the task's agent. `pkill -f` matches the full command line against an
-// extended regex; the marker is escaped, and anchored so task "a" never
-// matches "a-b". Exit 1 means nothing was running.
-export async function stopAgent(ctx: Context, container: string, task: string): Promise<void> {
-  await execAsAgentArgv(ctx, container, ["pkill", "-f", "--", `${ereEscape(AGENT.marker(container, task))}( |$)`]);
+// Stops the task's agent, and returns once it is gone: the caller removes the
+// worktree that is the agent's cwd. `pkill -f` matches the full command line
+// against an extended regex; the marker is escaped, and anchored so task "a"
+// never matches "a-b". Exit 1 means nothing was running; 2 and above are a
+// failure. A probe that cannot answer counts as still running.
+export async function stopAgent(
+  ctx: Context, container: string, task: string, opts: { attempts?: number; delayMs?: number } = {},
+): Promise<void> {
+  const r = await execAsAgentArgv(ctx, container, ["pkill", "-f", "--", `${ereEscape(AGENT.marker(container, task))}( |$)`]);
+  if (r.code === 1) return;
+  if (r.code !== 0) {
+    throw new ForgeError(`stopping the agent for ${task} failed: ${r.stderr.trim() || `exit code ${r.code}`}`);
+  }
+  const attempts = opts.attempts ?? 20;
+  const delayMs = opts.delayMs ?? 250;
+  for (let i = 1; ; i++) {
+    const probe = await probeRunningTasks(ctx, container);
+    if (probe.ok && !probe.tasks.has(task)) return;
+    if (i >= attempts) break;
+    await new Promise((res) => setTimeout(res, delayMs));
+  }
+  throw new ForgeError(
+    `the agent for ${task} still runs in ${container} after SIGTERM: its worktree stays. ` +
+    "Stop the container ('forge stop --force'), then run this again.");
 }
 
 // UTC YYYYMMDDTHHMMSSZ.
@@ -79,13 +99,15 @@ export function finishedStamp(now: Date): string {
 }
 
 // A reused task name must start a fresh conversation: move the transcripts
-// aside instead of deleting them. Best effort, only warns.
+// aside instead of deleting them. Best effort, only warns. An aside folder of
+// the same second already there is never moved into.
+const ASIDE = '[ ! -d "$1" ] || { [ ! -e "$1.finished-$2" ] || { echo "$1.finished-$2 already exists" >&2; exit 1; }; ' +
+  'mv "$1" "$1.finished-$2"; }';
+
 export async function setTranscriptsAside(
   ctx: Context, container: string, task: string, now: Date = new Date(),
 ): Promise<void> {
-  const r = await execAsAgentArgv(ctx, container, [
-    "sh", "-c", '[ ! -d "$1" ] || mv "$1" "$1.finished-$2"', "sh", transcriptDir(task), finishedStamp(now),
-  ]);
+  const r = await execAsAgentArgv(ctx, container, ["sh", "-c", ASIDE, "sh", transcriptDir(task), finishedStamp(now)]);
   if (r.code !== 0) {
     ctx.err(`WARNING: moving the transcripts of ${task} aside failed: ${r.stderr.trim() || `exit code ${r.code}`}`);
   }

@@ -8,7 +8,7 @@ import { containerRepo, requireContainerForRepo } from "../containers.ts";
 import { herdrEnv } from "../herdr.ts";
 import { closeBareTab } from "../tabs.ts";
 import { execAsAgent } from "../incus.ts";
-import { worktreeAbsPath } from "../worktrees.ts";
+import { worktreeAbsPath, worktreeExists } from "../worktrees.ts";
 import { setTranscriptsAside, stopAgent } from "../session.ts";
 import { checkWorktree } from "../wip.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
@@ -29,7 +29,7 @@ export async function cmdFinish(
   validateTaskName(taskName);
 
   const dir = worktreeAbsPath(taskName);
-  if ((await execAsAgent(ctx, container, `test -e ${dir}`)).code !== 0) {
+  if (!(await worktreeExists(ctx, container, taskName))) {
     throw new ForgeError(`no worktree .trees/${taskName} in ${container}.`);
   }
 

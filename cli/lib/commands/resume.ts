@@ -8,7 +8,7 @@ import { validateRepo, validateTaskName } from "../validate.ts";
 import { containerRepo, requireContainerForRepo } from "../containers.ts";
 import { herdrEnv } from "../herdr.ts";
 import { resumeAll, runTask } from "../tabs.ts";
-import { execAsAgent } from "../incus.ts";
+import { worktreeExists } from "../worktrees.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
 const USAGE = "Usage: forge resume <owner/repo> <task>\n       forge resume --all";
@@ -32,8 +32,7 @@ export async function cmdResume(
   const taskName = await resolveTask(ctx, container, task, USAGE);
   validateTaskName(taskName);
 
-  const present = await execAsAgent(ctx, container, `test -e /workspace/.trees/${taskName}`);
-  if (present.code !== 0) {
+  if (!(await worktreeExists(ctx, container, taskName))) {
     throw new ForgeError(
       `no worktree .trees/${taskName} in ${container}. Start it with 'forge start ${ownerRepo} ${taskName}'.`,
     );

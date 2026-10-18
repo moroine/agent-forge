@@ -1,9 +1,13 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
 import { AGENT } from "../cli/lib/agent.ts";
 import {
-  attachTask, claudeSlug, ensureRunning, finishedStamp, hasConversation, stopAgent, transcriptDir,
+  attachTask, claudeSlug, ensureRunning, finishedStamp, hasConversation, setTranscriptsAside, stopAgent, transcriptDir,
 } from "../cli/lib/session.ts";
 
 const P = ["incus", "--project", "agent-forge"];
@@ -29,15 +33,66 @@ test("claudeSlug replaces every non-alphanumeric character with a dash", () => {
 });
 
 test("hasConversation probes for a .jsonl through execAsAgentArgv", async () => {
-  const yes = fakeContext({ rules: [{ match: "ls", code: 0 }] });
+  const yes = fakeContext({ rules: [{ match: ".jsonl", code: 0 }] });
   assert.equal(await hasConversation(yes, "agent-x", "cli"), true);
-  assert.deepEqual(yes.calls[0], [
-    ...P, "exec", "agent-x", "--user", "1001", "--group", "1001", "--env", "HOME=/home/aiuser", "--",
-    "sh", "-c", 'ls "$1"/*.jsonl >/dev/null 2>&1', "sh",
-    "/home/aiuser/.claude/projects/-workspace--trees-cli",
+  const call = yes.calls[0];
+  assert.deepEqual(call.slice(0, call.indexOf("--") + 2), [
+    ...P, "exec", "agent-x", "--user", "1001", "--group", "1001", "--env", "HOME=/home/aiuser", "--", "sh",
   ]);
-  const no = fakeContext({ rules: [{ match: "ls", code: 2 }] });
+  assert.deepEqual(call.slice(-2), ["sh", "/home/aiuser/.claude/projects/-workspace--trees-cli"]);
+  const no = fakeContext({ rules: [{ match: ".jsonl", code: 1 }] });
   assert.equal(await hasConversation(no, "agent-x", "cli"), false);
+});
+
+// Runs here, with a real sh, the script a call runs in the container; its $1
+// (the transcripts folder) becomes a local directory.
+function runLocally(call: string[], dir: string): number | null {
+  const argv = call.slice(call.indexOf("--") + 1);
+  assert.deepEqual(argv.slice(0, 2), ["sh", "-c"]);
+  argv[4] = dir;
+  return spawnSync(argv[0], argv.slice(1)).status;
+}
+
+// An empty transcript gives Claude nothing to continue: `--continue` would
+// end the agent at once.
+test("hasConversation's script wants a non-empty .jsonl", async () => {
+  const root = mkdtempSync(join(tmpdir(), "forge-conv-"));
+  try {
+    const c = fakeContext();
+    await hasConversation(c, "agent-x", "cli");
+    const dir = join(root, "proj");
+    assert.notEqual(runLocally(c.calls[0], dir), 0, "absent folder");
+    mkdirSync(dir);
+    assert.notEqual(runLocally(c.calls[0], dir), 0, "empty folder");
+    writeFileSync(join(dir, "a.jsonl"), "");
+    assert.notEqual(runLocally(c.calls[0], dir), 0, "zero-byte transcript");
+    writeFileSync(join(dir, "b.jsonl"), "{}\n");
+    assert.equal(runLocally(c.calls[0], dir), 0, "a transcript");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("setTranscriptsAside's script never nests into an existing aside folder", async () => {
+  const root = mkdtempSync(join(tmpdir(), "forge-aside-"));
+  try {
+    const now = new Date("2026-10-18T09:05:03Z");
+    const c = fakeContext();
+    await setTranscriptsAside(c, "agent-x", "cli", now);
+    const dir = join(root, "proj");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "a.jsonl"), "{}\n");
+    assert.equal(runLocally(c.calls[0], dir), 0);
+    assert.deepEqual(readdirSync(join(root, "proj.finished-20261018T090503Z")), ["a.jsonl"]);
+    // A second finish in the same second: the folder stays where it is.
+    mkdirSync(dir);
+    writeFileSync(join(dir, "b.jsonl"), "{}\n");
+    assert.notEqual(runLocally(c.calls[0], dir), 0);
+    assert.deepEqual(readdirSync(join(root, "proj.finished-20261018T090503Z")), ["a.jsonl"]);
+    assert.deepEqual(readdirSync(dir), ["b.jsonl"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("ensureRunning starts a stopped container", async () => {
@@ -77,16 +132,16 @@ test("ensureRunning throws when the start fails and the container stays stopped"
 });
 
 test("attachTask passes HERDR_AGENT=claude to the incus process", async () => {
-  const c = fakeContext({ rules: [{ match: "ls", code: 1 }], attachCode: 4 });
+  const c = fakeContext({ rules: [{ match: ".jsonl", code: 1 }], attachCode: 4 });
   assert.equal(await attachTask(c, "agent-x", "cli"), 4);
   assert.deepEqual(c.attachCalls[0].opts?.env, { HERDR_AGENT: "claude" });
 });
 
 test("attachTask adds --continue only when a conversation exists", async () => {
-  const fresh = fakeContext({ rules: [{ match: "ls", code: 2 }] });
+  const fresh = fakeContext({ rules: [{ match: ".jsonl", code: 2 }] });
   await attachTask(fresh, "agent-x", "cli");
   assert.ok(!fresh.attachCalls[0].argv.at(-1)?.includes("--continue"));
-  const again = fakeContext({ rules: [{ match: "ls", code: 0 }] });
+  const again = fakeContext({ rules: [{ match: ".jsonl", code: 0 }] });
   await attachTask(again, "agent-x", "cli");
   assert.ok(again.attachCalls[0].argv.at(-1)?.endsWith(" --continue"));
 });
@@ -131,6 +186,48 @@ test("stopAgent escapes the regex metacharacters of the task name", async () => 
   const pattern = new RegExp(c.calls[0].at(-1) as string);
   assert.ok(pattern.test("claude --remote-control agent-x-v1.2 --continue"));
   assert.ok(!pattern.test("claude --remote-control agent-x-v1x2"));
+});
+
+// The agent's cwd is the worktree finish removes next: stopAgent returns once
+// the agent is gone, never right after SIGTERM.
+const AGENT_PS = "claude --permission-mode auto --remote-control agent-x-cli\n";
+function psSequence(running: number) {
+  const c = fakeContext();
+  const base = c.exec;
+  let probes = 0;
+  c.exec = async (argv, o) => {
+    if (argv.includes("ps")) {
+      probes++;
+      c.calls.push(argv);
+      return { code: 0, stdout: probes <= running ? AGENT_PS : "", stderr: "" };
+    }
+    return base(argv, o);
+  };
+  return { c, probes: () => probes };
+}
+
+test("stopAgent waits until the agent has exited", async () => {
+  const { c, probes } = psSequence(2);
+  await stopAgent(c, "agent-x", "cli", { attempts: 5, delayMs: 0 });
+  assert.equal(probes(), 3);
+});
+
+test("stopAgent fails when the agent outlives SIGTERM", async () => {
+  const { c, probes } = psSequence(99);
+  await assert.rejects(stopAgent(c, "agent-x", "cli", { attempts: 3, delayMs: 0 }),
+    /the agent for cli still runs in agent-x after SIGTERM/);
+  assert.equal(probes(), 3);
+});
+
+test("stopAgent does not wait when nothing was running (pkill exit 1)", async () => {
+  const c = fakeContext({ rules: [{ match: "pkill", code: 1 }] });
+  await stopAgent(c, "agent-x", "cli");
+  assert.equal(c.calls.length, 1);
+});
+
+test("stopAgent fails on any other pkill exit code", async () => {
+  const c = fakeContext({ rules: [{ match: "pkill", code: 3, stderr: "pkill: fatal error\n" }] });
+  await assert.rejects(stopAgent(c, "agent-x", "cli"), /stopping the agent for cli failed: pkill: fatal error/);
 });
 
 test("finishedStamp is the UTC time without separators or milliseconds", () => {

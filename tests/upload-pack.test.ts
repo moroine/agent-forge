@@ -46,7 +46,8 @@ test("a stopped container is started, and nothing goes to stdout", async () => {
 test("a running container is not started", async () => {
   const c = fakeContext({ rules: rules("Running") });
   await cmdUploadPack(c, "agent-x", undefined);
-  assert.ok(!c.calls.some((a) => a.includes("start")));
+  assert.ok(!c.calls.some((a) => a.join(" ") === [...P, "start", "agent-x"].join(" ")), c.calls.join("\n"));
+  assert.ok(c.calls.some((a) => a.includes("git-upload-pack")));
 });
 
 test("a container without user.forge.repo is refused", async () => {
