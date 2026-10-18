@@ -1,7 +1,7 @@
 # agent-forge v2, sub-project 5: Local mode and docs — Design
 
 **Date:** 2026-10-18
-**Status:** Approved in brainstorming, pending user review of this document
+**Status:** Approved by the maintainer (2026-10-18)
 **Branch:** `next` (stacked pull requests, see "Delivery")
 **Framing spec:** `docs/superpowers/specs/2026-10-15-v2-incus-ansible-herdr-design.md`
 (sections "Local mode (sub-project 5)" and "Repository layout")
