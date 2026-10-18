@@ -2,7 +2,8 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
-import { attachCommand, closeBareTab, findTaskTab, openTask, resumeAll, runTask, shellQuote } from "../cli/lib/tabs.ts";
+import { attachCommand, closeBareTab, findTaskTab, openTask, resumeAll, runTask } from "../cli/lib/tabs.ts";
+import { shellQuote } from "../cli/lib/shell.ts";
 
 const h = { bin: "/h/herdr", popup: false };
 const T = { container: "agent-x", ownerRepo: "o/r", task: "cli" };

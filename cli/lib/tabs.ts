@@ -12,6 +12,7 @@ import {
 import { containerRepo, listForgeContainers } from "./containers.ts";
 import { forgeCommand, forgeHome } from "./paths.ts";
 import { attachTask, ensureRunning } from "./session.ts";
+import { shellQuote } from "./shell.ts";
 import { runningTasks, taskNames } from "./worktrees.ts";
 
 export type TaskRef = {
@@ -20,10 +21,6 @@ export type TaskRef = {
   ownerRepo: string;
   task: string;
 };
-
-export function shellQuote(s: string): string {
-  return `'${s.replaceAll("'", "'\\''")}'`;
-}
 
 // What is typed into the tab's shell. `exec` makes the agent replace the shell,
 // so closing the agent closes the pane's process. Container and task are
