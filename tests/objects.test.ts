@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_CONFIG, type ForgeConfig, type Limits } from "../cli/lib/config.ts";
 import {
-  ACL, BRIDGE, PROFILE, RAW_LXC, desiredAcl, desiredBridge, desiredProfile, desiredProject, rawLxcAllowed,
+  ACL, BRIDGE, PROFILE, RAW_LXC, desiredAcl, desiredBridge, desiredProfile, desiredProject, egressNames, rawLxcAllowed,
 } from "../cli/lib/objects.ts";
 
 const IDS = { uid: 501, gid: 20 };
@@ -99,4 +99,24 @@ test("raw.lxc is allowed unless the project is restricted without lowlevel", () 
   assert.equal(rawLxcAllowed({ restricted: "true" }), false);
   assert.equal(rawLxcAllowed({ restricted: "true", "restricted.containers.lowlevel": "block" }), false);
   assert.equal(rawLxcAllowed({ restricted: "true", "restricted.containers.lowlevel": "allow" }), true);
+});
+
+test("agent-forge uses slot 0 and the spec's ACL names", () =>
+  assert.deepEqual(egressNames("agent-forge"), { slot: 0, proxyAcl: "forge-proxy", strictAcl: "forge-egress-strict" }));
+
+test("another project gets FORGE_PROXY_SLOT (default 1) and suffixed names", () => {
+  const saved = process.env.FORGE_PROXY_SLOT;
+  try {
+    delete process.env.FORGE_PROXY_SLOT;
+    assert.deepEqual(egressNames("forge-selftest"),
+      { slot: 1, proxyAcl: "forge-proxy-forge-selftest", strictAcl: "forge-egress-strict-forge-selftest" });
+    process.env.FORGE_PROXY_SLOT = "3";
+    assert.equal(egressNames("forge-selftest").slot, 3);
+    for (const bad of ["0", "8", "x", "1.5"]) {
+      process.env.FORGE_PROXY_SLOT = bad;
+      assert.throws(() => egressNames("forge-selftest"), /FORGE_PROXY_SLOT/);
+    }
+  } finally {
+    if (saved === undefined) delete process.env.FORGE_PROXY_SLOT; else process.env.FORGE_PROXY_SLOT = saved;
+  }
 });

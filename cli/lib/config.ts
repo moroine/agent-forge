@@ -64,11 +64,11 @@ export function parseConfig(path: string, raw: unknown): ForgeConfig {
     const value = network.ipv4Address;
     if (value !== undefined) {
       const cidr = typeof value === "string" ? parseCidr(value) : null;
-      const valid = cidr !== null && cidr.prefix <= 30 && isHostAddress(cidr) &&
+      const valid = cidr !== null && cidr.prefix <= 27 && isHostAddress(cidr) &&
         PRIVATE_RANGES.some((r) => cidrWithin(cidr, parseCidr(r)!));
       if (!valid) {
         throw invalid("network.ipv4Address",
-          "the bridge's address with its prefix, inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 " +
+          "the bridge's address with a prefix of /27 or wider, inside 10.0.0.0/8, 172.16.0.0/12 or 192.168.0.0/16 " +
           '(such as "10.77.0.1/24")', value);
       }
       config.network.ipv4Address = value as string;
