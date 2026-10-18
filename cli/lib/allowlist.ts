@@ -36,10 +36,13 @@ downloads.claude.ai    # Claude Code's apt repository (refresh at provisioning)
 #pypi.org
 #files.pythonhosted.org
 
-# Docker Hub. Same remark for pushes.
+# Docker Hub. Same remark for pushes. The registry redirects image layers to
+# a storage host (the last line); when a pull is still refused, check
+# \`forge egress log\` for the host it tried.
 #registry-1.docker.io
 #auth.docker.io
 #production.cloudflare.docker.com
+#docker-images-prod.s3.dualstack.us-east-1.amazonaws.com
 
 # Claude Code telemetry and error reports. Optional: Claude Code works without them.
 #http-intake.logs.us5.datadoghq.com

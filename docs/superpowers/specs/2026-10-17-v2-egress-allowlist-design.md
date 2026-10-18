@@ -190,7 +190,7 @@ Shipped commented, grouped, each group with a warning where it applies:
 | GitHub | `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com` | Needed for the superpowers plugin. Anyone can publish there (repos, gists, releases): a hijacked agent can fetch from, and with a token push to, any of it |
 | npm | `registry.npmjs.org` | With a token, `npm publish` is an exfiltration channel |
 | PyPI | `pypi.org`, `files.pythonhosted.org` | Same remark for uploads |
-| Docker Hub | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com` | Same remark for pushes |
+| Docker Hub | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`, `docker-images-prod.s3.dualstack.us-east-1.amazonaws.com` | Same remark for pushes. The registry redirects image layers to a storage host (the last entry, seen in a real pull); when a pull is still refused, check `forge egress log` for the host it tried |
 | Claude telemetry | `http-intake.logs.us5.datadoghq.com`, `browser-intake-us5-datadoghq.com` | Optional: Claude Code works without them |
 
 The Anthropic list comes from Claude Code's documentation (network

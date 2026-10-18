@@ -312,8 +312,10 @@ test("a container run by Docker has no proxy unless given it", { skip: !ENABLED 
   if (process.env.FORGE_INTEGRATION_DOCKER !== "1") return t.skip("set FORGE_INTEGRATION_DOCKER=1 (needs Docker Hub; pulls an image)");
   if (!ready) return t.skip("no strict container");
   const original = allowlistFile();
-  // Exactly the default list's Docker Hub group (no overlapping entries).
-  const hubList = "example.com\nregistry-1.docker.io\nauth.docker.io\nproduction.cloudflare.docker.com\n";
+  // Exactly the default list's Docker Hub group (no overlapping entries),
+  // the storage host the registry redirects layers to included.
+  const hubList = "example.com\nregistry-1.docker.io\nauth.docker.io\nproduction.cloudflare.docker.com\n" +
+    "docker-images-prod.s3.dualstack.us-east-1.amazonaws.com\n";
   writeFileSync(original, hubList);
   try {
     must("forge setup with the Docker Hub list", forge(["setup"]));
