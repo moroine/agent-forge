@@ -1,10 +1,14 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { dirname } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import {
   listInstances, instanceStatus, instanceExists, configGet, configSet, imageProperty,
   execAsAgent, startInstance, stopInstance, deleteInstance, attachArgv, forgeProject, waitReady,
+  pushText, pullText, configSetMany, configUnset, deviceOverride, deviceSet, deviceRemove,
+  restartInstance, execArgv,
 } from "../cli/lib/incus.ts";
 
 const P = ["incus", "--project", "agent-forge"];
@@ -42,8 +46,8 @@ test("FORGE_INCUS_PROJECT points every call at another project", async () => {
 test("listInstances parses incus list -f json without jq", async () => {
   const ctx = fakeContext({ rules: [{ match: "incus --project agent-forge list", stdout: LIST_JSON }] });
   assert.deepEqual(await listInstances(ctx), [
-    { name: "agent-moroine-agent-forge", status: "Running" },
-    { name: "agent-acme-widgets", status: "Stopped" },
+    { name: "agent-moroine-agent-forge", status: "Running", config: {}, expandedDevices: {}, ipv4: [] },
+    { name: "agent-acme-widgets", status: "Stopped", config: {}, expandedDevices: {}, ipv4: [] },
   ]);
   assert.ok(!ctx.calls.some((c) => c.includes("jq")), "must not shell out to jq");
 });
@@ -120,7 +124,9 @@ test("the fake incus answers the transport, project included", async () => {
   const fake = FakeIncus.withRuntime();
   fake.addInstance("agent-forge", "agent-x", { status: "Stopped", config: { "user.forge.repo": "o/r" } });
   const ctx = fakeContext({ incus: fake });
-  assert.deepEqual(await listInstances(ctx), [{ name: "agent-x", status: "Stopped" }]);
+  assert.deepEqual(await listInstances(ctx), [
+    { name: "agent-x", status: "Stopped", config: { "user.forge.repo": "o/r" }, expandedDevices: {}, ipv4: [] },
+  ]);
   assert.equal(await configGet(ctx, "agent-x", "user.forge.repo"), "o/r");
   assert.equal(await imageProperty(ctx, "agent-base", "user.forge.commit"), "aaaa1111");
 });
@@ -156,4 +162,69 @@ test("waitReady throws at once on a non-empty state that is neither ready nor of
   const { ctx, count } = readyContext([{ code: 1, stdout: "maintenance\n", stderr: "" }]);
   await assert.rejects(waitReady(ctx, "c", { delayMs: 0 }), /systemd state: maintenance/);
   assert.equal(count(), 1);
+});
+
+test("listInstances reads config, expanded devices and the IPv4 address", async () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1", { config: { "user.a": "1" }, devices: { eth0: { type: "nic", network: "n" } }, ipv4: "10.0.0.5" });
+  const [i] = await listInstances(fakeContext({ incus: fake }));
+  assert.deepEqual(i.config, { "user.a": "1" });
+  assert.equal(i.expandedDevices.eth0.network, "n");
+  assert.deepEqual(i.ipv4, ["10.0.0.5"]);
+});
+
+test("pushText pushes the content with its owner and mode, then removes its temp file", async () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  const ctx = fakeContext({ incus: fake });
+  const r = await pushText(ctx, "c1", "/etc/x", "hi\n", { uid: 0, gid: 0, mode: "644" });
+  assert.equal(r.code, 0);
+  assert.deepEqual(fake.files.get("agent-forge/c1/etc/x"), { content: "hi\n", uid: "0", gid: "0", mode: "644" });
+  const argv = ctx.calls[0];
+  assert.ok(argv.includes("--create-dirs"));
+  assert.ok(!existsSync(argv[argv.indexOf("push") + 1]), "temp file must be gone");
+});
+
+test("pushText removes its temp directory when the push fails", async () => {
+  const ctx = fakeContext({ rules: [{ match: "file push", code: 1, stderr: "boom" }] });
+  const r = await pushText(ctx, "c1", "/etc/x", "hi", { uid: 0, gid: 0, mode: "644" });
+  assert.equal(r.code, 1);
+  assert.ok(!existsSync(dirname(ctx.calls[0][ctx.calls[0].indexOf("push") + 1])));
+});
+
+test("pullText returns the content, or null when the file is missing", async () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  const ctx = fakeContext({ incus: fake });
+  assert.equal(await pullText(ctx, "c1", "/etc/x"), null);
+  await pushText(ctx, "c1", "/etc/x", "hi\n", { uid: 0, gid: 0, mode: "644" });
+  assert.equal(await pullText(ctx, "c1", "/etc/x"), "hi\n");
+});
+
+test("configSetMany sends every pair in one call; configUnset one key", async () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  const ctx = fakeContext({ incus: fake });
+  await configSetMany(ctx, "c1", { a: "1", b: "2" });
+  assert.deepEqual(ctx.calls, [[...P, "config", "set", "c1", "a=1", "b=2"]]);
+  await configUnset(ctx, "c1", "a");
+  assert.deepEqual(ctx.calls[1], [...P, "config", "unset", "c1", "a"]);
+});
+
+test("device, restart and exec helpers build their argv", async () => {
+  const ctx = fakeContext();
+  await deviceOverride(ctx, "c1", "eth0", { "security.acls": "x" });
+  await deviceSet(ctx, "c1", "eth0", { "security.acls": "y", a: "b" });
+  await deviceRemove(ctx, "c1", "eth0");
+  await restartInstance(ctx, "c1");
+  await execArgv(ctx, "c1", ["ls", "-l"], { K: "V" });
+  await execArgv(ctx, "c1", ["true"]);
+  assert.deepEqual(ctx.calls, [
+    [...P, "config", "device", "override", "c1", "eth0", "security.acls=x"],
+    [...P, "config", "device", "set", "c1", "eth0", "security.acls=y", "a=b"],
+    [...P, "config", "device", "remove", "c1", "eth0"],
+    [...P, "restart", "c1"],
+    [...P, "exec", "c1", "--env", "K=V", "--", "ls", "-l"],
+    [...P, "exec", "c1", "--", "true"],
+  ]);
 });

@@ -1,8 +1,17 @@
 // Couche transport : parle à Incus, ne sait rien de forge. Tout ce qui est
 // spécifique au domaine vit dans containers.ts / worktrees.ts.
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { ForgeError, type Context, type ExecResult } from "./context.ts";
 
-export type Instance = { name: string; status: string };
+export type Instance = {
+  name: string;
+  status: string;
+  config: Record<string, string>;
+  expandedDevices: Record<string, Record<string, string>>;
+  ipv4: string[];
+};
 
 export const DEFAULT_PROJECT = "agent-forge";
 
@@ -27,12 +36,26 @@ export async function listInstances(ctx: Context): Promise<Instance[]> {
   try {
     const parsed: unknown = JSON.parse(r.stdout);
     if (!Array.isArray(parsed)) return [];
+    type Raw = {
+      name: string; status: string; config?: Record<string, string>;
+      expanded_devices?: Record<string, Record<string, string>>;
+      state?: { network?: { eth0?: { addresses?: { family?: string; address?: string }[] } } };
+    };
     return parsed
-      .filter((i): i is Instance =>
+      .filter((i): i is Raw =>
         typeof i === "object" && i !== null &&
-        typeof (i as Instance).name === "string" &&
-        typeof (i as Instance).status === "string")
-      .map((i) => ({ name: i.name, status: i.status }));
+        typeof (i as Raw).name === "string" &&
+        typeof (i as Raw).status === "string")
+      .map((i) => ({
+        name: i.name,
+        status: i.status,
+        config: i.config ?? {},
+        expandedDevices: i.expanded_devices ?? {},
+        // Les JSON minimaux (tests) n'ont ni state ni adresses.
+        ipv4: (i.state?.network?.eth0?.addresses ?? [])
+          .filter((a) => a.family === "inet" && typeof a.address === "string")
+          .map((a) => a.address as string),
+      }));
   } catch {
     return [];
   }
@@ -101,7 +124,7 @@ export function attachArgv(container: string, task: string, term: string): strin
   ];
 }
 
-export type ServerInfo = { environment?: { firewall?: string } };
+export type ServerInfo = { environment?: { firewall?: string; server_version?: string } };
 
 // `incus query /1.0` rend les infos du serveur en JSON — les mêmes que
 // `incus info`, sans parseur YAML. Niveau hôte : pas de --project.
@@ -218,4 +241,63 @@ export function execAsAgentArgv(ctx: Context, name: string, argv: string[]): Pro
 
 export async function imageExists(ctx: Context, alias: string): Promise<boolean> {
   return (await ctx.exec(incus("image", "info", alias))).code === 0;
+}
+
+// Écrit le contenu dans un fichier temporaire (répertoire neuf, retiré dans
+// tous les cas) puis le pousse avec son propriétaire et son mode.
+export async function pushText(
+  ctx: Context, instance: string, dest: string, content: string,
+  owner: { uid: number; gid: number; mode: string },
+): Promise<ExecResult> {
+  const dir = mkdtempSync(join(tmpdir(), "forge-push-"));
+  try {
+    const src = join(dir, "content");
+    writeFileSync(src, content);
+    return await ctx.exec(incus(
+      "file", "push", src, `${instance}${dest}`,
+      "--uid", String(owner.uid), "--gid", String(owner.gid), "--mode", owner.mode, "--create-dirs"));
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+// Sonde : null si le fichier n'existe pas (ou n'est pas lisible).
+export async function pullText(ctx: Context, instance: string, path: string): Promise<string | null> {
+  const r = await ctx.exec(incus("file", "pull", `${instance}${path}`, "-"));
+  return r.code === 0 ? r.stdout : null;
+}
+
+function kv(pairs: Record<string, string>): string[] {
+  return Object.entries(pairs).map(([k, v]) => `${k}=${v}`);
+}
+
+export function configSetMany(ctx: Context, instance: string, pairs: Record<string, string>): Promise<ExecResult> {
+  return ctx.exec(incus("config", "set", instance, ...kv(pairs)));
+}
+
+export function configUnset(ctx: Context, instance: string, key: string): Promise<ExecResult> {
+  return ctx.exec(incus("config", "unset", instance, key));
+}
+
+// override : crée un device local qui masque celui du profil ; set : modifie
+// un device local existant.
+export function deviceOverride(ctx: Context, instance: string, device: string, pairs: Record<string, string>): Promise<ExecResult> {
+  return ctx.exec(incus("config", "device", "override", instance, device, ...kv(pairs)));
+}
+
+export function deviceSet(ctx: Context, instance: string, device: string, pairs: Record<string, string>): Promise<ExecResult> {
+  return ctx.exec(incus("config", "device", "set", instance, device, ...kv(pairs)));
+}
+
+export function deviceRemove(ctx: Context, instance: string, device: string): Promise<ExecResult> {
+  return ctx.exec(incus("config", "device", "remove", instance, device));
+}
+
+export function restartInstance(ctx: Context, name: string): Promise<ExecResult> {
+  return ctx.exec(incus("restart", name));
+}
+
+// Comme execAsAgentArgv mais en root, avec un environnement explicite.
+export function execArgv(ctx: Context, name: string, argv: string[], env: Record<string, string> = {}): Promise<ExecResult> {
+  return ctx.exec(incus("exec", name, ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]), "--", ...argv));
 }
