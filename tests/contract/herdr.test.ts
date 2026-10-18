@@ -7,7 +7,8 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { renderBlock } from "../../cli/lib/herdr-config.ts";
 import { createContext } from "../../cli/lib/context.ts";
 import {
-  createWorkspace, listWorkspaces, createTab, listPanes, paneRun, paneForeground, classifyPane,
+  createWorkspace, listWorkspaces, createTab, listPanes, listTabs, renameTab, closeTab,
+  paneRun, paneForeground, classifyPane,
 } from "../../cli/lib/herdr.ts";
 
 const present = spawnSync("herdr", ["--version"], { stdio: "ignore" }).status === 0;
@@ -48,6 +49,26 @@ test("herdr accepts the config block forge setup writes", { skip }, () => {
   const r = spawnSync("herdr", ["config", "check"], { env: { ...process.env, HERDR_CONFIG_PATH: file }, encoding: "utf8" });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.match(r.stdout, /config: ok/);
+});
+
+test("tab list, rename and close against real herdr", { skip }, async () => {
+  const ws = await createWorkspace(ctx, h, "o/tabs", home);
+  const tab = await createTab(ctx, h, ws.workspaceId, "first", home);
+  const shown = (tabs: { id: string; label: string; workspaceId: string }[]) => JSON.stringify(tabs);
+
+  let tabs = await listTabs(ctx, h);
+  assert.ok(tabs.some((t) => t.id === tab.tabId && t.label === "first" && t.workspaceId === ws.workspaceId), shown(tabs));
+  assert.ok(tabs.some((t) => t.id === ws.tabId && t.workspaceId === ws.workspaceId), shown(tabs));
+
+  await renameTab(ctx, h, tab.tabId, "second");
+  tabs = await listTabs(ctx, h);
+  assert.ok(tabs.some((t) => t.id === tab.tabId && t.label === "second" && t.workspaceId === ws.workspaceId), shown(tabs));
+  assert.ok(!tabs.some((t) => t.label === "first"), shown(tabs));
+
+  await closeTab(ctx, h, tab.tabId);
+  tabs = await listTabs(ctx, h);
+  assert.ok(!tabs.some((t) => t.id === tab.tabId), shown(tabs));
+  assert.ok(tabs.some((t) => t.id === ws.tabId), shown(tabs));
 });
 
 test("workspace, tab, pane and process classification against real herdr", { skip }, async () => {
