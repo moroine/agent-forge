@@ -81,3 +81,23 @@
     owner: root
     group: root
   notify: Restart journald for agent-forge's settings
+
+# Lima gives cloud-init a new instance id at every boot, and cloud-init then
+# regenerates the SSH host keys. A stable instance id (cloud VMs) never
+# triggers this, so the drop-in goes on every host. The directory may be
+# missing on a bare-metal install without cloud-init: creating it is harmless.
+- name: Create cloud-init's drop-in directory
+  ansible.builtin.file:
+    path: /etc/cloud/cloud.cfg.d
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Keep the SSH host keys across cloud-init instance changes
+  ansible.builtin.copy:
+    src: 99-agent-forge-keep-host-keys.cfg
+    dest: /etc/cloud/cloud.cfg.d/99-agent-forge-keep-host-keys.cfg
+    mode: "0644"
+    owner: root
+    group: root
