@@ -43,6 +43,22 @@ ansible-playbook -i ~/forge-inventory.yml ansible/site.yml
   the host an `IdentityFile` and `IdentitiesOnly yes` in `~/.ssh/config`, and
   `ansible_ssh_common_args: -o IdentitiesOnly=yes` in the inventory.
 
+### On a local Lima VM
+
+Local mode is the same playbook on a Lima VM, on a Mac or a Linux machine:
+
+- `lima/forge.yaml` is the VM's template. It runs in Lima's plain mode, which
+  means no shared folder and no port forwarding besides SSH. SSH goes over TCP
+  on `127.0.0.1:60022`.
+- `inventory.lima.example.yml` is the matching inventory:
+  - Lima's own user (your login name) is the admin, opened by
+    `~/.lima/_config/user`;
+  - the forge user is `forge`;
+  - `forge_exposure` is `local`;
+  - sshd stays on 22, the port Lima forwards to.
+
+The main README's "Quick start: local" walks through the whole setup.
+
 ## Tests
 
 ```bash
@@ -56,8 +72,11 @@ ansible-lint ansible/    # profile production (.ansible-lint)
 checks that a second run changes nothing, runs `tests/verify.yml`, reboots the
 machine and verifies again. It needs ansible-core 2.20 or newer
 (`pipx install ansible-core` on Ubuntu 24.04). `--exposure public|lan|local`
-picks the exposure (default `public`); `--keep` leaves its temporary files in
-place for debugging.
+picks the exposure (default `public`, `local` with `--lima`); `--keep`
+leaves its temporary files (and the VM) in place for debugging.
+
+After each of the two runs, the admin must still log in on a fresh SSH
+connection. A reused, multiplexed connection would hide a lockout.
 
 ### On a cloud VM (`--host`)
 
@@ -100,6 +119,21 @@ ansible/tests/vm-test.sh                    # --exposure public (default)
 ansible/tests/vm-test.sh --exposure local   # fail2ban off
 ```
 
+### On a Lima VM (`--lima`)
+
+With `--lima`, the script tests local mode. It creates a throwaway Lima VM
+from `lima/forge.yaml`, with its own name and a free SSH port of its own, so your
+`forge-local` VM is never touched. It provisions it with `--exposure local`
+and restarts it with `limactl stop` / `limactl start`. The host key must
+survive the restart. The script deletes the VM at the end.
+
+```bash
+ansible/tests/vm-test.sh --lima
+```
+
+It needs Lima 2.0 or newer and about 6 GiB of free disk while it runs. On
+Linux, it also needs QEMU and a writable `/dev/kvm`: be in the `kvm` group.
+
 ## Hardening choices
 
 `roles/hardening` applies devsec.hardening 11.0.0 (`os_hardening`,
@@ -116,6 +150,16 @@ ansible/tests/vm-test.sh --exposure local   # fail2ban off
 - **Password ageing.** The admin is exempt
   (`os_users_without_password_ageing`): the playbook never changes the
   admin's sudo, and devsec would otherwise expire its password after 60 days.
+- **System accounts.** devsec gives every account below UID 1000 a `nologin`
+  shell. A Lima VM's admin has your Mac's UID (501), so it would be locked out,
+  Ansible included. The admin is therefore in `os_ignore_users`, next to
+  devsec's own `vagrant` and `kitchen`.
+- **Host keys and cloud-init.** `roles/base` installs
+  `/etc/cloud/cloud.cfg.d/99-agent-forge-keep-host-keys.cfg`
+  (`ssh_deletekeys: false`). Lima gives cloud-init a new instance id at every
+  boot, and cloud-init would then regenerate the SSH host keys: clients would
+  refuse the host after each restart. A stable instance id, as on a cloud VM,
+  makes this a no-op.
 - **sshd.**
   - The port is `forge_ssh_port`, and `AllowUsers` lists the admin and the
     forge user.
