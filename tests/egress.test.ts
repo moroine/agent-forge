@@ -7,7 +7,7 @@ import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { ForgeError } from "../cli/lib/context.ts";
 import { cmdEgress, parseSquidLine } from "../cli/lib/commands/egress.ts";
-import { ENV_KEYS } from "../cli/lib/strict.ts";
+import { ENV_KEYS, currentPlan, proxyEnv } from "../cli/lib/strict.ts";
 
 const dir = mkdtempSync(join(tmpdir(), "forge-egress-"));
 process.env.XDG_CONFIG_HOME = dir;
@@ -34,7 +34,7 @@ function setup(opts: { mode?: "open" | "strict" | "manual"; status?: "Running" |
     profiles: ["agent-forge"],
     config: {
       "user.forge.repo": "o/r", "user.forge.egress": strict ? "strict" : "open",
-      ...(strict ? Object.fromEntries(ENV_KEYS.map((k) => [k, "x"])) : {}),
+      ...(strict ? Object.fromEntries(Object.entries(proxyEnv(currentPlan())).map(([k, v]) => [`environment.${k}`, v])) : {}),
     },
     devices: strict ? { eth0: STRICT_NIC } : mode === "manual" ? { eth0: { ...OPEN_NIC, "security.acls": "mine" } } : {},
     ipv4: "10.77.0.57",
@@ -135,10 +135,39 @@ test("an unknown mode is a usage error", async () => {
   await assert.rejects(() => cmdEgress(ctx, "o/r", "loose"), /Usage: forge egress/);
 });
 
+test("a half-done → strict switch (override landed, marker open, no env) is completed", async () => {
+  const { fake, ctx } = setup();
+  fake.instances.get(PROJECT)!.get(NAME)!.devices.eth0 = { ...STRICT_NIC };
+  assert.equal(await cmdEgress(ctx, "o/r", "strict"), 0);
+  assert.ok(!ctx.out_lines.join("\n").includes("already"));
+  const inst = fake.instances.get(PROJECT)!.get(NAME)!;
+  assert.equal(inst.config["user.forge.egress"], "strict");
+  assert.equal(inst.config["environment.HTTPS_PROXY"], "http://10.77.0.2:3128");
+  assert.ok(writes(ctx).some((c) => c.includes("config device set")));
+  assert.ok(!writes(ctx).some((c) => c.includes("device override")));
+});
+
+test("a half-done → open switch (marker open, env partly unset, override left) is completed", async () => {
+  const { fake, ctx } = setup({ mode: "strict" });
+  const inst = fake.instances.get(PROJECT)!.get(NAME)!;
+  inst.config["user.forge.egress"] = "open";
+  for (const k of ENV_KEYS.slice(0, 4)) delete inst.config[k];
+  assert.equal(await cmdEgress(ctx, "o/r", "open"), 0);
+  const w = writes(ctx);
+  assert.equal(w.filter((c) => c.includes(" config unset ")).length, 3);
+  assert.ok(w[w.length - 1].includes("config device remove"));
+  assert.deepEqual(inst.devices, {});
+  assert.ok(!ENV_KEYS.some((k) => k in inst.config));
+});
+
 test("squid lines parse into time, client, result, method and host", () => {
   assert.deepEqual(parseSquidLine("1760745600.123     45 10.77.0.57 TCP_TUNNEL/200 3901 CONNECT api.anthropic.com:443 - HIER_DIRECT/160.79.104.10 -"),
     { time: "2025-10-18T00:00:00Z", client: "10.77.0.57", result: "allowed", method: "CONNECT", host: "api.anthropic.com:443" });
   assert.equal(parseSquidLine("1760745600.123 0 10.77.0.57 TCP_DENIED/403 3870 CONNECT example.org:443 - HIER_NONE/- text/html")!.result, "denied");
+});
+
+test("an origin 403 over plain HTTP is allowed: the proxy let it through", () => {
+  assert.equal(parseSquidLine("1760745600.1 3 10.77.0.57 TCP_MISS/403 10 GET http://example.com/ - HIER_DIRECT/x text/html")!.result, "allowed");
 });
 
 test("odd squid lines are skipped, plain HTTP URLs give their host", () => {
