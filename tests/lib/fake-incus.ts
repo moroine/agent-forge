@@ -364,7 +364,7 @@ export class FakeIncus {
   }
 
   private config(p: string, rest: string[]): ExecResult {
-    if (rest[0] === "device" && rest[1] !== "add") return this.configDevice(p, rest.slice(1));
+    if (rest[0] === "device" && rest[1] !== "add" && rest[1] !== "list") return this.configDevice(p, rest.slice(1));
     if (rest[0] === "device" && rest[1] === "add") {
       const [, , name, device, type, ...pairs] = rest;
       const inst = this.instances.get(p)!.get(name);

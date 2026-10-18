@@ -4,10 +4,13 @@
 // origin/main : c'est ce qui permet de reprendre une tâche existante — branche
 // laissée par `forge finish`, ou branche déjà poussée depuis un autre
 // container, typiquement une PR ouverte.
+import { join } from "node:path";
 import type { Context, ExecResult } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
-import { checkNameCollision, containerMode, forgeRepos, isRunning } from "../containers.ts";
+import { checkNameCollision, forgeRepos, isRunning } from "../containers.ts";
+import { hasOriginDevice, refreshMirror } from "../mirror.ts";
+import { mirrorPath, workspacesDir } from "../paths.ts";
 import { attachArgv, execAsAgent, instanceExists, startInstance } from "../incus.ts";
 import { agentBranches, branchExists, taskNames } from "../worktrees.ts";
 import { egressAfterStart, egressBeforeStart, egressMode } from "../strict.ts";
@@ -28,6 +31,7 @@ export async function cmdStart(
 
   let taskName = task ?? "";
   let ref = "";
+  let justCreated = false;
 
   if (!(await instanceExists(ctx, container))) {
     // Un container neuf n'a ni worktree ni branche à proposer : le menu
@@ -38,7 +42,8 @@ export async function cmdStart(
       taskName = asked;
     }
     validateTaskName(taskName);
-    await provisionContainer(ctx, container, ownerRepo, { strict: opts.strict });
+    // Un miroir tout juste cloné est déjà à jour : pas de second fetch GitHub.
+    justCreated = (await provisionContainer(ctx, container, ownerRepo, { strict: opts.strict })).mirror === "created";
   } else if (opts.strict && (await egressMode(ctx, container)) !== "strict") {
     // Le mode se choisit à la création ou se change explicitement : `start`
     // ne bascule jamais un container en silence.
@@ -52,9 +57,18 @@ export async function cmdStart(
   ctx.out(`Starting container ${container}...`);
   if (!(await isRunning(ctx, container))) await mustSucceed("incus start", startInstance(ctx, container));
 
+  // Un container provisionné avant le miroir n'a pas de device `origin` : son
+  // /workspace pointe encore vers GitHub, sans credential pour l'atteindre.
+  if (!(await hasOriginDevice(ctx, container))) {
+    throw new ForgeError(
+      `${container} predates the read-only mirror (no 'origin' device). ` +
+      `Retrieve its work, then: forge delete ${ownerRepo}, move ${join(workspacesDir(), container)} aside, ` +
+      `and forge start ${ownerRepo} again.`);
+  }
+
   // Avant le menu, pas après : les branches d'origin qu'il propose doivent
   // être à jour.
-  await refreshMain(ctx, container);
+  await refreshMain(ctx, container, ownerRepo, { mirror: !justCreated });
 
   if (!taskName) {
     const choice = await pickStartTask(ctx, container);
@@ -91,12 +105,21 @@ async function startResolveRepo(ctx: Context, repo?: string): Promise<string> {
   return repos[idx - 1];
 }
 
-// Un container supervised n'a aucune credential pour joindre origin : on reste
-// sur les refs déjà connues localement.
-async function refreshMain(ctx: Context, container: string): Promise<void> {
-  if ((await containerMode(ctx, container)) === "supervised") {
-    ctx.err("Supervised container: skipping origin fetch (no credential); working from the last-known origin refs.");
-    return;
+// Deux sauts : GitHub -> miroir hôte (git hôte, sur le miroir de forge
+// uniquement), puis miroir -> /workspace (dans le container, via son `origin`
+// en lecture seule). Aucun container n'a de credential GitHub.
+async function refreshMain(
+  ctx: Context, container: string, ownerRepo: string, opts: { mirror: boolean },
+): Promise<void> {
+  if (opts.mirror) {
+    ctx.out(`Refreshing the host mirror of ${ownerRepo}…`);
+    // Non fatal, comme le fetch du container : hors ligne ou sans agent SSH
+    // transmis, on repart des dernières refs connues du miroir.
+    const mirrored = await refreshMirror(ctx, mirrorPath(container), ownerRepo);
+    if (mirrored.code !== 0) {
+      ctx.err(`WARNING: refreshing the mirror from GitHub failed: ${mirrored.stderr.trim() || `exit code ${mirrored.code}`}`);
+      ctx.err("Continuing from the mirror's last-known refs (is your SSH agent forwarded? attach with ForwardAgent yes).");
+    }
   }
   ctx.out("Refreshing main...");
   // Deux étapes distinctes, et pas un `&&` : seul le fetch conditionne le

@@ -2,11 +2,13 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import type { ExecRule } from "./lib/fake-context.ts";
-import { cmdStart } from "../cli/lib/commands/start.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { assertNoHostGitIn } from "./lib/host-git.ts";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { workspacesDir } from "../cli/lib/paths.ts";
+import { cmdStart } from "../cli/lib/commands/start.ts";
 
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "forge-start-xdg-"));
 
@@ -15,6 +17,7 @@ const RUNNING = JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Ru
 function rules(extra: ExecRule[] = []): ExecRule[] {
   return [
     ...extra,
+    { match: "config device list", stdout: "origin\nworkspace\n" },
     { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
     { match: "user.forge.mode", stdout: "autonomous" },
     { match: "incus --project agent-forge list", stdout: RUNNING },
@@ -61,12 +64,69 @@ test("main is refreshed before the worktree is created", async () => {
   assert.ok(fetch >= 0 && fetch < add, "le fetch doit précéder la création");
 });
 
-test("a supervised container skips the fetch", async () => {
+test("the host mirror is refreshed, then the container fetches from it", async () => {
+  const c = fakeContext({ rules: rules() });
+  await cmdStart(c, "moroine/agent-forge", "fresh");
+  const flat = c.calls.map((x) => x.join(" "));
+  const host = flat.findIndex((l) => l.startsWith("git --git-dir=") && l.includes("agent-moroine-agent-forge.git") && l.includes("fetch --prune"));
+  const inside = flat.findIndex((l) => l.includes("git -C /workspace fetch origin"));
+  const add = flat.findIndex((l) => l.includes("worktree add"));
+  assert.ok(host >= 0 && host < inside && inside < add, flat.join("\n"));
+});
+
+test("a failing mirror refresh only warns, and the container still fetches", async () => {
   const c = fakeContext({
-    rules: rules().map((r) => (r.match === "user.forge.mode" ? { ...r, stdout: "supervised" } : r)),
+    rules: rules([{ match: "fetch --prune", code: 128, stderr: "Error connecting to agent" }]),
   });
   await cmdStart(c, "moroine/agent-forge", "fresh");
-  assert.ok(!c.calls.some((call) => call.join(" ").includes("fetch origin")));
+  const errs = c.err_lines.join("\n");
+  assert.match(errs, /WARNING: refreshing the mirror from GitHub failed: Error connecting to agent/);
+  assert.match(errs, /ForwardAgent/);
+  assert.ok(c.calls.some((call) => call.join(" ").includes("git -C /workspace fetch origin")));
+  assert.ok(added(c).includes("worktree add"), added(c));
+});
+
+test("a container without the origin device is refused, with the way out", async () => {
+  const c = fakeContext({ rules: rules([{ match: "config device list", stdout: "workspace\n" }]) });
+  await assert.rejects(
+    () => cmdStart(c, "moroine/agent-forge", "fresh"),
+    (e: Error) => /no 'origin' device/.test(e.message)
+      && /forge delete moroine\/agent-forge/.test(e.message) && /aside/.test(e.message),
+  );
+  assert.equal(added(c), "");
+});
+
+test("no host git touches the workspace", async () => {
+  const c = fakeContext({ rules: rules() });
+  await cmdStart(c, "moroine/agent-forge", "fresh");
+  assertNoHostGitIn(c.calls, join(workspacesDir(), "agent-moroine-agent-forge"));
+});
+
+test("right after a fresh mirror clone, start does not fetch GitHub again", async () => {
+  const home = mkdtempSync(join(tmpdir(), "forge-start-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".credentials.json"), "{}");
+  process.env.FORGE_HOME = home;
+  process.env.FORGE_REPO_DIR = process.cwd();
+  process.env.FORGE_WORKSPACES = join(home, "workspaces");
+  process.env.FORGE_MIRRORS = join(home, "mirrors");
+  try {
+    const c = fakeContext({
+      incus: FakeIncus.withRuntime({ commit: "IMGSHA" }),
+      rules: [
+        { match: "git config --global --includes user.name", stdout: "Ada\n" },
+        { match: "git config --global --includes user.email", stdout: "ada@example.com\n" },
+        { match: "forge-hook-probe-deny", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" },
+      ],
+    });
+    await cmdStart(c, "o/r", "fresh");
+    const flat = c.calls.map((x) => x.join(" "));
+    assert.ok(flat.some((l) => l.includes("clone --bare")), flat.join("\n"));
+    assert.equal(flat.filter((l) => l.includes("fetch") && l.includes("--prune")).length, 0, flat.join("\n"));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    for (const k of ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "FORGE_MIRRORS"]) delete process.env[k];
+  }
 });
 
 test("the task menu mixes worktrees, local branches and origin branches", async () => {
@@ -147,7 +207,7 @@ test("start fails when the container refuses to start", async () => {
 // fait déjà un container supervised), mais il ne doit jamais être silencieux.
 test("a failing fetch is surfaced on stderr instead of passing silently", async () => {
   const c = fakeContext({
-    rules: rules([{ match: "fetch origin", code: 1, stderr: "fatal: unable to access 'https://github.com/': timed out\n" }]),
+    rules: rules([{ match: "-C /workspace fetch origin", code: 1, stderr: "fatal: unable to access 'https://github.com/': timed out\n" }]),
   });
   await cmdStart(c, "moroine/agent-forge", "fresh");
   const errs = c.err_lines.join("\n");
@@ -211,10 +271,12 @@ function egressFake(opts: { mode?: string; version?: string; proxy?: boolean } =
   fake.addInstance("agent-forge", "agent-o-r", {
     status: "Stopped", config: { "user.forge.repo": "o/r", "user.forge.mode": "supervised", ...(opts.mode ? { "user.forge.egress": opts.mode } : {}) },
     // Un container strict l'est aussi par sa NIC, pas seulement par son marqueur.
-    devices: opts.mode === "strict" ? { eth0: STRICT_NIC } : {},
+    // Le device origin : un container provisionné avec le miroir.
+    devices: { origin: ORIGIN_DISK, ...(opts.mode === "strict" ? { eth0: STRICT_NIC } : {}) },
   });
   return fake;
 }
+const ORIGIN_DISK = { type: "disk", source: "/m/agent-o-r.git", path: "/forge/origin.git", readonly: "true" };
 const STRICT_NIC = {
   type: "nic", network: "forgebr0", "security.acls": "forge-egress-strict",
   "security.acls.default.egress.action": "reject", "security.acls.default.ingress.action": "reject",
