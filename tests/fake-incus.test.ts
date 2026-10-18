@@ -131,6 +131,18 @@ test("launch applies -d device overrides on top of the profile device, and -c ke
   assert.equal(fake.expandedDevices("agent-forge", "c1").eth0["ipv4.address"], "10.77.0.9");
 });
 
+test("launch accumulates several -d flags on one device, one key=value each, as Incus does", () => {
+  const fake = strictFake();
+  const r = fake.run([...P, "launch", "agent-base", "c1", "--profile", "agent-forge",
+    "-d", "eth0,security.acls=forge-egress-strict", "-d", "eth0,security.acls.default.egress.action=reject",
+    "-d", "eth0,x=a,b"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fake.expandedDevices("agent-forge", "c1").eth0, {
+    type: "nic", network: "forgebr0", "security.acls": "forge-egress-strict",
+    "security.acls.default.egress.action": "reject", x: "a,b",
+  });
+});
+
 test("device override copies the profile device; set needs a local device; remove restores the profile's", () => {
   const fake = strictFake();
   fake.run([...P, "launch", "agent-base", "c1", "--profile", "agent-forge"]);

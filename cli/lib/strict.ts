@@ -7,10 +7,12 @@ import { loadConfig } from "./config.ts";
 import { requireStrictIncus } from "./host.ts";
 import {
   configGet, configSetMany, execArgv, execAsAgent, forgeProject, listInstances, listObjects, pullText, pushText,
-  startInstance,
+  startInstance, type Instance,
 } from "./incus.ts";
 import { proxyPlan, type ProxyPlan } from "./ipv4.ts";
-import { PROXY_INSTANCE, PROXY_PORT, egressNames, type EgressMode, type EgressNames } from "./objects.ts";
+import {
+  PROXY_INSTANCE, PROXY_PORT, effectiveEgress, egressNames, type EgressMode, type EgressNames,
+} from "./objects.ts";
 import { configPath } from "./paths.ts";
 
 // All three are root's, under /etc. forge writes them as root at every start,
@@ -25,6 +27,7 @@ export const PROXY_FILES = {
 } as const;
 
 const EGRESS_KEY = "user.forge.egress";
+const REPO_KEY = "user.forge.repo";
 const PROXY_RECIPE_KEY = "user.forge.proxy_recipe";
 const LOOPBACK = "localhost,127.0.0.1,::1";
 const DOCKER_RESTART = "systemctl --user daemon-reload && systemctl --user restart docker";
@@ -142,13 +145,39 @@ export async function egressMode(ctx: Context, container: string): Promise<Egres
   return v === "strict" || v === "open" ? v : null;
 }
 
-// Before any `incus start` (also on a running container): a strict container
-// needs a running proxy, otherwise it simply has no egress.
+// The marker and the effective NIC disagree on strict (a switch interrupted
+// before its last step, or eth0 changed by hand): the message naming both
+// states and the commands that finish the switch, or null when they agree.
+// An open or absent marker on an unrecognized NIC ("?") is not a disagreement.
+export function egressMismatch(instance: Instance, names: EgressNames): string | null {
+  const marker = instance.config[EGRESS_KEY];
+  const effective = effectiveEgress(instance.expandedDevices, names);
+  if ((marker === "strict") === (effective === "strict")) return null;
+  const repo = instance.config[REPO_KEY] || instance.name;
+  const markerText = marker === undefined ? "without user.forge.egress" : `marked user.forge.egress=${marker}`;
+  const nicText = effective === "?" ? "neither open nor strict (changed by hand?)" : effective;
+  return `${instance.name} is ${markerText} but its eth0 is ${nicText}. ` +
+    `Finish the switch on the stopped container: forge egress ${repo} strict (or forge egress ${repo} open).`;
+}
+
+// Before any `incus start` (also on a running container): the mode comes from
+// the marker, but only when the NIC agrees, or the agent would be told one mode
+// and get the other. A strict container needs a running proxy, otherwise it
+// simply has no egress.
 export async function egressBeforeStart(ctx: Context, container: string): Promise<EgressMode | null> {
   const mode = await egressMode(ctx, container);
+  const instances = await listInstances(ctx);
+  const instance = instances.find((i) => i.name === container);
+  // A failed list (a probe) leaves the NIC unknown: only a strict marker is
+  // then refused, the start itself reports the rest.
+  if (!instance && mode === "strict") {
+    throw new ForgeError(`refusing to start ${container}: it is marked strict, but 'incus list' did not show its eth0.`);
+  }
+  const mismatch = instance ? egressMismatch(instance, egressNames(forgeProject())) : null;
+  if (mismatch !== null) throw new ForgeError(`refusing to start ${container}: ${mismatch}`);
   if (mode !== "strict") return mode;
   await requireStrictIncus(ctx);
-  const proxy = (await listInstances(ctx)).find((i) => i.name === PROXY_INSTANCE);
+  const proxy = instances.find((i) => i.name === PROXY_INSTANCE);
   if (!proxy) {
     ctx.err(`WARNING: ${PROXY_INSTANCE} is missing: ${container} starts without any egress. Run 'forge setup'.`);
   } else if (proxy.status !== "Running") {

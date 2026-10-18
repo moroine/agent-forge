@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { ForgeError } from "../cli/lib/context.ts";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { proxyPlan } from "../cli/lib/ipv4.ts";
@@ -18,8 +19,22 @@ const plan = proxyPlan("10.77.0.1/24", 0);
 const PROJECT = "agent-forge";
 const key = (path: string) => `${PROJECT}/web${path}`;
 
-function setup(opts: { proxy?: "none" | "running" | "stopped"; acl?: boolean; mode?: string } = {}) {
+const OPEN_NIC = {
+  type: "nic", network: "forgebr0", "security.acls": "forge-egress",
+  "security.acls.default.egress.action": "allow", "security.acls.default.ingress.action": "reject",
+};
+const STRICT_NIC = {
+  ...OPEN_NIC, "security.acls": "forge-egress-strict", "security.acls.default.egress.action": "reject",
+};
+
+// `nic` is the effective eth0 of web (by default the one its marker says);
+// "manual" is a hand-made one, neither open nor strict.
+function setup(opts: {
+  proxy?: "none" | "running" | "stopped"; acl?: boolean; mode?: string; nic?: "open" | "strict" | "manual";
+  repo?: string;
+} = {}) {
   const fake = FakeIncus.withRuntime();
+  fake.addProfile(PROJECT, "agent-forge", { devices: { eth0: OPEN_NIC } });
   const proxy = opts.proxy ?? "running";
   if (proxy !== "none") {
     fake.addInstance(PROJECT, "forge-proxy", {
@@ -29,7 +44,12 @@ function setup(opts: { proxy?: "none" | "running" | "stopped"; acl?: boolean; mo
   if (opts.acl ?? true) {
     fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
   }
-  fake.addInstance(PROJECT, "web", { config: opts.mode ? { "user.forge.egress": opts.mode } : {} });
+  const nic = opts.nic ?? (opts.mode === "strict" ? "strict" : "open");
+  fake.addInstance(PROJECT, "web", {
+    profiles: ["agent-forge"],
+    config: { ...(opts.mode ? { "user.forge.egress": opts.mode } : {}), ...(opts.repo ? { "user.forge.repo": opts.repo } : {}) },
+    devices: nic === "strict" ? { eth0: { ...STRICT_NIC } } : nic === "manual" ? { eth0: { ...OPEN_NIC, "security.acls": "mine" } } : {},
+  });
   return { fake, ctx: fakeContext({ incus: fake }) };
 }
 const cmds = (ctx: { calls: string[][] }) => ctx.calls.map((c) => c.join(" "));
@@ -172,6 +192,59 @@ test("before start: a strict container checks the gate and starts a stopped prox
   assert.equal(await egressBeforeStart(unset.ctx, "web"), null);
   assert.deepEqual(writes(unset.ctx), []);
   assert.equal(unset.fake.instances.get(PROJECT)!.get("forge-proxy")!.status, "Stopped");
+});
+
+// What egressBeforeStart did to Incus besides reading: nothing, when it refuses.
+const mutations = (ctx: { calls: string[][] }) =>
+  cmds(ctx).filter((c) => / (start|file push|config set|config unset|config device|exec) /.test(c));
+
+test("before start: a strict marker on a NIC that is not strict is refused, naming both states and the fix", async () => {
+  for (const nic of ["open", "manual"] as const) {
+    const { fake, ctx } = setup({ mode: "strict", nic, proxy: "stopped", repo: "o/r" });
+    await assert.rejects(() => egressBeforeStart(ctx, "web"), (e: Error) => {
+      assert.ok(e instanceof ForgeError);
+      assert.match(e.message, /web/);
+      assert.match(e.message, /user\.forge\.egress=strict/);
+      assert.match(e.message, nic === "open" ? /eth0 is open/ : /eth0 is neither open nor strict/);
+      assert.match(e.message, /forge egress o\/r strict/);
+      assert.match(e.message, /forge egress o\/r open/);
+      return true;
+    });
+    assert.deepEqual(mutations(ctx), []);
+    assert.equal(fake.instances.get(PROJECT)!.get("forge-proxy")!.status, "Stopped");
+  }
+});
+
+test("before start: a strict NIC under an open or absent marker is refused, naming both states and the fix", async () => {
+  for (const mode of ["open", undefined]) {
+    const { ctx } = setup({ mode, nic: "strict" });
+    await assert.rejects(() => egressBeforeStart(ctx, "web"), (e: Error) => {
+      assert.ok(e instanceof ForgeError);
+      assert.match(e.message, mode ? /user\.forge\.egress=open/ : /without user\.forge\.egress/);
+      assert.match(e.message, /eth0 is strict/);
+      // No user.forge.repo: the container's name stands in for the repo.
+      assert.match(e.message, /forge egress web strict/);
+      assert.match(e.message, /forge egress web open/);
+      return true;
+    });
+    assert.deepEqual(mutations(ctx), []);
+  }
+});
+
+test("before start: a strict marker whose NIC cannot be listed is refused; an open one goes through", async () => {
+  const strict = setup({ mode: "strict" });
+  const failing = fakeContext({ incus: strict.fake, rules: [{ match: "list -f json", code: 1, stderr: "boom" }] });
+  await assert.rejects(() => egressBeforeStart(failing, "web"), /refusing to start web: .*marked strict/);
+  const open = setup({ mode: "open" });
+  assert.equal(await egressBeforeStart(fakeContext({ incus: open.fake, rules: [{ match: "list -f json", code: 1 }] }), "web"), "open");
+});
+
+test("before start: matching states, and an open or absent marker on an unrecognized NIC, go through", async () => {
+  assert.equal(await egressBeforeStart(setup({ mode: "strict", nic: "strict" }).ctx, "web"), "strict");
+  assert.equal(await egressBeforeStart(setup({ mode: "open", nic: "open" }).ctx, "web"), "open");
+  assert.equal(await egressBeforeStart(setup({ nic: "open" }).ctx, "web"), null);
+  assert.equal(await egressBeforeStart(setup({ mode: "open", nic: "manual" }).ctx, "web"), "open");
+  assert.equal(await egressBeforeStart(setup({ nic: "manual" }).ctx, "web"), null);
 });
 
 test("before start: a missing proxy is a warning naming forge setup, not an error", async () => {
