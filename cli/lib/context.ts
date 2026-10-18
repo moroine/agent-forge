@@ -4,7 +4,7 @@ import { spawn } from "node:child_process";
 import { createPrompt } from "./prompt.ts";
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
-export type ExecOptions = { input?: string };
+export type ExecOptions = { input?: string; env?: Record<string, string> };
 
 export type Prompt = {
   pick(label: string, items: string[]): Promise<number | null>;
@@ -50,7 +50,11 @@ export async function mustSucceed(step: string, result: Promise<ExecResult>): Pr
 // absent est rapporté de la même façon, par un code non nul.
 function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
-    const child = spawn(argv[0], argv.slice(1), { stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(argv[0], argv.slice(1), {
+      stdio: ["pipe", "pipe", "pipe"],
+      // Les variables en plus se superposent à l'environnement hérité (PATH…).
+      env: opts.env ? { ...process.env, ...opts.env } : process.env,
+    });
     let stdout = "";
     let stderr = "";
     // setEncoding AVANT toute concaténation : sans lui les chunks arrivent en

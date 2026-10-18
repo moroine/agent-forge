@@ -2,9 +2,9 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { configPath, forgeHome, repoRoot, workspacesDir } from "../cli/lib/paths.ts";
+import { configPath, forgeHome, mirrorPath, repoRoot, workspacesDir } from "../cli/lib/paths.ts";
 
-const KEYS = ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "XDG_CONFIG_HOME"];
+const KEYS = ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "FORGE_MIRRORS", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 afterEach(() => {
   for (const k of KEYS) {
@@ -38,4 +38,29 @@ test("an empty XDG_CONFIG_HOME means unset", () => {
   process.env.XDG_CONFIG_HOME = "";
   process.env.FORGE_HOME = "/h";
   assert.equal(configPath(), "/h/.config/agent-forge/config.json");
+});
+
+test("FORGE_MIRRORS overrides the mirrors directory", () => {
+  process.env.FORGE_MIRRORS = "/m";
+  assert.equal(mirrorPath("agent-x"), "/m/agent-x.git");
+});
+
+test("mirrors default to the home's local share", () => {
+  delete process.env.FORGE_MIRRORS;
+  delete process.env.XDG_DATA_HOME;
+  process.env.FORGE_HOME = "/h";
+  assert.equal(mirrorPath("agent-x"), "/h/.local/share/agent-forge/mirrors/agent-x.git");
+});
+
+test("mirrors honour XDG_DATA_HOME", () => {
+  delete process.env.FORGE_MIRRORS;
+  process.env.XDG_DATA_HOME = "/d";
+  assert.equal(mirrorPath("agent-x"), "/d/agent-forge/mirrors/agent-x.git");
+});
+
+test("an empty XDG_DATA_HOME means unset", () => {
+  delete process.env.FORGE_MIRRORS;
+  process.env.XDG_DATA_HOME = "";
+  process.env.FORGE_HOME = "/h";
+  assert.equal(mirrorPath("agent-x"), "/h/.local/share/agent-forge/mirrors/agent-x.git");
 });

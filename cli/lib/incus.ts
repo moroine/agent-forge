@@ -52,6 +52,13 @@ export async function configGet(ctx: Context, name: string, key: string): Promis
   return r.code === 0 ? r.stdout.trim() : "";
 }
 
+// Sonde : les noms des devices de l'instance, [] en cas d'échec.
+export async function deviceNames(ctx: Context, name: string): Promise<string[]> {
+  const r = await ctx.exec(incus("config", "device", "list", name));
+  if (r.code !== 0) return [];
+  return r.stdout.split("\n").map((l) => l.trim()).filter((l) => l !== "");
+}
+
 // Les mutateurs ci-dessous rendent leur ExecResult au lieu de le jeter :
 // c'est l'appelant qui décide (via mustSucceed) d'échouer bruyamment. Renvoyer
 // void revenait à avaler le code de sortie ET le stderr capturé.
