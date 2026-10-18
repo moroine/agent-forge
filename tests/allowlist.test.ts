@@ -30,16 +30,19 @@ test("duplicates and overlaps are refused", () => {
 
 test("an empty list is valid", () => assert.deepEqual(parseAllowlist("f", "# nothing\n\n"), []));
 
-test("the default list holds Anthropic's four domains, active, and the rest commented", () =>
-  assert.deepEqual(parseAllowlist("f", DEFAULT_ALLOWLIST), ["api.anthropic.com", "platform.claude.com", "claude.ai", "downloads.claude.ai"]));
+// The three hosts a real strict session used (manual acceptance, 2026-10-18):
+// claude.ai was never contacted, the login happens on the host.
+test("the default list holds Anthropic's three domains, active, and the rest commented", () =>
+  assert.deepEqual(parseAllowlist("f", DEFAULT_ALLOWLIST), ["api.anthropic.com", "platform.claude.com", "downloads.claude.ai"]));
 
 test("every commented entry of the default list is valid once uncommented, Docker Hub's blob storage host included", () => {
   const uncommented = DEFAULT_ALLOWLIST.replace(/^#([a-z0-9.-]+\.[a-z]+)$/gm, "$1");
   const entries = parseAllowlist("f", uncommented);
   assert.ok(entries.includes("docker-images-prod.s3.dualstack.us-east-1.amazonaws.com"));
   assert.ok(["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"].every((e) => entries.includes(e)));
-  // 4 Anthropic, 4 GitHub, 1 npm, 2 PyPI, 4 Docker Hub, 2 telemetry.
+  // 3 Anthropic, 1 claude.ai connectors, 4 GitHub, 1 npm, 2 PyPI, 4 Docker Hub, 2 telemetry.
   assert.equal(entries.length, 17);
+  assert.ok(entries.includes("mcp-proxy.anthropic.com"));
   // The storage host comes with the reason it is needed, in the Docker Hub group.
   assert.match(DEFAULT_ALLOWLIST, /# Docker Hub[^]*storage host[^]*forge egress log[^]*\n#docker-images-prod\.s3\.dualstack\.us-east-1\.amazonaws\.com\n/);
 });
@@ -48,7 +51,7 @@ test("a missing file is created with the default list; an existing one, even emp
   const p = join(mkdtempSync(join(tmpdir(), "allow-")), "sub", "egress-allowlist");
   const first = loadAllowlist(p);
   assert.equal(first.created, true);
-  assert.equal(first.entries.length, 4);
+  assert.equal(first.entries.length, 3);
   assert.equal(readFileSync(p, "utf8"), DEFAULT_ALLOWLIST);
   writeFileSync(p, "");
   assert.deepEqual(loadAllowlist(p), { created: false, entries: [] });

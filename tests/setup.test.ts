@@ -51,7 +51,7 @@ test("an empty Incus gives every creation, in order", async () => {
     "network acl forge-proxy: created",
     "network acl forge-egress-strict: created",
     "profile forge-proxy: created",
-    "allowlist: created (default list, 4 entries)",
+    "allowlist: created (default list, 3 entries)",
     "instance forge-proxy: created",
   ]);
   assert.equal(profile(fake).config["raw.idmap"], "uid 501 1001\ngid 20 1001");
@@ -67,7 +67,7 @@ test("a second run reports only unchanged and makes no mutating call", async () 
   const c = fakeContext({ incus: fake });
   await cmdSetup(c, opts());
   assert.equal(writes(fake).length, before, writes(fake).slice(before).map((w) => w.argv.join(" ")).join("\n"));
-  assert.ok(c.out_lines.every((l) => l.endsWith(": unchanged") || l === "allowlist: 4 entries"), c.out_lines.join("\n"));
+  assert.ok(c.out_lines.every((l) => l.endsWith(": unchanged") || l === "allowlist: 3 entries"), c.out_lines.join("\n"));
 });
 
 test("every object goes to Incus as JSON on stdin", async () => {
