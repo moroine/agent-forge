@@ -131,7 +131,7 @@ survive the restart. The script deletes the VM at the end.
 ansible/tests/vm-test.sh --lima
 ```
 
-It needs Lima 2.0 or newer and about 6 GiB of free disk while it runs. On
+It needs Lima 2.1.2 or newer and about 6 GiB of free disk while it runs. On
 Linux, it also needs QEMU and a writable `/dev/kvm`: be in the `kvm` group.
 
 ## Hardening choices

@@ -8,7 +8,8 @@
 #
 # Lima picks vz on macOS and QEMU on Linux, and the VM's architecture follows
 # the machine's (arm64 on Apple Silicon, amd64 on most Linux machines).
-minimumLimaVersion: 2.0.0
+# Lima ships the ubuntu-26.04 base template from 2.1.2 on.
+minimumLimaVersion: 2.1.2
 base:
   - template:_images/ubuntu-26.04
 

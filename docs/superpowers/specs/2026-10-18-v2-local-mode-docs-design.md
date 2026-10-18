@@ -84,7 +84,7 @@ This reverses the framing spec's "Linux: directly on the dev machine" (see
 
 | | macOS (Apple Silicon) | Ubuntu 24.04 |
 |---|---|---|
-| Lima ≥ 2.0 | `brew install lima` | release archive from GitHub into `/usr/local`, plus `qemu-system-x86`, `qemu-utils`, and the user in group `kvm` (`/dev/kvm` must exist) |
+| Lima ≥ 2.1.2 (the first with an Ubuntu 26.04 base template) | `brew install lima` | release archive from GitHub into `/usr/local`, plus `qemu-system-x86`, `qemu-utils`, and the user in group `kvm` (`/dev/kvm` must exist) |
 | ansible-core ≥ 2.20 | `brew install ansible` | `pipx install ansible-core` (24.04's apt ships 2.16) |
 | herdr | `brew install herdr` | release binary |
 | git, an SSH key GitHub accepts, loaded in the agent that ssh uses by default | — | — |
@@ -95,7 +95,7 @@ command are checked by the implementer at writing time.
 ### Lima template: `ansible/lima/forge.yaml`
 
 ```yaml
-minimumLimaVersion: 2.0.0
+minimumLimaVersion: 2.1.2
 base:
 - template:_images/ubuntu-26.04
 plain: true
@@ -275,7 +275,7 @@ A third target for the existing script, next to the default (a VM on an
 LXD/Incus host) and `--host`. Run on a Mac or on an Ubuntu machine with KVM.
 
 1. **Preconditions:**
-   - `limactl` ≥ 2.0 is present;
+   - `limactl` ≥ 2.1.2 is present;
    - on Linux, `/dev/kvm` is writable;
    - the usual Ansible checks apply.
 2. **VM.** A throwaway VM, `forge-host-test-<random>`, from

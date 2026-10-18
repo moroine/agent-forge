@@ -23,7 +23,7 @@ check() {  # check <description> <command...>
 }
 has_line() { grep -qxF -- "$2" "$1"; }      # exact whole line
 
-for line in 'minimumLimaVersion: 2.0.0' '  - template:_images/ubuntu-26.04' 'plain: true' \
+for line in 'minimumLimaVersion: 2.1.2' '  - template:_images/ubuntu-26.04' 'plain: true' \
   'cpus: 4' 'memory: 6GiB' 'disk: 60GiB' '  localPort: 60022' '  overVsock: false'; do
   check "template line [$line]" has_line "$TEMPLATE" "$line"
 done

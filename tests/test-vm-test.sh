@@ -59,6 +59,19 @@ else
   echo "FAIL (lima-missing): exit=$code, expected nonzero and [--lima needs limactl]; output: $out"
 fi
 
+# Lima before 2.1.2 has no Ubuntu 26.04 base template: refused up front.
+mkdir -p "$TMP/oldlima"
+printf '#!/bin/sh\necho "limactl version 2.1.1"\n' > "$TMP/oldlima/limactl"
+chmod +x "$TMP/oldlima/limactl"
+code=0
+out="$(PATH="$TMP/oldlima:/usr/bin:/bin" "$SCRIPT" --lima 2>&1)" || code=$?
+if [ "$code" -ne 0 ] && printf '%s' "$out" | grep -qF -- '--lima needs Lima 2.1.2 or newer'; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL (lima-too-old): exit=$code, expected nonzero and [--lima needs Lima 2.1.2 or newer]; output: $out"
+fi
+
 # Options that take a value fail loudly when it is missing.
 expect exposure-last nonzero '--exposure needs a value' -- --exposure
 expect exposure-bad nonzero '--exposure must be public, lan or local' -- --exposure nope

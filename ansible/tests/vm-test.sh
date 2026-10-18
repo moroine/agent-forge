@@ -104,10 +104,14 @@ fi
 # The Lima checks come first: a machine without Lima gets this message even
 # when Ansible is missing too.
 if [ "$LIMA" -eq 1 ]; then
-  command -v limactl >/dev/null 2>&1 || die "--lima needs limactl (Lima 2.0 or newer)"
-  lima_major="$(limactl --version | sed -nE 's/.* ([0-9]+)\.[0-9]+.*/\1/p')"
-  if [ -z "$lima_major" ] || [ "$lima_major" -lt 2 ]; then
-    die "--lima needs Lima 2.0 or newer ($(limactl --version))"
+  command -v limactl >/dev/null 2>&1 || die "--lima needs limactl (Lima 2.1.2 or newer)"
+  # Lima ships the ubuntu-26.04 base template (ansible/lima/forge.yaml) from
+  # 2.1.2 on; older versions fail at create with an unclear message.
+  read -r lima_major lima_minor lima_patch <<<"$(limactl --version \
+    | sed -nE 's/.* ([0-9]+)\.([0-9]+)\.([0-9]+).*/\1 \2 \3/p')"
+  if [ -z "$lima_patch" ] \
+    || [ $((lima_major * 1000000 + lima_minor * 1000 + lima_patch)) -lt 2001002 ]; then
+    die "--lima needs Lima 2.1.2 or newer ($(limactl --version))"
   fi
   command -v python3 >/dev/null 2>&1 || die "--lima needs python3 (it picks the VM's SSH port)"
   if [ "$(uname -s)" = "Linux" ] && [ ! -w /dev/kvm ]; then

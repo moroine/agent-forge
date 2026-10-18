@@ -16,7 +16,7 @@ in the repository.
 **Tech Stack:**
 - Ansible (ansible-core ≥ 2.20, devsec.hardening 11.0.0);
 - bash (`set -e`);
-- Lima ≥ 2.0 (vz on macOS, QEMU on Linux);
+- Lima ≥ 2.1.2 (vz on macOS, QEMU on Linux; the first with an Ubuntu 26.04 base template);
 - TypeScript run by Node 24 (`node --test`);
 - Markdown.
 
@@ -53,7 +53,7 @@ in the repository.
   `127.0.0.1:<port>` to the guest's 22. `vm-test.sh` keeps its test-only 2222
   for its default and `--host` targets.
 - **Lima template values, exact:**
-  - `minimumLimaVersion: 2.0.0`;
+  - `minimumLimaVersion: 2.1.2`;
   - `base: [template:_images/ubuntu-26.04]`;
   - `plain: true`;
   - `cpus: 4`, `memory: 6GiB`, `disk: 60GiB`;
@@ -250,7 +250,7 @@ git commit --no-gpg-sign -m "fix(base): l'hôte garde ses clés SSH quand cloud-
   same `PASS`/`FAIL` counter style as `tests/test-readme-docs.sh`.
   - **The template** (`ansible/lima/forge.yaml`) contains each of these
     exact lines:
-    - `minimumLimaVersion: 2.0.0`
+    - `minimumLimaVersion: 2.1.2`
     - `- template:_images/ubuntu-26.04`
     - `plain: true`
     - `cpus: 4`
@@ -363,7 +363,7 @@ Behaviour to add, following the spec's "`vm-test.sh --lima`":
     the default.
 - **Preconditions (Lima):**
   - `limactl` is on PATH, or die with
-    `vm-test: --lima needs limactl (Lima 2.0 or newer)`;
+    `vm-test: --lima needs limactl (Lima 2.1.2 or newer)`;
   - the version from `limactl --version` is at least 2.0;
   - on Linux (`uname -s` = `Linux`), `/dev/kvm` is writable, or die with
     `vm-test: /dev/kvm is not writable: add yourself to the kvm group`.
@@ -527,7 +527,7 @@ git commit --no-gpg-sign -m "feat(setup): avertir quand forge tourne sur une mac
   - **"VM test",** a third subsection, "On a Lima VM (`--lima`)":
     - the command;
     - what it creates and deletes;
-    - the requirements: Lima ≥ 2.0, and `/dev/kvm` plus the `kvm` group on
+    - the requirements: Lima ≥ 2.1.2, and `/dev/kvm` plus the `kvm` group on
       Linux;
     - that it uses an automatic port and never touches `forge-local`.
   - **"Hardening choices":**
