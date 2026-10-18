@@ -3,7 +3,8 @@
 import { test, before, after } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { renderBlock } from "../../cli/lib/herdr-config.ts";
 import { createContext } from "../../cli/lib/context.ts";
 import {
   createWorkspace, listWorkspaces, createTab, listPanes, paneRun, paneForeground, classifyPane,
@@ -39,6 +40,14 @@ after(() => {
   if (skip || !home) return;
   spawnSync("herdr", ["server", "stop"], { env, stdio: "ignore" });
   rmSync(home, { recursive: true, force: true });
+});
+
+test("herdr accepts the config block forge setup writes", { skip }, () => {
+  const file = `${home}/block.toml`;
+  writeFileSync(file, renderBlock("/usr/local/bin/forge"));
+  const r = spawnSync("herdr", ["config", "check"], { env: { ...process.env, HERDR_CONFIG_PATH: file }, encoding: "utf8" });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /config: ok/);
 });
 
 test("workspace, tab, pane and process classification against real herdr", { skip }, async () => {

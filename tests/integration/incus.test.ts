@@ -35,10 +35,12 @@ const RESTRICTED = "forge-selftest-restricted";
 const SLOTS: Record<string, string> = { [PROJECT]: "1", [RESTRICTED]: "2" };
 
 // A throwaway XDG_CONFIG_HOME: the user's allowlist and config are never
-// touched (the config is copied in, see throwawayXdg).
+// touched (the config is copied in, see throwawayXdg). The herdr config block
+// goes to a throwaway file, never the real config.
 let xdg = "";
-const forge = (project: string, args: string[]) =>
-  forgeIn(project, args, { FORGE_PROXY_SLOT: SLOTS[project], XDG_CONFIG_HOME: xdg });
+const forge = (project: string, args: string[]) => forgeIn(project, args, {
+  FORGE_PROXY_SLOT: SLOTS[project], XDG_CONFIG_HOME: xdg, HERDR_CONFIG_PATH: join(workspaces, "herdr.toml"),
+});
 
 
 let workspaces = "";
@@ -73,9 +75,10 @@ test("forge setup converges, then reports only unchanged", { skip: !ENABLED }, (
   assert.equal(idmap.stdout.trim(), `uid ${process.getuid!()} 1001\ngid ${process.getgid!()} 1001`, raw("raw.idmap", idmap));
   const second = must("second forge setup", forge(PROJECT, ["setup"]));
   const lines = second.stdout.trim().split("\n");
-  // Every line is "<object>: unchanged", or the allowlist's entry count (its
-  // size depends on the list, which is not an object that changes).
-  assert.ok(lines.length >= 4, raw("second setup", second));
+  // Every line is "<object>: unchanged" (the herdr config's included), or the
+  // allowlist's entry count (its size depends on the list, which is not an
+  // object that changes).
+  assert.ok(lines.length >= 5, raw("second setup", second));
   for (const line of lines) assert.match(line, /(: unchanged|^allowlist: \d+ entries)$/, raw("second setup", second));
 });
 

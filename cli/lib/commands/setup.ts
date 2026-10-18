@@ -7,6 +7,7 @@ import { loadConfig } from "../config.ts";
 import { converge, ensureProject, type Outcome } from "../converge.ts";
 import { loadAllowlist } from "../allowlist.ts";
 import { ForgeError } from "../context.ts";
+import { ensureHerdrConfig } from "../herdr-config.ts";
 import {
   checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, gateOverrideWarning, strictGateOverridden, strictModeSupported, type ProcPaths,
 } from "../host.ts";
@@ -123,5 +124,6 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
     ctx.err(`WARNING: host address ${address} is outside the ranges ${ACL} rejects: containers can reach host ` +
       `services listening on it, unless a host firewall drops traffic from ${BRIDGE}.`);
   }
+  await ensureHerdrConfig(ctx);
   return 0;
 }

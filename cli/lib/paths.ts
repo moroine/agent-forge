@@ -42,6 +42,14 @@ function configDir(): string {
   return join(base, "agent-forge");
 }
 
+// La config herdr de l'utilisateur forge : HERDR_CONFIG_PATH, sinon
+// $XDG_CONFIG_HOME/herdr/config.toml (herdr 0.9.5 honore XDG_CONFIG_HOME),
+// sinon <home forge>/.config/herdr/config.toml. Une valeur vide compte comme absente.
+export function herdrConfigPath(): string {
+  return process.env.HERDR_CONFIG_PATH ||
+    join(process.env.XDG_CONFIG_HOME || join(forgeHome(), ".config"), "herdr", "config.toml");
+}
+
 // Données de forge (miroirs git). Un XDG_DATA_HOME vide compte comme absent.
 function dataDir(): string {
   const base = process.env.XDG_DATA_HOME || join(forgeHome(), ".local", "share");
