@@ -1,0 +1,29 @@
+---
+# Example inventory for ansible/site.yml against the local Lima VM created from
+# ansible/lima/forge.yaml. Copy it outside the repository, replace YOUR_LOGIN
+# and the key, then run:
+#   ansible-playbook -i ~/forge-local-inventory.yml ansible/site.yml
+all:
+  hosts:
+    forge-local:
+      ansible_host: 127.0.0.1
+      # ssh.localPort in ansible/lima/forge.yaml: Lima forwards it to the VM's
+      # port 22, where sshd stays (forge_ssh_port keeps its default, 22).
+      ansible_port: 60022
+      # The admin is Lima's own user: your login name on this machine
+      # (`whoami`), with passwordless sudo. Lima's key opens it.
+      ansible_user: YOUR_LOGIN
+      ansible_ssh_private_key_file: ~/.lima/_config/user
+      # HostKeyAlias keeps the VM's host key apart from other 127.0.0.1
+      # entries in ~/.ssh/known_hosts; the key is trusted on first use.
+      ansible_ssh_common_args: -o IdentitiesOnly=yes -o HostKeyAlias=forge-local-admin -o StrictHostKeyChecking=accept-new
+  vars:
+    # local: no fail2ban (every connection comes from Lima's gateway).
+    forge_exposure: local
+    # Exactly one user. Its name must differ from ansible_user, which is
+    # already your login. ssh_keys is authoritative: put the public key you
+    # use for GitHub (`ssh-add -L`).
+    forge_users:
+      - name: forge
+        ssh_keys:
+          - "ssh-ed25519 AAAA... you@laptop"

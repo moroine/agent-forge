@@ -1,0 +1,35 @@
+---
+# Lima template for agent-forge's local mode: an Ubuntu 26.04 VM that
+# ansible/site.yml provisions with forge_exposure: local, then used like a
+# remote host (herdr --remote forge-local). See the README, "Quick start: local".
+#
+#   limactl create --name forge-local ansible/lima/forge.yaml
+#   limactl start forge-local
+#
+# Lima picks vz on macOS and QEMU on Linux, and the VM's architecture follows
+# the machine's (arm64 on Apple Silicon, amd64 on most Linux machines).
+minimumLimaVersion: 2.0.0
+base:
+  - template:_images/ubuntu-26.04
+
+# Plain mode: no shared folder (Lima would mount your home read-only), no
+# automatic port forwarding besides SSH, no containerd, no guest agent. An
+# agent that escapes its container finds nothing of your machine in the VM.
+plain: true
+
+# Validated on a 16 GiB Mac. The disk is sparse: it grows with use (about
+# 11 GiB after the first image build). Change these later with
+# `limactl edit forge-local --cpus 6 --memory 10` while the VM is stopped.
+cpus: 4
+memory: 6GiB
+disk: 60GiB
+
+ssh:
+  # Fixed, so that the inventory example and the ~/.ssh/config block can be
+  # copied as they are. If the port is taken, pick another one and change it
+  # in all three places.
+  localPort: 60022
+  # vz defaults to SSH over vsock: sshd then sees no client address, and the
+  # playbook's preflight cannot tell which interface SSH arrives on. Over the
+  # forwarded TCP port, SSH arrives on eth0, as with QEMU on Linux.
+  overVsock: false
