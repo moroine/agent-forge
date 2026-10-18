@@ -6,7 +6,7 @@ import type { Context } from "./context.ts";
 import { ForgeError, mustSucceed } from "./context.ts";
 import type { Outcome } from "./converge.ts";
 import {
-  configSet, configUnset, deleteInstance, execArgv, incus, listInstances, pullText, pushText,
+  configSet, configUnset, deleteInstance, execArgv, forgeProject, incus, listInstances, pullText, pushText,
   startInstance, waitReady,
 } from "./incus.ts";
 import type { ProxyPlan } from "./ipv4.ts";
@@ -81,14 +81,35 @@ export function allowlistText(entries: string[]): string {
 
 const sleep = (ms: number) => new Promise((res) => setTimeout(res, ms));
 
-type AptOpts = { aptAttempts?: number; aptDelayMs?: number };
+// aptAttempts/aptDelayMs: the first apt-get update's retry budget; waitDelayMs:
+// the pause between two probes of squid's port (tests set the delays to 0).
+type ProxyOpts = { aptAttempts?: number; aptDelayMs?: number; waitDelayMs?: number };
+
+const WAIT_ATTEMPTS = 30;
+
+// squid refuses connections for a few seconds after a start, a restart or a
+// reconfigure. Waits until it accepts TCP on its own address again, probed
+// from inside the proxy (address and port as argv, never in the script). A
+// squid that never answers is fatal: the caller records the loaded-config
+// hash only after this, so the next run retries.
+async function waitListening(ctx: Context, plan: ProxyPlan, after: string, opts: ProxyOpts): Promise<void> {
+  const delayMs = opts.waitDelayMs ?? 1000;
+  const probe = ["timeout", "2", "bash", "-c", '< "/dev/tcp/$0/$1"', plan.proxyAddress, String(PROXY_PORT)];
+  for (let i = 1; i <= WAIT_ATTEMPTS; i++) {
+    if ((await execArgv(ctx, PROXY_INSTANCE, probe)).code === 0) return;
+    if (i < WAIT_ATTEMPTS) await sleep(delayMs);
+  }
+  throw new ForgeError(`squid did not come back on ${plan.proxyAddress}:${PROXY_PORT} after ${after} ` +
+    `(${WAIT_ATTEMPTS} attempts). Run forge setup again; if it persists, inspect it: ` +
+    `incus --project ${forgeProject()} exec ${PROXY_INSTANCE} -- journalctl -u squid`);
+}
 
 async function apt(ctx: Context, step: string, argv: string[]) {
   return mustSucceed(step, execArgv(ctx, PROXY_INSTANCE, ["apt-get", ...argv], { DEBIAN_FRONTEND: "noninteractive" }));
 }
 
 // The network of a fresh container comes up after the first exec answers.
-async function aptUpdate(ctx: Context, opts: AptOpts): Promise<void> {
+async function aptUpdate(ctx: Context, opts: ProxyOpts): Promise<void> {
   const attempts = opts.aptAttempts ?? 10;
   const delayMs = opts.aptDelayMs ?? 6000;
   for (let i = 1; i < attempts; i++) {
@@ -114,7 +135,7 @@ async function pushConfig(ctx: Context, conf: string, allowlist: string, unsetLo
   await mustSucceed("squid -k parse", execArgv(ctx, PROXY_INSTANCE, ["squid", "-k", "parse"]));
 }
 
-async function create(ctx: Context, plan: ProxyPlan, conf: string, allowlist: string, opts: AptOpts): Promise<void> {
+async function create(ctx: Context, plan: ProxyPlan, conf: string, allowlist: string, opts: ProxyOpts): Promise<void> {
   await mustSucceed("launch forge-proxy", ctx.exec(incus(
     "launch", PROXY_SOURCE_IMAGE, PROXY_INSTANCE, "--profile", PROXY_PROFILE,
     "-d", `eth0,ipv4.address=${plan.proxyAddress}`)));
@@ -128,6 +149,7 @@ async function create(ctx: Context, plan: ProxyPlan, conf: string, allowlist: st
     await pushConfig(ctx, conf, allowlist, false);
     await mustSucceed("enable squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "enable", "squid"]));
     await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
+    await waitListening(ctx, plan, "systemctl restart squid", opts);
     await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, configHash(conf, allowlist)));
     // Last step: its absence marks an incomplete instance.
     await mustSucceed("stamp forge-proxy", configSet(ctx, PROXY_INSTANCE, RECIPE_KEY, String(PROXY_RECIPE)));
@@ -144,7 +166,7 @@ const sameNic = (a: Record<string, string> = {}, b: Record<string, string>) => {
 
 // `nic` is the desired full eth0 of the proxy; any difference recreates it.
 export async function convergeProxy(
-  ctx: Context, args: { plan: ProxyPlan; entries: string[]; nic: Record<string, string> }, opts: AptOpts = {},
+  ctx: Context, args: { plan: ProxyPlan; entries: string[]; nic: Record<string, string> }, opts: ProxyOpts = {},
 ): Promise<{ outcome: Outcome; previousAddress: string | null }> {
   const { plan, entries, nic } = args;
   const conf = squidConfig(plan, { hasEntries: entries.length > 0 });
@@ -180,10 +202,12 @@ export async function convergeProxy(
     await pushConfig(ctx, conf, allowlist, inst.config[CONFIG_KEY] !== undefined);
     const action = active ? ["squid", "-k", "reconfigure"] : ["systemctl", "restart", "squid"];
     await mustSucceed(action.join(" "), execArgv(ctx, PROXY_INSTANCE, action));
+    await waitListening(ctx, plan, action.join(" "), opts);
     await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, hash));
     changed = true;
   } else if (!active) {
     await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
+    await waitListening(ctx, plan, "systemctl restart squid", opts);
     changed = true;
   }
   return { outcome: changed ? "updated" : "unchanged", previousAddress: null };
