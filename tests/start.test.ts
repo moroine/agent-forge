@@ -252,8 +252,12 @@ test("start applies the strict settings after starting and before attaching", as
 
 test("start of a container marked strict whose eth0 lost the filter is refused before any start", async () => {
   const fake = egressFake({ mode: "strict" });
-  // Surcharge eth0 retirée à la main : la NIC du profil (ici vide) s'applique.
-  fake.instances.get("agent-forge")!.get("agent-o-r")!.devices = {};
+  // Surcharge eth0 retirée à la main : la NIC ouverte du profil s'applique.
+  fake.addProfile("agent-forge", "agent-forge", { devices: { eth0: { ...STRICT_NIC, "security.acls": "forge-egress",
+    "security.acls.default.egress.action": "allow" } } });
+  const inst = fake.instances.get("agent-forge")!.get("agent-o-r")!;
+  inst.profiles = ["agent-forge"];
+  inst.devices = {};
   const c = fakeContext({ incus: fake, rules: egressRules });
   await assert.rejects(() => cmdStart(c, "o/r", "t"), /refusing to start agent-o-r: .*user\.forge\.egress=strict.*forge egress o\/r strict/);
   assert.ok(!flatCalls(c).some((x) => / start agent-o-r|file push|tmux/.test(x)), flatCalls(c).join("\n"));

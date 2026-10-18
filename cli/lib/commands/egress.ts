@@ -80,9 +80,12 @@ async function cmdLog(ctx: Context, repo: string | undefined): Promise<number> {
   }
   // The holder of each address: the DHCP leases first (a stopped instance
   // keeps its lease but `incus list` shows it no address), then the current
-  // addresses, which win. An address nobody holds is shown as is.
+  // addresses, which win. An address nobody holds is shown as is, and so is
+  // one whose lease names no host ("*" is dnsmasq's placeholder).
   const holders = new Map<string, string>();
-  for (const l of await listLeases(ctx, BRIDGE)) holders.set(l.address, l.hostname);
+  for (const l of await listLeases(ctx, BRIDGE)) {
+    if (l.hostname !== "" && l.hostname !== "*") holders.set(l.address, l.hostname);
+  }
   for (const i of await listInstances(ctx)) for (const a of i.ipv4) holders.set(a, i.name);
 
   const rows: string[][] = [];
