@@ -4,7 +4,7 @@
 import type { AttachOptions, Context, ExecOptions, ExecResult, Prompt } from "../../cli/lib/context.ts";
 import type { FakeIncus } from "./fake-incus.ts";
 
-// Unit tests never inherit a herdr session from the shell running them.
+// Les tests unitaires n'héritent jamais de la session herdr du shell qui les lance.
 for (const k of ["HERDR_ENV", "HERDR_BIN_PATH", "HERDR_PANE_ID", "HERDR_SOCKET_PATH", "HERDR_CONFIG_PATH"]) {
   delete process.env[k];
 }
