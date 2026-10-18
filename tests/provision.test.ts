@@ -87,6 +87,16 @@ test("it refuses without a host git identity, with the commands to run", async (
   assert.equal(launched(ctx), false);
 });
 
+// Defense in depth: started from inside ~/workspaces/<c>, host git would
+// discover the agent's repository, even for `config --global --includes`.
+test("every host git call of a provisioning runs from /, whatever forge's own cwd", async () => {
+  const { ctx, run } = provision();
+  await run();
+  const hostGit = ctx.calls.flatMap((c, i) => (c[0] === "git" ? [i] : []));
+  assert.ok(hostGit.length >= 3, flat(ctx).join("\n"));
+  for (const i of hostGit) assert.equal(ctx.execOptions[i]?.cwd, "/", ctx.calls[i].join(" "));
+});
+
 test("it names forge setup when the profile is missing", async () => {
   const fake = new FakeIncus();
   fake.addProject("agent-forge");

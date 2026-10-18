@@ -80,6 +80,19 @@ test("refreshMirror fetches heads and tags with the URL on the command line", as
   assert.deepEqual(ctx.execOptions[0]?.env, NOPROMPT);
 });
 
+// Defense in depth: forge started from inside ~/workspaces/<c> must not let
+// host git discover the agent's repository there.
+test("every host git call on the mirror runs from /, whatever forge's own cwd", async () => {
+  rmSync(join(dir, "mirrors"), { recursive: true, force: true });
+  const ctx = fakeContext({ rules: [{ match: "--get remote.origin.url", stdout: "git@github.com:o/r.git\n" }] });
+  await ensureMirror(ctx, mirror, "o/r");
+  mkdirSync(mirror, { recursive: true });
+  await mirrorRepo(ctx, mirror);
+  await refreshMirror(ctx, mirror, "o/r");
+  assert.equal(ctx.calls.length, 3);
+  assert.deepEqual(ctx.execOptions.map((o) => o?.cwd), ["/", "/", "/"]);
+});
+
 test("mirrorRepo returns null without exec when there is no mirror", async () => {
   const ctx = fakeContext();
   assert.equal(await mirrorRepo(ctx, join(dir, "absent.git")), null);

@@ -14,7 +14,7 @@ import {
   configSet, execAsAgent, execAsAgentArgv, forgeProject, imageExists, incus, listObjects, waitReady,
 } from "../incus.ts";
 import {
-  cloneWorkspace, ensureMirror, MIRROR_MOUNT, mirrorRepo, ORIGIN_DEVICE, pointOriginAtMirror,
+  cloneWorkspace, ensureMirror, HOST_GIT_CWD, MIRROR_MOUNT, mirrorRepo, ORIGIN_DEVICE, pointOriginAtMirror,
 } from "../mirror.ts";
 import { PROFILE } from "../objects.ts";
 import { allowlistPath, forgeHome, mirrorPath, repoRoot, workspacesDir } from "../paths.ts";
@@ -183,10 +183,13 @@ export async function provisionContainer(
   return { mirror: mirrorOutcome };
 }
 
-// Sondes : un code non nul veut dire « pas réglé ».
+// Sondes : un code non nul veut dire « pas réglé ». Depuis HOST_GIT_CWD : lancé
+// dans ~/workspaces/<c>, git y découvrirait le dépôt de l'agent (les includeIf
+// de la config globale s'évaluent contre lui).
 async function hostGitIdentity(ctx: Context): Promise<{ name: string; email: string }> {
-  const name = (await ctx.exec(["git", "config", "--global", "--includes", "user.name"])).stdout.trim();
-  const email = (await ctx.exec(["git", "config", "--global", "--includes", "user.email"])).stdout.trim();
+  const opts = { cwd: HOST_GIT_CWD };
+  const name = (await ctx.exec(["git", "config", "--global", "--includes", "user.name"], opts)).stdout.trim();
+  const email = (await ctx.exec(["git", "config", "--global", "--includes", "user.email"], opts)).stdout.trim();
   if (!name || !email) {
     throw new ForgeError(
       "the agent commits under your git identity, which is not set on this host. Run:\n" +

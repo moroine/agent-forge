@@ -39,6 +39,11 @@ test("exec passes extra environment variables", async () => {
   assert.equal(r.stdout, "ok");
 });
 
+test("exec runs in the given working directory", async () => {
+  const r = await createContext().exec(["pwd"], { cwd: "/" });
+  assert.equal(r.stdout, "/\n");
+});
+
 test("exec merges extra variables into the inherited environment", async () => {
   const before = process.env.FORGE_INHERITED;
   process.env.FORGE_INHERITED = "yes";

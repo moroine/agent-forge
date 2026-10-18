@@ -25,8 +25,13 @@ export const GITHUB: GitRemote = {
   protocol: ["-c", "protocol.allow=never", "-c", "protocol.ssh.allow=always"],
 };
 
+// Every host git call runs from "/", not from forge's own working directory:
+// forge started from inside ~/workspaces/<c> would otherwise let git discover
+// the agent's repository there (its .git/config), even for a --global query.
+export const HOST_GIT_CWD = "/";
+
 // Never let git ask a question on a terminal forge does not control.
-const GIT_ENV = { GIT_TERMINAL_PROMPT: "0" };
+const GIT_OPTS = { env: { GIT_TERMINAL_PROMPT: "0" }, cwd: HOST_GIT_CWD };
 
 // Reduces a remote URL to its `owner/repo`, whatever its form:
 // git@github.com:o/r.git, https://github.com/o/r, ssh://git@github.com/o/r.git
@@ -41,7 +46,7 @@ export function remoteRepo(url: string): string {
 // no mirror (no exec at all) or git cannot tell. A probe: never fatal.
 export async function mirrorRepo(ctx: Context, mirror: string): Promise<string | null> {
   if (!existsSync(mirror)) return null;
-  const r = await ctx.exec(["git", `--git-dir=${mirror}`, "config", "--get", "remote.origin.url"], { env: GIT_ENV });
+  const r = await ctx.exec(["git", `--git-dir=${mirror}`, "config", "--get", "remote.origin.url"], GIT_OPTS);
   if (r.code !== 0) return null;
   return remoteRepo(r.stdout) || null;
 }
@@ -61,7 +66,7 @@ export async function ensureMirror(
   }
   mkdirSync(dirname(mirror), { recursive: true });
   const r = await ctx.exec(
-    ["git", ...remote.protocol, "clone", "--bare", remote.url(ownerRepo), mirror], { env: GIT_ENV });
+    ["git", ...remote.protocol, "clone", "--bare", remote.url(ownerRepo), mirror], GIT_OPTS);
   if (r.code !== 0) {
     throw new ForgeError(
       `create mirror failed: ${r.stderr.trim() || `exit code ${r.code}`}\n` +
@@ -81,7 +86,7 @@ export function refreshMirror(
     "git", `--git-dir=${mirror}`, ...remote.protocol,
     "fetch", "--prune", "--no-recurse-submodules", remote.url(ownerRepo),
     "+refs/heads/*:refs/heads/*", "+refs/tags/*:refs/tags/*",
-  ], { env: GIT_ENV });
+  ], GIT_OPTS);
 }
 
 // In the container, as aiuser. LFS smudge is skipped: the mirror holds no
