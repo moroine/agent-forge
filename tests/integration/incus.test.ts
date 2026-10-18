@@ -15,97 +15,24 @@
 // build`); when there is none, they are skipped with a message.
 import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
-import { homedir, networkInterfaces } from "node:os";
-import { join, resolve } from "node:path";
+import { mkdtempSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { homedir, networkInterfaces, tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  ENABLED, PREFIX, SENTINEL, asAgent, copyImage, forge as forgeIn, incus, launch, must, raw, run, teardownProject,
+} from "./lib.ts";
 
-const ENABLED = process.env.FORGE_INTEGRATION === "1";
 const BUILD_IMAGE = process.env.FORGE_INTEGRATION_IMAGE === "1";
 const PROJECT = "forge-selftest";
 const RESTRICTED = "forge-selftest-restricted";
-const PREFIX = "agent-forge-selftest-";
-const SENTINEL = "forge-selftest/throwaway";
-const FORGE = resolve("cli/forge");
+// Distinct proxy slots: each project has its own forge-proxy on the bridge.
+const SLOTS: Record<string, string> = { [PROJECT]: "1", [RESTRICTED]: "2" };
 
-type Run = { status: number | null; stdout: string; stderr: string };
+// A throwaway XDG_CONFIG_HOME: the user's allowlist and config are never touched.
+let xdg = "";
+const forge = (project: string, args: string[]) =>
+  forgeIn(project, args, { FORGE_PROXY_SLOT: SLOTS[project], XDG_CONFIG_HOME: xdg });
 
-function run(cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; input?: string } = {}): Run {
-  const r = spawnSync(cmd, args, { encoding: "utf8", input: opts.input ?? "", env: { ...process.env, ...opts.env } });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? String(r.error ?? "") };
-}
-const incus = (project: string, args: string[], input?: string) => run("incus", ["--project", project, ...args], { input });
-const forge = (project: string, args: string[]) => run(FORGE, args, { env: { FORGE_INCUS_PROJECT: project } });
-const raw = (label: string, r: Run) =>
-  `${label}\n  exit=${r.status}\n  stdout=${JSON.stringify(r.stdout)}\n  stderr=${JSON.stringify(r.stderr)}`;
-function must(label: string, r: Run): Run {
-  assert.equal(r.status, 0, raw(label, r));
-  return r;
-}
-
-// Removes what a previous run (or this one) left in a test project, then the
-// project. Instances: only ours (prefix and sentinel), plus the build
-// instance a failed image build leaves. Images and the profile: the project
-// is a test project, all of it is ours.
-function teardownProject(project: string) {
-  const list = incus(project, ["list", "-f", "json"]);
-  if (list.status !== 0) return;
-  for (const inst of JSON.parse(list.stdout) as { name: string }[]) {
-    const repo = incus(project, ["config", "get", inst.name, "user.forge.repo"]).stdout.trim();
-    if ((inst.name.startsWith(PREFIX) && repo === SENTINEL) || inst.name === "forge-image-build") {
-      incus(project, ["delete", inst.name, "--force"]);
-    } else {
-      console.error(`WARNING: leaving ${inst.name} in ${project} alone (repo=${JSON.stringify(repo)})`);
-    }
-  }
-  const images = incus(project, ["image", "list", "-f", "json"]);
-  if (images.status === 0) {
-    for (const img of JSON.parse(images.stdout) as { fingerprint: string }[]) {
-      incus(project, ["image", "delete", img.fingerprint]);
-    }
-  }
-  incus(project, ["profile", "delete", "agent-forge"]);
-  const removed = run("incus", ["project", "delete", project]);
-  if (removed.status !== 0) console.error(raw(`WARNING: project ${project} not deleted — inspect it`, removed));
-}
-
-function launch(project: string, name: string) {
-  must(`launch ${name}`, incus(project, ["launch", "agent-base", name, "--profile", "agent-forge", "-c", `user.forge.repo=${SENTINEL}`]));
-  waitReady(project, name);
-}
-
-// Right after `incus launch`, systemctl answers nothing (systemd's bus is not
-// up yet) or "offline" (systemd is not PID 1 yet) before it reports a real
-// state: retry on both (as forge's waitReady), fail on any other state.
-function waitReady(project: string, name: string) {
-  let last: Run = { status: null, stdout: "", stderr: "" };
-  for (let i = 0; i < 60; i++) {
-    last = incus(project, ["exec", name, "--", "systemctl", "is-system-running", "--wait"]);
-    const state = last.stdout.trim();
-    if (state === "running" || state === "degraded") return;
-    if (state !== "" && state !== "offline") assert.fail(raw(`${name} is ${state}`, last));
-    spawnSync("sleep", ["1"]);
-  }
-  assert.fail(raw(`${name} never became ready`, last));
-}
-// Copies agent-base from one project of this server to another.
-// `incus image copy` between two projects of one server needs the server to
-// listen on the network (pull) or a client temp dir as big as the image
-// (relay, in a small tmpfs /tmp): export and import through the disk instead.
-function copyImage(from: string, to: string): Run {
-  const dir = mkdtempSync(join(homedir(), "forge-selftest-img-"));
-  try {
-    const exported = incus(from, ["image", "export", "agent-base", dir]);
-    if (exported.status !== 0) return exported;
-    const file = readdirSync(dir).find((f) => f.endsWith(".tar.gz") || f.endsWith(".tar.xz") || f.endsWith(".tar.zst"));
-    if (!file) return { status: 1, stdout: "", stderr: `no exported image file in ${dir}: ${readdirSync(dir).join(", ")}` };
-    return incus(to, ["image", "import", join(dir, file), "--alias", "agent-base"]);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-const asAgent = (project: string, name: string, cmd: string) =>
-  incus(project, ["exec", name, "--", "su", "-", "aiuser", "-c", cmd]);
 
 let workspaces = "";
 let haveImage = false;
@@ -120,6 +47,7 @@ before((t) => {
   // In the home: the restricted project's restricted.devices.disk.paths names
   // this directory.
   workspaces = mkdtempSync(join(homedir(), "forge-selftest-ws-"));
+  xdg = mkdtempSync(join(tmpdir(), "forge-selftest-xdg-"));
 });
 
 after(() => {
@@ -127,6 +55,7 @@ after(() => {
   teardownProject(PROJECT);
   teardownProject(RESTRICTED);
   if (workspaces) rmSync(workspaces, { recursive: true, force: true });
+  if (xdg) rmSync(xdg, { recursive: true, force: true });
 });
 
 test("forge setup converges, then reports only unchanged", { skip: !ENABLED }, () => {
@@ -137,8 +66,10 @@ test("forge setup converges, then reports only unchanged", { skip: !ENABLED }, (
   assert.equal(idmap.stdout.trim(), `uid ${process.getuid!()} 1001\ngid ${process.getgid!()} 1001`, raw("raw.idmap", idmap));
   const second = must("second forge setup", forge(PROJECT, ["setup"]));
   const lines = second.stdout.trim().split("\n");
-  assert.equal(lines.length, 4, raw("second setup", second));
-  for (const line of lines) assert.match(line, /: unchanged$/, raw("second setup", second));
+  // Every line is "<object>: unchanged", or the allowlist's entry count (its
+  // size depends on the list, which is not an object that changes).
+  assert.ok(lines.length >= 4, raw("second setup", second));
+  for (const line of lines) assert.match(line, /(: unchanged|^allowlist: \d+ entries)$/, raw("second setup", second));
 });
 
 test("agent-base is available in the test project", { skip: !ENABLED }, () => {
