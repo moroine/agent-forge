@@ -182,7 +182,11 @@ export class FakeIncus {
       case "info": return this.instances.get(p)!.has(rest[0]) ? ok(`Name: ${rest[0]}\n`) : fail("Instance not found");
       case "launch": return this.launch(p, rest);
       case "start": return this.setStatus(p, rest[0], "Running");
-      case "restart": return this.setStatus(p, rest[0], "Running");
+      case "restart": {
+        // Real Incus refuses to restart a stopped instance.
+        if (this.instances.get(p)!.get(rest[0])?.status === "Stopped") return fail("The instance is already stopped");
+        return this.setStatus(p, rest[0], "Running");
+      }
       case "stop": return this.setStatus(p, rest[0], "Stopped");
       case "delete": return this.deleteInstance(p, rest);
       case "config": return this.config(p, rest);

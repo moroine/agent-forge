@@ -197,6 +197,10 @@ test("restart keeps a running instance running and fails on a missing one", () =
   assert.equal(fake.run([...P, "restart", "c1"]).code, 0);
   assert.equal(fake.instances.get("agent-forge")!.get("c1")!.status, "Running");
   assert.equal(fake.run([...P, "restart", "nope"]).code, 1);
+  fake.run([...P, "stop", "c1"]);
+  const r = fake.run([...P, "restart", "c1"]);
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /already stopped/);
   assert.match(new FakeIncus().run(["restart", "c1"]).stderr, /--project is required/);
 });
 

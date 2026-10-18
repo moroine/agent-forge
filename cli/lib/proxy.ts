@@ -1,12 +1,13 @@
 // The forge-proxy container: squid configuration (pure) and the instance
 // lifecycle. This is the choke point of strict egress mode, so every failure
 // stops `forge setup`; a broken proxy only denies, it never opens anything.
+import { createHash } from "node:crypto";
 import type { Context } from "./context.ts";
 import { ForgeError, mustSucceed } from "./context.ts";
 import type { Outcome } from "./converge.ts";
 import {
-  configSet, deleteInstance, deviceSet, execArgv, incus, listInstances, pullText, pushText,
-  restartInstance, startInstance, waitReady,
+  configSet, configUnset, deleteInstance, execArgv, incus, listInstances, pullText, pushText,
+  startInstance, waitReady,
 } from "./incus.ts";
 import type { ProxyPlan } from "./ipv4.ts";
 import { PROXY_INSTANCE, PROXY_PORT, PROXY_PROFILE } from "./objects.ts";
@@ -20,7 +21,13 @@ export const SQUID_ALLOWLIST = "/etc/squid/allowlist";
 export const SQUID_ACCESS_LOG = "/var/log/squid/access.log";
 
 const RECIPE_KEY = "user.forge.proxy_recipe";
+// Hash of the configuration squid actually loaded: unset before the files are
+// pushed, set once squid runs them, so a failed parse or reload is retried.
+const CONFIG_KEY = "user.forge.proxy_config";
 const AUTO_UPGRADES = "/etc/apt/apt.conf.d/20auto-upgrades";
+// Keep forge's conffile when the squid package ships a new one.
+const KEEP_CONFFILES = "/etc/apt/apt.conf.d/50agent-forge-keep-conffiles";
+const KEEP_CONFFILES_TEXT = 'Dpkg::Options {\n  "--force-confdef";\n  "--force-confold";\n};\n';
 const AUTO_UPGRADES_TEXT = 'APT::Periodic::Update-Package-Lists "1";\nAPT::Periodic::Unattended-Upgrade "1";\n';
 
 // Destinations an allowlisted name must never reach (DNS rebinding towards the
@@ -28,7 +35,7 @@ const AUTO_UPGRADES_TEXT = 'APT::Periodic::Update-Package-Lists "1";\nAPT::Perio
 // repeats this at the network layer.
 const PRIVATE_DESTINATIONS = [
   "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10", "169.254.0.0/16", "127.0.0.0/8",
-  "0.0.0.0/8", "224.0.0.0/4", "::1", "fc00::/7", "fe80::/10",
+  "0.0.0.0/8", "224.0.0.0/4", "::1", "::/128", "fc00::/7", "fe80::/10", "ff00::/8",
 ];
 
 export function squidConfig(plan: ProxyPlan, opts: { hasEntries: boolean }): string {
@@ -45,6 +52,7 @@ export function squidConfig(plan: ProxyPlan, opts: { hasEntries: boolean }): str
     `acl agents src ${plan.subnet}`,
     "acl SSL_ports port 443",
     "acl Safe_ports port 80 443",
+    "acl ftp proto FTP",
     // -n: never reverse-resolve an IP literal, or a PTR record could match an allowed suffix.
     "acl iplit dstdom_regex -n ^[0-9.]+$ ^\\[?[0-9a-fA-F]*:[0-9a-fA-F:.]*\\]?$",
     `acl privdst dst ${PRIVATE_DESTINATIONS.join(" ")}`,
@@ -55,6 +63,7 @@ export function squidConfig(plan: ProxyPlan, opts: { hasEntries: boolean }): str
     "",
     "http_access deny !Safe_ports",
     "http_access deny CONNECT !SSL_ports",
+    "http_access deny ftp",
     "http_access deny iplit",
     "http_access deny privdst",
   );
@@ -87,9 +96,14 @@ async function aptUpdate(ctx: Context, opts: AptOpts): Promise<void> {
   await apt(ctx, "apt-get update in forge-proxy", ["update"]);
 }
 
+const configHash = (conf: string, allowlist: string) =>
+  createHash("sha256").update(`${conf}\0${allowlist}`).digest("hex");
+
 // Pushes both files, then `squid -k parse`: a failure stops with squid's own
-// message and leaves the running configuration untouched.
+// message and leaves the running configuration untouched. The loaded-config
+// key is unset first, so a failure after this point is retried next run.
 async function pushConfig(ctx: Context, conf: string, allowlist: string): Promise<void> {
+  await mustSucceed("unset proxy_config", configUnset(ctx, PROXY_INSTANCE, CONFIG_KEY));
   const owner = { uid: 0, gid: 0, mode: "644" };
   await mustSucceed(`push ${SQUID_CONF}`, pushText(ctx, PROXY_INSTANCE, SQUID_CONF, conf, owner));
   await mustSucceed(`push ${SQUID_ALLOWLIST}`, pushText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST, allowlist, owner));
@@ -97,71 +111,76 @@ async function pushConfig(ctx: Context, conf: string, allowlist: string): Promis
 }
 
 async function create(ctx: Context, plan: ProxyPlan, conf: string, allowlist: string, opts: AptOpts): Promise<void> {
+  await mustSucceed("launch forge-proxy", ctx.exec(incus(
+    "launch", PROXY_SOURCE_IMAGE, PROXY_INSTANCE, "--profile", PROXY_PROFILE,
+    "-d", `eth0,ipv4.address=${plan.proxyAddress}`)));
   try {
-    await mustSucceed("launch forge-proxy", ctx.exec(incus(
-      "launch", PROXY_SOURCE_IMAGE, PROXY_INSTANCE, "--profile", PROXY_PROFILE,
-      "-d", `eth0,ipv4.address=${plan.proxyAddress}`)));
     await waitReady(ctx, PROXY_INSTANCE);
     await aptUpdate(ctx, opts);
     await apt(ctx, "apt-get install in forge-proxy", ["install", "-y", "squid", "unattended-upgrades"]);
-    await mustSucceed(`push ${AUTO_UPGRADES}`,
-      pushText(ctx, PROXY_INSTANCE, AUTO_UPGRADES, AUTO_UPGRADES_TEXT, { uid: 0, gid: 0, mode: "644" }));
+    const owner = { uid: 0, gid: 0, mode: "644" };
+    await mustSucceed(`push ${AUTO_UPGRADES}`, pushText(ctx, PROXY_INSTANCE, AUTO_UPGRADES, AUTO_UPGRADES_TEXT, owner));
+    await mustSucceed(`push ${KEEP_CONFFILES}`, pushText(ctx, PROXY_INSTANCE, KEEP_CONFFILES, KEEP_CONFFILES_TEXT, owner));
     await pushConfig(ctx, conf, allowlist);
     await mustSucceed("enable squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "enable", "squid"]));
     await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
+    await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, configHash(conf, allowlist)));
     // Last step: its absence marks an incomplete instance.
     await mustSucceed("stamp forge-proxy", configSet(ctx, PROXY_INSTANCE, RECIPE_KEY, String(PROXY_RECIPE)));
   } catch (e) {
-    const msg = e instanceof Error ? e.message : String(e);
-    throw new ForgeError(`${msg}\nThe incomplete ${PROXY_INSTANCE} instance is left in place for debugging; the next forge setup replaces it.`);
+    if (!(e instanceof ForgeError)) throw e;
+    throw new ForgeError(`${e.message}\nThe incomplete ${PROXY_INSTANCE} instance is left in place for debugging; the next forge setup replaces it.`);
   }
 }
 
+const sameNic = (a: Record<string, string> = {}, b: Record<string, string>) => {
+  const ka = Object.keys(a);
+  return ka.length === Object.keys(b).length && ka.every((k) => a[k] === b[k]);
+};
+
+// `nic` is the desired full eth0 of the proxy; any difference recreates it.
 export async function convergeProxy(
-  ctx: Context, args: { plan: ProxyPlan; entries: string[] }, opts: AptOpts = {},
+  ctx: Context, args: { plan: ProxyPlan; entries: string[]; nic: Record<string, string> }, opts: AptOpts = {},
 ): Promise<{ outcome: Outcome; previousAddress: string | null }> {
-  const { plan, entries } = args;
+  const { plan, entries, nic } = args;
   const conf = squidConfig(plan, { hasEntries: entries.length > 0 });
   const allowlist = allowlistText(entries);
+  const hash = configHash(conf, allowlist);
 
   const inst = (await listInstances(ctx)).find((i) => i.name === PROXY_INSTANCE);
   const recipe = inst?.config[RECIPE_KEY];
-  if (!inst || recipe !== String(PROXY_RECIPE)) {
-    if (inst) await mustSucceed(`delete ${PROXY_INSTANCE}`, deleteInstance(ctx, PROXY_INSTANCE));
+  if (!inst || recipe !== String(PROXY_RECIPE) || !sameNic(inst.expandedDevices.eth0, nic)) {
+    let previousAddress: string | null = null;
+    if (inst) {
+      const old = inst.expandedDevices.eth0?.["ipv4.address"];
+      if (old !== undefined && old !== plan.proxyAddress) previousAddress = old;
+      await mustSucceed(`delete ${PROXY_INSTANCE}`, deleteInstance(ctx, PROXY_INSTANCE));
+    }
     await create(ctx, plan, conf, allowlist, opts);
-    return { outcome: inst && recipe !== undefined ? "updated" : "created", previousAddress: null };
+    return { outcome: inst && recipe !== undefined ? "updated" : "created", previousAddress };
   }
 
   let changed = false;
-  let previousAddress: string | null = null;
-  let restarted = false;
-
-  const current = inst.expandedDevices.eth0?.["ipv4.address"];
-  if (current !== plan.proxyAddress) {
-    await mustSucceed("move forge-proxy address",
-      deviceSet(ctx, PROXY_INSTANCE, "eth0", { "ipv4.address": plan.proxyAddress }));
-    // restart also starts a stopped instance.
-    await mustSucceed("restart forge-proxy", restartInstance(ctx, PROXY_INSTANCE));
-    previousAddress = current ?? null;
-    restarted = true;
-    changed = true;
-  } else if (inst.status !== "Running") {
+  if (inst.status !== "Running") {
     await mustSucceed("start forge-proxy", startInstance(ctx, PROXY_INSTANCE));
-    restarted = true;
+    await waitReady(ctx, PROXY_INSTANCE);
     changed = true;
   }
-  // The config files are pushed through exec/file, which need a running instance.
-  if (restarted) await waitReady(ctx, PROXY_INSTANCE);
+  // Probe: squid may be down although the container runs.
+  const active = (await execArgv(ctx, PROXY_INSTANCE, ["systemctl", "is-active", "--quiet", "squid"])).code === 0;
 
   const same = (await pullText(ctx, PROXY_INSTANCE, SQUID_CONF)) === conf
-    && (await pullText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST)) === allowlist;
+    && (await pullText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST)) === allowlist
+    && inst.config[CONFIG_KEY] === hash;
   if (!same) {
     await pushConfig(ctx, conf, allowlist);
-    // A moved proxy cannot reconfigure onto an address its running squid
-    // never bound: restart it.
-    const action = previousAddress !== null ? ["systemctl", "restart", "squid"] : ["squid", "-k", "reconfigure"];
+    const action = active ? ["squid", "-k", "reconfigure"] : ["systemctl", "restart", "squid"];
     await mustSucceed(action.join(" "), execArgv(ctx, PROXY_INSTANCE, action));
+    await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, hash));
+    changed = true;
+  } else if (!active) {
+    await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
     changed = true;
   }
-  return { outcome: changed ? "updated" : "unchanged", previousAddress };
+  return { outcome: changed ? "updated" : "unchanged", previousAddress: null };
 }
