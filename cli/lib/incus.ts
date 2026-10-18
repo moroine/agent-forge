@@ -334,3 +334,21 @@ export function restartInstance(ctx: Context, name: string): Promise<ExecResult>
 export function execArgv(ctx: Context, name: string, argv: string[], env: Record<string, string> = {}): Promise<ExecResult> {
   return ctx.exec(incus("exec", name, ...Object.entries(env).flatMap(([k, v]) => ["--env", `${k}=${v}`]), "--", ...argv));
 }
+
+// Récupération du travail de l'agent : `git-upload-pack` tourne dans le
+// container en tant qu'aiuser, pas sur l'hôte. --force-noninteractive (forme
+// longue de -T) : pas de pty, stdout porte le protocole git. GIT_PROTOCOL
+// n'est transmis que s'il a la forme `version=N`.
+export function uploadPackArgv(container: string, gitProtocol: string | undefined): string[] {
+  const protocol = gitProtocol !== undefined && /^version=[0-9]$/.test(gitProtocol)
+    ? ["--env", `GIT_PROTOCOL=${gitProtocol}`]
+    : [];
+  return [
+    ...incus("exec", container, "--force-noninteractive"),
+    "--user", "1001", "--group", "1001",
+    "--cwd", "/workspace",
+    "--env", "HOME=/home/aiuser",
+    ...protocol,
+    "--", "git-upload-pack", "/workspace",
+  ];
+}

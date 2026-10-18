@@ -12,6 +12,7 @@ import { cmdDelete } from "./lib/commands/delete.ts";
 import { cmdList } from "./lib/commands/list.ts";
 import { cmdEgress } from "./lib/commands/egress.ts";
 import { cmdImage } from "./lib/commands/image.ts";
+import { cmdUploadPack } from "./lib/commands/upload-pack.ts";
 import { cmdCompletion } from "./lib/commands/completion.ts";
 
 const USAGE = `Usage: forge <command> [args]
@@ -30,6 +31,7 @@ Commands:
                                     Show or switch a stopped container's egress
   egress log [<owner/repo>]         Show the proxy's recent requests (old lines may name the
                                     wrong container: addresses are reused)
+  upload-pack <container> [<path>]  Serve a container's repository to git fetch (see forge start's retrieval hint)
   image build                       Build the agent-base image (Ansible, through Incus)
   completion bash                   Print a bash completion function (eval it in ~/.bashrc)
   completion repos                  List managed owner/repo, one per line (machine-readable)
@@ -52,6 +54,7 @@ function dispatch(ctx: Context, positionals: string[], force: boolean, strict: b
     case "delete": return cmdDelete(ctx, a, force);
     case "list": return cmdList(ctx);
     case "egress": return cmdEgress(ctx, a, b);
+    case "upload-pack": return cmdUploadPack(ctx, a);
     case "image": return cmdImage(ctx, a, b);
     case "completion": return cmdCompletion(ctx, a, b);
     default: throw new ForgeError(`unknown command '${cmd}'\n${USAGE}`);

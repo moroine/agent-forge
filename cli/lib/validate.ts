@@ -32,3 +32,11 @@ export function validateGitRef(ref: string): void {
 export function sanitizeContainerName(ownerRepo: string): string {
   return `agent-${ownerRepo.toLowerCase().replace(/[^a-z0-9-]+/g, "-")}`;
 }
+
+// Nom de container tel que `forge upload-pack` le reçoit d'un client SSH :
+// valeur non fiable, validée avant tout appel.
+export function validateContainerName(name: string): void {
+  if (!/^agent-[a-z0-9-]+$/.test(name)) {
+    throw new ForgeError(`container must be agent-<name> with [a-z0-9-], got: ${name}`);
+  }
+}

@@ -101,3 +101,10 @@ test("--strict is refused outside forge start", () => {
   assert.match(r.stderr, /--strict only applies to 'forge start'/);
   assert.match(r.stderr, /Usage: forge/);
 });
+
+test("upload-pack refuses a hostile container name and keeps stdout empty", () => {
+  const r = forge(["upload-pack", "agent-x;id"]);
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /^Error: container must be/m);
+});
