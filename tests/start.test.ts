@@ -250,7 +250,7 @@ test("start applies the strict settings after starting and before attaching", as
   assert.ok(started >= 0 && push > started && attach > push, l.join("\n"));
 });
 
-test("start d'un container marqué strict dont la NIC a perdu le filtre : refusé avant tout démarrage", async () => {
+test("start of a container marked strict whose eth0 lost the filter is refused before any start", async () => {
   const fake = egressFake({ mode: "strict" });
   // Surcharge eth0 retirée à la main : la NIC du profil (ici vide) s'applique.
   fake.instances.get("agent-forge")!.get("agent-o-r")!.devices = {};
