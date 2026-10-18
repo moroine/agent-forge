@@ -44,7 +44,9 @@ const forge = (project: string, args: string[]) => forgeIn(project, args, {
 
 
 let workspaces = "";
+let mirrors = "";
 let haveImage = false;
+let restrictedReady = false;
 let c1 = "";
 let c2 = "";
 
@@ -54,9 +56,10 @@ before((t) => {
   teardownProject(PROJECT);
   teardownProject(RESTRICTED);
   // In the home: the restricted project's restricted.devices.disk.paths names
-  // this directory.
+  // both directories. Two siblings, as <home>/workspaces and <data>/mirrors.
   workspaces = mkdtempSync(join(homedir(), "forge-selftest-ws-"));
   xdg = throwawayXdg("forge-selftest-xdg-");
+  mirrors = mkdtempSync(join(homedir(), "forge-selftest-mirrors-"));
 });
 
 after(() => {
@@ -65,6 +68,7 @@ after(() => {
   teardownProject(RESTRICTED);
   if (workspaces) rmSync(workspaces, { recursive: true, force: true });
   if (xdg) rmSync(xdg, { recursive: true, force: true });
+  if (mirrors) rmSync(mirrors, { recursive: true, force: true });
 });
 
 test("forge setup converges, then reports only unchanged", { skip: !ENABLED }, () => {
@@ -207,7 +211,7 @@ test("restricted project: setup drops raw.lxc, and an instance runs with its wor
         "restricted.idmap.uid": String(uid),
         "restricted.idmap.gid": String(gid),
         "restricted.devices.disk": "allow",
-        "restricted.devices.disk.paths": workspaces,
+        "restricted.devices.disk.paths": `${workspaces},${mirrors}`,
       },
     }),
   }));
@@ -216,6 +220,7 @@ test("restricted project: setup drops raw.lxc, and an instance runs with its wor
   const rawLxc = incus(RESTRICTED, ["profile", "get", "agent-forge", "raw.lxc"]);
   assert.equal(rawLxc.stdout.trim(), "", raw("raw.lxc must be absent", rawLxc));
   must("copy agent-base", copyImage(PROJECT, RESTRICTED));
+  restrictedReady = true;
   const name = `${PREFIX}${Math.random().toString(36).slice(2, 8)}-r`;
   launch(RESTRICTED, name);
   const dir = join(workspaces, "restricted");
@@ -246,6 +251,55 @@ test("mirror: mounted read-only and locked", { skip: !ENABLED }, (t) => {
   const remount = incus(PROJECT, ["exec", c1, "--", "mount", "-o", "remount,rw", MIRROR_MOUNT]);
   assert.notEqual(remount.status, 0, raw("remount rw succeeded", remount));
   assert.deepEqual(readdirSync(bare).sort(), before, "the host directory changed");
+});
+
+// Sub-project 4's row of the restricted-project table: the mirror lives in
+// <data>/mirrors, outside the workspaces, so restricted.devices.disk.paths
+// names both directories.
+test("restricted project: the origin mirror mounts read-only from the mirrors directory, and the workspace clones from it", { skip: !ENABLED }, async (t) => {
+  if (!restrictedReady) return t.skip("no restricted project");
+  const name = `${PREFIX}${Math.random().toString(36).slice(2, 8)}-m`;
+  launch(RESTRICTED, name);
+  // Negative control: a source under neither directory is refused, so the
+  // restriction is in force and the two mounts below go through its paths.
+  const outside = mkdtempSync(join(homedir(), "forge-selftest-outside-"));
+  try {
+    const refused = incus(RESTRICTED, ["config", "device", "add", name, "outside", "disk", `source=${outside}`, "path=/mnt/outside"]);
+    assert.notEqual(refused.status, 0, raw("a disk outside restricted.devices.disk.paths was accepted", refused));
+  } finally {
+    rmSync(outside, { recursive: true, force: true });
+  }
+
+  // A stand-in "GitHub" with one commit, cloned bare into the mirrors directory.
+  const standIn = join(workspaces, "restricted-standin");
+  mkdirSync(standIn);
+  hostGit(["init", "-q", "-b", "main", "."], standIn);
+  hostGit(["commit", "-q", "--allow-empty", "-m", "seed"], standIn);
+  const head = hostGit(["rev-parse", "HEAD"], standIn).stdout.trim();
+  const mirror = join(mirrors, `${name}.git`);
+  hostGit(["clone", "-q", "--bare", standIn, mirror]);
+  const ws = join(workspaces, "restricted-clone");
+  mkdirSync(ws);
+  must("add origin", incus(RESTRICTED, ["config", "device", "add", name, ORIGIN_DEVICE, "disk",
+    `source=${mirror}`, `path=${MIRROR_MOUNT}`, "readonly=true"]));
+  must("add workspace", incus(RESTRICTED, ["config", "device", "add", name, "workspace", "disk", `source=${ws}`, "path=/workspace"]));
+  // Direct evidence of the read-only mount, beside the refused writes of the
+  // unrestricted test.
+  const options = must("mount options", incus(RESTRICTED, ["exec", name, "--", "findmnt", "-n", "-o", "OPTIONS", MIRROR_MOUNT]));
+  assert.match(options.stdout.trim(), /(^|,)ro(,|$)/, raw(`${MIRROR_MOUNT} is not mounted read-only`, options));
+
+  const saved = process.env.FORGE_INCUS_PROJECT;
+  process.env.FORGE_INCUS_PROJECT = RESTRICTED;
+  try {
+    const cloned = await cloneWorkspace(createContext(), name);
+    assert.equal(cloned.code, 0, raw("cloneWorkspace", { status: cloned.code, stdout: cloned.stdout, stderr: cloned.stderr }));
+  } finally {
+    if (saved === undefined) delete process.env.FORGE_INCUS_PROJECT;
+    else process.env.FORGE_INCUS_PROJECT = saved;
+  }
+  const inside = must("HEAD of the clone", asAgent(RESTRICTED, name, "git -C /workspace rev-parse HEAD"));
+  assert.equal(inside.stdout.trim(), head, raw("the clone is not the mirror's commit", inside));
+  assert.equal(statSync(join(ws, ".git")).uid, process.getuid!(), "the clone does not belong to the host user");
 });
 
 test("hostile workspace: refresh and retrieval run nothing the agent planted", { skip: !ENABLED }, async (t) => {
