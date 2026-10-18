@@ -91,3 +91,10 @@ test("the bash shim runs the TypeScript entry", () => {
 test("setup appears in the usage", () => {
   assert.match(forge([]).stdout, /^\s+setup\s/m);
 });
+
+test("upload-pack refuses a hostile container name and keeps stdout empty", () => {
+  const r = forge(["upload-pack", "agent-x;id"]);
+  assert.equal(r.status, 1);
+  assert.equal(r.stdout, "");
+  assert.match(r.stderr, /^Error: container must be/m);
+});

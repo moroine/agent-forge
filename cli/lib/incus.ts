@@ -226,3 +226,21 @@ export function execAsAgentArgv(ctx: Context, name: string, argv: string[]): Pro
 export async function imageExists(ctx: Context, alias: string): Promise<boolean> {
   return (await ctx.exec(incus("image", "info", alias))).code === 0;
 }
+
+// Récupération du travail de l'agent : `git-upload-pack` tourne dans le
+// container en tant qu'aiuser, pas sur l'hôte. --force-noninteractive (forme
+// longue de -T) : pas de pty, stdout porte le protocole git. GIT_PROTOCOL
+// n'est transmis que s'il a la forme `version=N`.
+export function uploadPackArgv(container: string, gitProtocol: string | undefined): string[] {
+  const protocol = gitProtocol !== undefined && /^version=[0-9]$/.test(gitProtocol)
+    ? ["--env", `GIT_PROTOCOL=${gitProtocol}`]
+    : [];
+  return [
+    ...incus("exec", container, "--force-noninteractive"),
+    "--user", "1001", "--group", "1001",
+    "--cwd", "/workspace",
+    "--env", "HOME=/home/aiuser",
+    ...protocol,
+    "--", "git-upload-pack", "/workspace",
+  ];
+}

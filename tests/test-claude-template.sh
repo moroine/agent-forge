@@ -71,6 +71,12 @@ assert_not_contains 'moroine'
 assert_not_contains ':2222'
 assert_not_contains 'container LXD'
 
+# Récupération : fetch via `forge upload-pack`, miroir origin en lecture seule.
+assert_contains 'uploadpack "forge upload-pack <container>"'
+assert_contains '/forge/origin.git'
+assert_contains 'git fetch origin'
+assert_not_contains 'ssh://<user>@<host><workspaces>'
+
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]
