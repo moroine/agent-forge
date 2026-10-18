@@ -111,16 +111,22 @@ test("resume fails when the container refuses to start", async () => {
 
 // --- egress hooks ---
 process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "forge-resume-xdg-"));
-function egressFake(opts: { mode: string; version?: string }): FakeIncus {
+function egressFake(opts: { mode: string; version?: string; nic?: "strict" }): FakeIncus {
   const fake = FakeIncus.withRuntime();
   if (opts.version) fake.serverVersion = opts.version;
   fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
   fake.addInstance("agent-forge", "forge-proxy", { config: { "user.forge.proxy_recipe": "1" } });
   fake.addInstance("agent-forge", "agent-o-r", {
     status: "Stopped", config: { "user.forge.repo": "o/r", "user.forge.egress": opts.mode },
+    // Un container strict l'est aussi par sa NIC, pas seulement par son marqueur.
+    devices: opts.mode === "strict" || opts.nic === "strict" ? { eth0: STRICT_NIC } : {},
   });
   return fake;
 }
+const STRICT_NIC = {
+  type: "nic", network: "forgebr0", "security.acls": "forge-egress-strict",
+  "security.acls.default.egress.action": "reject", "security.acls.default.ingress.action": "reject",
+};
 const EG = [{ match: "test -e /workspace/.trees/", code: 0 }];
 const lines = (c: ReturnType<typeof fakeContext>) => c.calls.map((x) => x.join(" "));
 
@@ -136,6 +142,12 @@ test("resume applies the strict settings before attaching", async () => {
   const l = lines(c);
   const push = l.findIndex((x) => x.includes("file push") && x.includes("agent-forge-proxy.sh"));
   assert.ok(push >= 0 && push < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
+});
+
+test("resume d'un container marqué open dont la NIC est restée stricte : refusé avant tout démarrage", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "open", nic: "strict" }), rules: EG });
+  await assert.rejects(() => cmdResume(c, "o/r", "t"), /eth0 is strict.*forge egress o\/r strict/);
+  assert.ok(!lines(c).some((l) => / start agent-o-r|rm -f|tmux/.test(l)), lines(c).join("\n"));
 });
 
 test("resume of a container switched to open clears forge's files before attaching", async () => {

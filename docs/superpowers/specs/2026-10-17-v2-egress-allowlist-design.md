@@ -440,6 +440,11 @@ serves open containers, where the paragraph does not apply.
   - **open** (or unset): remove any file forge's strict settings wrote, a
     no-op when there is none, before attaching. This completes a switch to open
     made while the container was stopped.
+  - Before either, the marker is checked against the **effective** NIC (see
+    "`forge list`"): a `strict` marker on a NIC that is not strict, or a strict
+    NIC under an `open` or absent marker, is refused before anything starts,
+    naming both states and `forge egress <owner/repo> strict` / `… open`, which
+    finish the switch. An open or absent marker on a `?` NIC starts as open.
 
 ### `forge egress [<owner/repo>] [strict|open]`
 

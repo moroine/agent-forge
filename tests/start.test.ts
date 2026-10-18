@@ -210,9 +210,15 @@ function egressFake(opts: { mode?: string; version?: string; proxy?: boolean } =
   if (opts.proxy ?? true) fake.addInstance("agent-forge", "forge-proxy", { config: { "user.forge.proxy_recipe": "1" } });
   fake.addInstance("agent-forge", "agent-o-r", {
     status: "Stopped", config: { "user.forge.repo": "o/r", "user.forge.mode": "supervised", ...(opts.mode ? { "user.forge.egress": opts.mode } : {}) },
+    // Un container strict l'est aussi par sa NIC, pas seulement par son marqueur.
+    devices: opts.mode === "strict" ? { eth0: STRICT_NIC } : {},
   });
   return fake;
 }
+const STRICT_NIC = {
+  type: "nic", network: "forgebr0", "security.acls": "forge-egress-strict",
+  "security.acls.default.egress.action": "reject", "security.acls.default.ingress.action": "reject",
+};
 const egressRules: ExecRule[] = [{ match: "test -e /workspace/.trees/", code: 0 }];
 const flatCalls = (c: ReturnType<typeof fakeContext>) => c.calls.map((x) => x.join(" "));
 
@@ -242,6 +248,15 @@ test("start applies the strict settings after starting and before attaching", as
   const push = l.findIndex((x) => x.includes("file push") && x.includes("agent-forge-proxy.sh"));
   const attach = l.findIndex((x) => x.includes("tmux"));
   assert.ok(started >= 0 && push > started && attach > push, l.join("\n"));
+});
+
+test("start d'un container marqué strict dont la NIC a perdu le filtre : refusé avant tout démarrage", async () => {
+  const fake = egressFake({ mode: "strict" });
+  // Surcharge eth0 retirée à la main : la NIC du profil (ici vide) s'applique.
+  fake.instances.get("agent-forge")!.get("agent-o-r")!.devices = {};
+  const c = fakeContext({ incus: fake, rules: egressRules });
+  await assert.rejects(() => cmdStart(c, "o/r", "t"), /refusing to start agent-o-r: .*user\.forge\.egress=strict.*forge egress o\/r strict/);
+  assert.ok(!flatCalls(c).some((x) => / start agent-o-r|file push|tmux/.test(x)), flatCalls(c).join("\n"));
 });
 
 test("a strict container starts with a warning when the proxy is gone", async () => {

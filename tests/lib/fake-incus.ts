@@ -314,10 +314,15 @@ export class FakeIncus {
     }
     const devices: Devices = {};
     for (const flag of deviceFlags) {
-      const [dev, ...pairs] = flag.split(",");
+      // `<device>,<key>=<value>`: one key per flag (the value may hold commas);
+      // the flags of one device accumulate.
+      const comma = flag.indexOf(",");
+      if (comma < 0 || !flag.includes("=")) return fail(`Bad device override syntax, expecting <device>,<key>=<value>: ${flag}`);
+      const dev = flag.slice(0, comma);
+      const [k, v] = splitPair(flag.slice(comma + 1));
       // A local copy of the profile's device of that name, with the keys overlaid.
       const base = profiles.map((n) => this.profiles.get(p)!.get(n)!.devices[dev]).find((d) => d !== undefined);
-      devices[dev] = { ...base, ...Object.fromEntries(pairs.map(splitPair)) };
+      devices[dev] = { ...(devices[dev] ?? base), [k]: v };
     }
     this.instances.get(p)!.set(name, { name, status: "Running", profiles, config, devices });
     return ok();
