@@ -24,11 +24,22 @@ function writeConfig(config: unknown) {
 }
 
 const opts = (over: Partial<SetupOptions> = {}): SetupOptions =>
-  ({ proc: fakeProc(), ids: { uid: 501, gid: 20 }, interfaces: () => ({}), ...over });
-const writes = (fake: FakeIncus) => fake.calls.filter((c) => c.argv.includes("create") || c.argv.includes("edit"));
+  ({ proc: fakeProc(), ids: { uid: 501, gid: 20 }, interfaces: () => ({}), aptDelayMs: 0, ...over });
+// Every mutating call: object create/edit, instance lifecycle, file push, config changes, and every exec
+// except the readiness and squid probes. `file pull`, `list` and `query` are probes.
+const MUTATING = ["create", "edit", "launch", "delete", "start", "restart", "push"];
+const PROBES = ["systemctl is-system-running --wait", "systemctl is-active --quiet squid"];
+const writes = (fake: FakeIncus) => fake.calls.filter((c) => {
+  const a = c.argv;
+  if (a.includes("exec")) return !PROBES.some((p) => a.join(" ").includes(p));
+  if (a.includes("config")) return a.includes("set") || a.includes("unset") || a.includes("device");
+  return MUTATING.some((m) => a.includes(m));
+});
+const objectWrites = (fake: FakeIncus) => fake.calls.filter((c) => c.argv.includes("create") || c.argv.includes("edit"));
 const profile = (fake: FakeIncus) => fake.profiles.get("agent-forge")!.get("agent-forge")!;
+const allowlistFile = () => join(xdg, "agent-forge", "egress-allowlist");
 
-test("an empty Incus gives four creations, in order", async () => {
+test("an empty Incus gives every creation, in order", async () => {
   const fake = new FakeIncus();
   const c = fakeContext({ incus: fake });
   assert.equal(await cmdSetup(c, opts()), 0);
@@ -37,37 +48,120 @@ test("an empty Incus gives four creations, in order", async () => {
     "network forgebr0: created",
     "network acl forge-egress: created",
     "profile agent-forge: created",
+    "network acl forge-proxy: created",
+    "network acl forge-egress-strict: created",
+    "profile forge-proxy: created",
+    "allowlist: created (default list, 4 entries)",
+    "instance forge-proxy: created",
   ]);
   assert.equal(profile(fake).config["raw.idmap"], "uid 501 1001\ngid 20 1001");
   assert.ok(profile(fake).config["raw.lxc"]);
   assert.equal(fake.networks.get("forgebr0")!.config["ipv4.address"], "10.77.0.1/24");
+  assert.equal(fake.expandedDevices("agent-forge", "forge-proxy").eth0["ipv4.address"], "10.77.0.2");
 });
 
-test("a second run makes no mutating call", async () => {
+test("a second run reports only unchanged and makes no mutating call", async () => {
   const fake = new FakeIncus();
   await cmdSetup(fakeContext({ incus: fake }), opts());
   const before = writes(fake).length;
   const c = fakeContext({ incus: fake });
   await cmdSetup(c, opts());
-  assert.equal(writes(fake).length, before);
-  assert.ok(c.out_lines.every((l) => l.endsWith(": unchanged")), c.out_lines.join("\n"));
+  assert.equal(writes(fake).length, before, writes(fake).slice(before).map((w) => w.argv.join(" ")).join("\n"));
+  assert.ok(c.out_lines.every((l) => l.endsWith(": unchanged") || l === "allowlist: 4 entries"), c.out_lines.join("\n"));
 });
 
 test("every object goes to Incus as JSON on stdin", async () => {
   const fake = new FakeIncus();
   await cmdSetup(fakeContext({ incus: fake }), opts());
-  assert.equal(writes(fake).length, 4);
-  for (const w of writes(fake)) assert.doesNotThrow(() => JSON.parse(w.input ?? ""), w.argv.join(" "));
+  assert.equal(objectWrites(fake).length, 7);
+  for (const w of objectWrites(fake)) assert.doesNotThrow(() => JSON.parse(w.input ?? ""), w.argv.join(" "));
+});
+
+test("the proxy is created after IPv4 forwarding is checked", async () => {
+  const fake = new FakeIncus();
+  await assert.rejects(() => cmdSetup(fakeContext({ incus: fake }), opts({ proc: fakeProc({ ipForward: "0" }) })), /ip_forward is 0/);
+  assert.ok(!fake.calls.some((c) => c.argv.includes("launch")));
+});
+
+test("an Incus below the version gate skips the strict objects with a notice, and still sets the DHCP range", async () => {
+  const fake = new FakeIncus();
+  fake.serverVersion = "7.0.1";
+  const c = fakeContext({ incus: fake });
+  assert.equal(await cmdSetup(c, opts()), 0);
+  assert.equal(c.out_lines.length, 4, c.out_lines.join("\n"));
+  assert.ok(c.err_lines.some((l) => /NOTICE: .*7\.0\.1.*strict mode/.test(l)), c.err_lines.join("\n"));
+  assert.equal(fake.acls.has("forge-proxy"), false);
+  assert.equal(fake.acls.has("forge-egress-strict"), false);
+  assert.equal(fake.profiles.get("agent-forge")!.has("forge-proxy"), false);
+  assert.equal(fake.instances.get("agent-forge")!.has("forge-proxy"), false);
+  assert.ok(fake.networks.get("forgebr0")!.config["ipv4.dhcp.ranges"]);
+});
+
+test("a container holding the proxy address stops setup before the proxy, naming it", async () => {
+  const fake = new FakeIncus();
+  await cmdSetup(fakeContext({ incus: fake }), opts());
+  fake.instances.get("agent-forge")!.delete("forge-proxy");
+  fake.addInstance("agent-forge", "agent-o-r", { ipv4: "10.77.0.2" });
+  const n = fake.calls.length;
+  await assert.rejects(() => cmdSetup(fakeContext({ incus: fake }), opts()), /agent-o-r .*10\.77\.0\.2.*restart/);
+  assert.ok(!fake.calls.slice(n).some((c) => c.argv.includes("launch")));
+});
+
+test("an edited allowlist gives one push and one reconfigure", async () => {
+  const fake = new FakeIncus();
+  await cmdSetup(fakeContext({ incus: fake }), opts());
+  writeFileSync(allowlistFile(), "api.anthropic.com\n.github.com\n");
+  const n = fake.calls.length;
+  const c = fakeContext({ incus: fake });
+  await cmdSetup(c, opts());
+  const calls = fake.calls.slice(n).map((x) => x.argv.join(" "));
+  assert.ok(c.out_lines.includes("allowlist: 2 entries"), c.out_lines.join("\n"));
+  assert.ok(c.out_lines.includes("instance forge-proxy: updated"));
+  assert.equal(calls.filter((x) => x.includes("/etc/squid/allowlist") && x.includes(" push ")).length, 1);
+  assert.equal(calls.filter((x) => x.includes("squid -k reconfigure")).length, 1);
+});
+
+test("an empty allowlist is applied and said", async () => {
+  const fake = new FakeIncus();
+  await cmdSetup(fakeContext({ incus: fake }), opts());
+  writeFileSync(allowlistFile(), "");
+  const c = fakeContext({ incus: fake });
+  await cmdSetup(c, opts());
+  assert.ok(c.out_lines.includes("allowlist: empty (strict containers reach nothing)"), c.out_lines.join("\n"));
+  assert.ok(c.out_lines.includes("instance forge-proxy: updated"));
+});
+
+test("an invalid allowlist stops setup with the file and line, before touching the proxy", async () => {
+  const fake = new FakeIncus();
+  mkdirSync(join(xdg, "agent-forge"), { recursive: true });
+  writeFileSync(allowlistFile(), "api.anthropic.com\nExample.COM\n");
+  await assert.rejects(() => cmdSetup(fakeContext({ incus: fake }), opts()), /egress-allowlist.*:2/);
+  assert.ok(!fake.calls.some((c) => c.argv.includes("launch")));
+  assert.equal(fake.instances.get("agent-forge")!.has("forge-proxy"), false);
+});
+
+test("a moved proxy names the strict containers that pick it up at their next start", async () => {
+  const fake = new FakeIncus();
+  await cmdSetup(fakeContext({ incus: fake }), opts());
+  fake.addInstance("agent-forge", "agent-o-s", {
+    profiles: ["agent-forge"],
+    devices: { eth0: { type: "nic", "security.acls": "forge-egress-strict", "security.acls.default.egress.action": "reject" } },
+  });
+  writeConfig({ network: { ipv4Address: "10.78.0.1/24" } });
+  const c = fakeContext({ incus: fake });
+  await cmdSetup(c, opts());
+  const notice = c.err_lines.find((l) => l.startsWith("NOTICE") && l.includes("forge-proxy moved"));
+  assert.ok(notice?.includes("agent-o-s") && notice.includes("forge start"), c.err_lines.join("\n"));
 });
 
 test("a changed bridge address gives exactly one edit, of the whole bridge", async () => {
   const fake = new FakeIncus();
   await cmdSetup(fakeContext({ incus: fake }), opts());
   writeConfig({ network: { ipv4Address: "10.78.0.1/24" } });
-  const n = writes(fake).length;
+  const n = objectWrites(fake).length;
   const c = fakeContext({ incus: fake });
   await cmdSetup(c, opts());
-  const w = writes(fake).slice(n);
+  const w = objectWrites(fake).slice(n).filter((x) => x.argv.includes("forgebr0"));
   assert.equal(w.length, 1);
   assert.deepEqual(w[0].argv.slice(-3), ["network", "edit", "forgebr0"]);
   assert.deepEqual(JSON.parse(w[0].input!).config, {
@@ -93,9 +187,9 @@ test("a changed limit gives exactly one edit, of the whole profile", async () =>
   const fake = new FakeIncus();
   await cmdSetup(fakeContext({ incus: fake }), opts());
   writeConfig({ limits: { memory: "12GiB" } });
-  const n = writes(fake).length;
+  const n = objectWrites(fake).length;
   await cmdSetup(fakeContext({ incus: fake }), opts());
-  const w = writes(fake).slice(n);
+  const w = objectWrites(fake).slice(n);
   assert.equal(w.length, 1);
   assert.deepEqual(w[0].argv.slice(-3), ["profile", "edit", "agent-forge"]);
   const body = JSON.parse(w[0].input!);
