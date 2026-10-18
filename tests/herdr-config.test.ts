@@ -83,10 +83,36 @@ test("spliceBlock refuses a broken block", () => {
   assert.throws(() => spliceBlock(BLOCK + BLOCK, BLOCK), /agent-forge block/);
 });
 
+// An editor may leave blanks after a marker: the block is still forge's,
+// never a reason to append a second one.
+test("spliceBlock finds markers followed by blanks", () => {
+  const old = renderBlock("/old/forge").replace(BLOCK_START, `${BLOCK_START}  `).replace(BLOCK_END, `${BLOCK_END}\t`);
+  assert.deepEqual(spliceBlock("a = 1\n\n" + old, BLOCK), { text: "a = 1\n\n" + BLOCK, outcome: "updated" });
+});
+
+test("spliceBlock refuses a stray end marker, before or after the block", () => {
+  assert.throws(() => spliceBlock(`${BLOCK_END}\n` + BLOCK, BLOCK), /more than one .* agent-forge block/);
+  assert.throws(() => spliceBlock(BLOCK + `${BLOCK_END}\n`, BLOCK), /more than one .* agent-forge block/);
+});
+
+test("spliceBlock leaves a block that ends the file without a newline unchanged", () => {
+  const text = "x = 1\n\n" + BLOCK.slice(0, -1);
+  assert.deepEqual(spliceBlock(text, BLOCK), { text, outcome: "unchanged" });
+});
+
+test("renderBlock refuses a forge path with a control character", () => {
+  assert.throws(() => renderBlock("/opt/a\nb/forge"), (e: unknown) => e instanceof ForgeError && /control character/.test(e.message));
+});
+
 test("conflictingKeys finds keys outside the block only", () => {
   const text = 'key = "prefix+f"\n  key="prefix+shift+f"  \nkey = "prefix+g"\n\n' + BLOCK;
   assert.deepEqual(conflictingKeys(text).sort(), ["prefix+f", "prefix+shift+f"]);
   assert.deepEqual(conflictingKeys(BLOCK), []);
+});
+
+test("conflictingKeys reads single-quoted keys and keys followed by a comment", () => {
+  const text = "key = \"prefix+f\" # mine\nkey = 'prefix+shift+f'\n\n" + BLOCK;
+  assert.deepEqual(conflictingKeys(text).sort(), ["prefix+f", "prefix+shift+f"]);
 });
 
 let dir: string;
