@@ -25,6 +25,7 @@ import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
+import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import {
   ENABLED, PREFIX, REPO_ROOT, SENTINEL, SENTINEL_PEER, asAgent, copyImage, forge as forgeIn, incus, incusBelowGate, launch, must, raw, run,
@@ -224,24 +225,35 @@ test("an IP literal is denied by the proxy", { skip: !ENABLED }, (t) => {
   expectRefused(S1, `https://${exampleIp()}`);
 });
 
-test("the proxy's other ports, the bridge and a second container are unreachable", { skip: !ENABLED }, (t) => {
+test("the proxy's other ports, the bridge and a second container are unreachable", { skip: !ENABLED }, async (t) => {
   if (!ready || !peerReady) return t.skip("no containers");
-  // Host-side proof that the bridge answers without the ACL, as incus.test.ts.
-  must(`host → ${bridgeIp}:22`, run("bash", ["-c", tcp(bridgeIp, 22)]));
-  // The peer's listener, proven from inside the peer.
-  must("listener in the peer", incus(PROJECT, ["exec", PEER, "--", "bash", "-c",
-    "setsid python3 -m http.server 9000 >/dev/null 2>&1 < /dev/null &"]));
-  must("the listener answers inside the peer", incus(PROJECT, ["exec", PEER, "--", "bash", "-c",
-    "for i in 1 2 3 4 5; do timeout 2 bash -c '</dev/tcp/127.0.0.1/9000' && exit 0; sleep 1; done; exit 1"]));
-  const peerIp = ipv4Of(PEER);
+  // The target on the bridge is the test's own listener on every host address,
+  // not sshd (a provisioned host may run it elsewhere than on 22). spawnSync
+  // blocks the event loop, but the kernel completes the handshakes into the
+  // backlog, so the probes below connect all the same.
+  const server = createServer((s) => s.destroy());
+  await new Promise<void>((resolve) => server.listen(0, "0.0.0.0", resolve));
+  try {
+    const port = (server.address() as AddressInfo).port;
+    // Host-side proof that the bridge answers without the ACL.
+    must(`host → ${bridgeIp}:${port}`, run("bash", ["-c", tcp(bridgeIp, port)]));
+    // The peer's listener, proven from inside the peer.
+    must("listener in the peer", incus(PROJECT, ["exec", PEER, "--", "bash", "-c",
+      "setsid python3 -m http.server 9000 >/dev/null 2>&1 < /dev/null &"]));
+    must("the listener answers inside the peer", incus(PROJECT, ["exec", PEER, "--", "bash", "-c",
+      "for i in 1 2 3 4 5; do timeout 2 bash -c '</dev/tcp/127.0.0.1/9000' && exit 0; sleep 1; done; exit 1"]));
+    const peerIp = ipv4Of(PEER);
 
-  // Positive control: the proxy's own port connects, so a broken probe cannot
-  // pass the denials below.
-  eachWay(S1, tcp(proxyIp, 3128), (r, way) => assert.equal(r.status, 0, raw(`${proxyIp}:3128 via ${way}`, r)));
-  for (const [host, port] of [[proxyIp, 22], [proxyIp, 80], [proxyIp, 3129], [bridgeIp, 22], [peerIp, 9000]] as [string, number][]) {
-    eachWay(S1, tcp(host, port), (r, way) => {
-      assert.notEqual(r.status, 0, raw(`${host}:${port} answered from ${S1} via ${way}`, r));
-    });
+    // Positive control: the proxy's own port connects, so a broken probe cannot
+    // pass the denials below.
+    eachWay(S1, tcp(proxyIp, 3128), (r, way) => assert.equal(r.status, 0, raw(`${proxyIp}:3128 via ${way}`, r)));
+    for (const [host, p] of [[proxyIp, 22], [proxyIp, 80], [proxyIp, 3129], [bridgeIp, port], [peerIp, 9000]] as [string, number][]) {
+      eachWay(S1, tcp(host, p), (r, way) => {
+        assert.notEqual(r.status, 0, raw(`${host}:${p} answered from ${S1} via ${way}`, r));
+      });
+    }
+  } finally {
+    server.close();
   }
 });
 
