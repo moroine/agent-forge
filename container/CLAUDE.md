@@ -33,6 +33,7 @@ Tu es un agent Claude Code tournant dans un container Incus isolé.
 
 ## Navigateur
 - Un serveur MCP Chrome DevTools (`chrome-devtools-mcp`) est disponible pour piloter Chrome en headless — navigue vers ton dev server local, prends des captures d'écran, lis les logs console/réseau pour vérifier tes changements UI avant de dire que c'est fini
+- **Mode strict** : si `HTTPS_PROXY` pointe vers forge-proxy (`http://…:3128`), ce container est en mode strict : tu ne joins que les domaines de la liste blanche de l'humain, via ce proxy. Un `403` du proxy, ou une connexion qui expire, veut dire que la destination n'y est pas : ne cherche pas à contourner, nomme le domaine à l'humain et continue sans. Les builds et containers Docker ne reçoivent pas le proxy d'office : passe-leur `HTTPS_PROXY`/`HTTP_PROXY` (`--build-arg`, `-e`) quand ils ont besoin d'un domaine autorisé. Sans `HTTPS_PROXY`, ce paragraphe ne s'applique pas.
 
 ## Périmètre
 - Tes modifications sont limitées au contenu de `/workspace`

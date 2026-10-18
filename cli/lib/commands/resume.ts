@@ -6,6 +6,7 @@ import { ForgeError, mustSucceed } from "../context.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
 import { isRunning, requireContainerForRepo } from "../containers.ts";
 import { attachArgv, execAsAgent, startInstance } from "../incus.ts";
+import { egressAfterStart, egressBeforeStart } from "../strict.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
 const USAGE = "Usage: forge resume <owner/repo> <task>";
@@ -14,6 +15,9 @@ export async function cmdResume(ctx: Context, repo?: string, task?: string): Pro
   const ownerRepo = await resolveRepo(ctx, repo, USAGE);
   validateRepo(ownerRepo);
   const container = await requireContainerForRepo(ctx, ownerRepo);
+
+  // Avant le démarrage, même d'un container qui tourne déjà.
+  const egress = await egressBeforeStart(ctx, container);
 
   ctx.out(`Starting container ${container}...`);
   if (!(await isRunning(ctx, container))) await mustSucceed("incus start", startInstance(ctx, container));
@@ -27,6 +31,8 @@ export async function cmdResume(ctx: Context, repo?: string, task?: string): Pro
       `no worktree .trees/${taskName} in ${container}. Start it with 'forge start ${ownerRepo} ${taskName}'.`,
     );
   }
+
+  await egressAfterStart(ctx, container, egress);
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
   return ctx.attach(attachArgv(container, taskName, process.env.TERM ?? "xterm-256color"));
