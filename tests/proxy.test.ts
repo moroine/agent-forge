@@ -77,7 +77,9 @@ function setup(): { fake: FakeIncus; ctx: ReturnType<typeof fakeContext> } {
   fake.addProfile("agent-forge", "forge-proxy", { devices: { eth0: { type: "nic", network: "forgebr0" } } });
   return { fake, ctx: fakeContext({ incus: fake }) };
 }
-const opts = { aptDelayMs: 0 };
+const opts = { aptDelayMs: 0, waitDelayMs: 0 };
+// The probe that squid accepts connections again, run inside the proxy.
+const PROBE = "exec forge-proxy -- timeout 2 bash -c";
 const line = (ctx: { calls: string[][] }) => ctx.calls.map((c) => c.join(" "));
 const idx = (calls: string[], s: string) => calls.findIndex((c) => c.includes(s));
 
@@ -295,4 +297,89 @@ test("after a NIC-driven recreation the next run is unchanged", async () => {
   assert.equal(first.outcome, "updated");
   const second = await convergeProxy(fakeContext({ incus: fake }), { plan, entries: ENTRIES, nic: want }, opts);
   assert.deepEqual(second, { outcome: "unchanged", previousAddress: null });
+});
+
+// --- squid accepts connections again before the configuration counts as loaded ---
+
+const HASH = "config set forge-proxy user.forge.proxy_config";
+
+test("the probe connects to the proxy's address and port, values as argv", async () => {
+  const { ctx } = setup();
+  await convergeProxy(ctx, { plan, entries: ENTRIES, nic }, opts);
+  const probe = ctx.calls.find((c) => c.join(" ").includes(PROBE))!;
+  assert.deepEqual(probe.slice(probe.indexOf("--") + 1),
+    ["timeout", "2", "bash", "-c", '< "/dev/tcp/$0/$1"', "10.77.0.2", "3128"]);
+});
+
+test("creation waits for squid after its restart, then records the hash and stamps", async () => {
+  const { ctx } = setup();
+  await convergeProxy(ctx, { plan, entries: ENTRIES, nic }, opts);
+  const calls = line(ctx);
+  assert.ok(idx(calls, "systemctl restart squid") < idx(calls, PROBE), calls.join("\n"));
+  assert.ok(idx(calls, PROBE) < idx(calls, HASH));
+  assert.ok(idx(calls, HASH) < idx(calls, "user.forge.proxy_recipe"));
+});
+
+test("a reconfigure is followed by the wait, then the hash", async () => {
+  const fake = await converged();
+  const ctx = fakeContext({ incus: fake });
+  await convergeProxy(ctx, { plan, entries: [".github.com"], nic }, opts);
+  const calls = line(ctx);
+  assert.ok(idx(calls, "squid -k reconfigure") < idx(calls, PROBE) && idx(calls, PROBE) < idx(calls, HASH), calls.join("\n"));
+});
+
+test("a restart of an inactive squid is followed by the wait, with or without changed files", async () => {
+  for (const entries of [ENTRIES, [".github.com"]]) {
+    const fake = await converged();
+    const ctx = fakeContext({ incus: fake, rules: [{ match: "systemctl is-active", code: 3 }] });
+    await convergeProxy(ctx, { plan, entries, nic }, opts);
+    const calls = line(ctx);
+    assert.ok(idx(calls, "systemctl restart squid") >= 0 && idx(calls, "systemctl restart squid") < idx(calls, PROBE), calls.join("\n"));
+    if (entries !== ENTRIES) assert.ok(idx(calls, PROBE) < idx(calls, HASH));
+  }
+});
+
+test("a squid slow to come back is waited for", async () => {
+  const fake = await converged();
+  const base = fakeContext({ incus: fake });
+  let refusals = 3;
+  let probes = 0;
+  const ctx: Context = {
+    ...base,
+    exec: async (argv, o) => {
+      if (argv.join(" ").includes(PROBE)) {
+        probes++;
+        if (refusals-- > 0) return { code: 1, stdout: "", stderr: "Connection refused" };
+      }
+      return base.exec(argv, o);
+    },
+  };
+  const r = await convergeProxy(ctx, { plan, entries: [".github.com"], nic }, opts);
+  assert.equal(r.outcome, "updated");
+  assert.equal(probes, 4);
+  assert.match(fake.instances.get("agent-forge")!.get("forge-proxy")!.config["user.forge.proxy_config"], /^[0-9a-f]{64}$/);
+});
+
+test("a squid that never comes back fails closed: no hash recorded, the next run retries", async () => {
+  const fake = await converged();
+  const down = fakeContext({ incus: fake, rules: [{ match: PROBE, code: 1, stderr: "Connection refused" }] });
+  await assert.rejects(convergeProxy(down, { plan, entries: [".github.com"], nic }, opts),
+    /squid did not come back on 10\.77\.0\.2:3128 after squid -k reconfigure/);
+  assert.equal(line(down).filter((c) => c.includes(PROBE)).length, 30);
+  assert.ok(!line(down).some((c) => c.includes(HASH)));
+  assert.equal(fake.instances.get("agent-forge")!.get("forge-proxy")!.config["user.forge.proxy_config"], undefined);
+  const ctx = fakeContext({ incus: fake });
+  assert.equal((await convergeProxy(ctx, { plan, entries: [".github.com"], nic }, opts)).outcome, "updated");
+  assert.ok(idx(line(ctx), "squid -k reconfigure") >= 0);
+  assert.match(fake.instances.get("agent-forge")!.get("forge-proxy")!.config["user.forge.proxy_config"], /^[0-9a-f]{64}$/);
+});
+
+test("a fresh proxy whose squid never answers is left unstamped, without a hash", async () => {
+  const { fake } = setup();
+  const ctx = fakeContext({ incus: fake, rules: [{ match: PROBE, code: 1 }] });
+  await assert.rejects(convergeProxy(ctx, { plan, entries: ENTRIES, nic }, opts),
+    /squid did not come back on 10\.77\.0\.2:3128 after systemctl restart squid[\s\S]*forge setup/);
+  const config = fake.instances.get("agent-forge")!.get("forge-proxy")!.config;
+  assert.equal(config["user.forge.proxy_config"], undefined);
+  assert.equal(config["user.forge.proxy_recipe"], undefined);
 });

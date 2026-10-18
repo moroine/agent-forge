@@ -23,9 +23,11 @@ export type SetupOptions = {
   proc?: ProcPaths;
   ids?: { uid: number; gid: number };
   interfaces?: () => NodeJS.Dict<NetworkInterfaceInfo[]>;
-  // Retry budget for the proxy's first apt-get update (tests set aptDelayMs: 0).
+  // Retry budget for the proxy's first apt-get update (tests set aptDelayMs: 0),
+  // and the pause between probes of squid's port after a reload.
   aptAttempts?: number;
   aptDelayMs?: number;
+  waitDelayMs?: number;
 };
 
 export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<number> {
@@ -101,7 +103,7 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
 
     const nic = { ...proxyProfile.devices.eth0, "ipv4.address": plan.proxyAddress };
     const proxy = await convergeProxy(ctx, { plan, entries, nic },
-      { aptAttempts: opts.aptAttempts, aptDelayMs: opts.aptDelayMs });
+      { aptAttempts: opts.aptAttempts, aptDelayMs: opts.aptDelayMs, waitDelayMs: opts.waitDelayMs });
     report("instance", PROXY_INSTANCE, proxy.outcome);
 
     if (proxy.previousAddress !== null) {

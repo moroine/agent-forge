@@ -24,7 +24,7 @@ function writeConfig(config: unknown) {
 }
 
 const opts = (over: Partial<SetupOptions> = {}): SetupOptions =>
-  ({ proc: fakeProc(), ids: { uid: 501, gid: 20 }, interfaces: () => ({}), aptDelayMs: 0, ...over });
+  ({ proc: fakeProc(), ids: { uid: 501, gid: 20 }, interfaces: () => ({}), aptDelayMs: 0, waitDelayMs: 0, ...over });
 // Every mutating call: object create/edit, instance lifecycle, file push, config changes, and every exec
 // except the readiness and squid probes. `file pull`, `list` and `query` are probes.
 const MUTATING = ["create", "edit", "launch", "delete", "start", "restart", "push"];

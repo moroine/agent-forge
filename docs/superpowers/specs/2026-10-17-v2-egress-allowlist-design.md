@@ -298,6 +298,13 @@ devices:
    with squid's message), then `squid -k reconfigure`. Outcome: `updated` or
    `unchanged`.
 5. **Running:** `forge setup` starts the proxy if it is stopped.
+6. **Back up:** squid refuses connections for a few seconds after a restart or
+   a reconfigure. After each one (creation included), `forge setup` waits
+   until squid accepts TCP on `<proxy address>:3128`, probed from inside the
+   proxy (`timeout 2 bash -c '< "/dev/tcp/$0/$1"' <addr> 3128`), up to 30
+   attempts a second apart. Only then is the loaded configuration recorded
+   (`user.forge.proxy_config`); a squid that never answers stops `forge setup`
+   with an error and leaves the hash unrecorded, so the next run retries.
 
 Report lines, in the existing style: `network acl forge-proxy: created`,
 `network acl forge-egress-strict: created`, `profile forge-proxy: created`,
