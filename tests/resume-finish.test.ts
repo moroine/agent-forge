@@ -249,6 +249,23 @@ test("finish leaves a live tab open", async () => {
   assert.ok(!c.calls.some((call) => call.join(" ").includes("tab close")));
 });
 
+test("finish only warns when the herdr cleanup fails", async () => {
+  process.env.HERDR_ENV = "1";
+  process.env.HERDR_BIN_PATH = "/h/herdr";
+  try {
+    const c = fakeContext({ rules: [
+      { match: "/h/herdr workspace list", code: 1, stderr: "server down" },
+      ...FINISH_RULES,
+    ] });
+    assert.equal(await cmdFinish(c, "moroine/agent-forge", "cli", false), 0);
+    assert.ok(c.err_lines.some((l) => l.startsWith("WARNING: closing the herdr tab of cli failed:")), c.err_lines.join(" | "));
+    assert.ok(c.out_lines.some((l) => l.includes("Finished task cli")));
+  } finally {
+    delete process.env.HERDR_ENV;
+    delete process.env.HERDR_BIN_PATH;
+  }
+});
+
 test("finish makes no herdr call outside herdr", async () => {
   const c = fakeContext({ rules: [...HERDR_RULES(["-zsh"]), ...FINISH_RULES] });
   await cmdFinish(c, "moroine/agent-forge", "cli", false);

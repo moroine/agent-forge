@@ -215,6 +215,22 @@ test("closeBareTab closes a bare tab only", async () => {
   assert.ok(!has(none, "tab close"));
 });
 
+test("closeBareTab on a split tab closes it only when every pane is a bare shell", async () => {
+  const split = (second: string[]) => fakeContext({ rules: [
+    ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"]), panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t1"]),
+    fg("w1:p1", ["-zsh"]), fg("w1:p2", second),
+  ] });
+  const live = split(["forge", "attach", "agent-x", "cli"]);
+  await closeBareTab(live, h, T);
+  assert.ok(!has(live, "tab close"));
+  const busy = split(["vim", "x"]);
+  await closeBareTab(busy, h, T);
+  assert.ok(!has(busy, "tab close"));
+  const shells = split(["bash"]);
+  await closeBareTab(shells, h, T);
+  assert.equal(herdrCalls(shells).at(-1), "tab close w1:t1");
+});
+
 test("runTask outside herdr makes no herdr call", async () => {
   const c = fakeContext();
   assert.equal(await runTask(c, T), 0);
