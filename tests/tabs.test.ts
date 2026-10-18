@@ -299,6 +299,42 @@ const oneRepo = (...extra: ExecRule[]): ExecRule[] => [
 ];
 const runsOf = (c: { calls: string[][] }) => herdrCalls(c).filter((l) => l.startsWith("pane run"));
 
+// A workspace the host does not see (gone, or another home than at
+// provisioning) says nothing about the tasks: the container decides.
+test("resumeAll starts a stopped container whose workspace the host does not see", async () => {
+  const c = fakeContext({ rules: stoppedRepo("agent-v",
+    ws(["w2", "o/s"]), tabs(["w2:t1", "x", "w2"]), panes(["w2:p1", "w2:t1"]), fg("w2:p1", ["-zsh"]),
+  ) });
+  await resumeAll(c, h);
+  assert.ok(started(c, "agent-v"));
+  assert.deepEqual(c.out_lines, ["o/s x: resumed"]);
+});
+
+test("resumeAll leaves a stopped container stopped when its workspace has no .trees", async () => {
+  mkdirSync(join(workspaces, "agent-w"), { recursive: true });
+  const c = fakeContext({ rules: stoppedRepo("agent-w",
+    ws(["w2", "o/s"]), tabs(["w2:t1", "x", "w2"]), panes(["w2:p1", "w2:t1"]), fg("w2:p1", ["-zsh"]),
+  ) });
+  await resumeAll(c, h);
+  assert.ok(!started(c, "agent-w"));
+  assert.deepEqual(c.out_lines, ["no forge tab to resume."]);
+});
+
+// herdr may have typed the attach and still answered an error: a duplicate
+// tab is then never typed into (fail closed, one agent per worktree).
+test("resumeAll never types into a duplicate tab after a failed pane run", async () => {
+  const c = fakeContext({ rules: [
+    { match: "/h/herdr pane run w1:p1", code: 1, stderr: "timeout\n" },
+    ...oneRepo(
+      ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"], ["w1:t2", "cli", "w1"]),
+      panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t2"]), fg("w1:p1", ["-zsh"]), fg("w1:p2", ["-zsh"]),
+    ),
+  ] });
+  await resumeAll(c, h);
+  assert.deepEqual(c.out_lines, ["o/r cli: skipped (herdr pane run failed: timeout)", "o/r cli: skipped (duplicate tab)"]);
+  assert.deepEqual(runsOf(c), [`pane run w1:p1 ${attachCommand("agent-r", "cli")}`]);
+});
+
 // One tab that herdr refuses must not cost the others their agent.
 test("resumeAll reports a tab herdr fails on and goes on with the next", async () => {
   const c = fakeContext({ rules: [

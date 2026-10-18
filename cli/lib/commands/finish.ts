@@ -9,7 +9,7 @@ import { herdrEnv } from "../herdr.ts";
 import { closeBareTab } from "../tabs.ts";
 import { execAsAgent } from "../incus.ts";
 import { worktreeAbsPath, worktreeExists } from "../worktrees.ts";
-import { setTranscriptsAside, stopAgent } from "../session.ts";
+import { ensureRunning, setTranscriptsAside, stopAgent } from "../session.ts";
 import { checkWorktree } from "../wip.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
@@ -24,6 +24,9 @@ export async function cmdFinish(
   const ownerRepo = await resolveRepo(ctx, repo, USAGE);
   validateRepo(ownerRepo);
   const container = await requireContainerForRepo(ctx, ownerRepo);
+  // Comme attach et resume : le menu des tâches et le worktree sont dans le
+  // container. Le démarrer ne relance aucun agent.
+  await ensureRunning(ctx, container);
 
   const taskName = await resolveTask(ctx, container, task, USAGE);
   validateTaskName(taskName);
