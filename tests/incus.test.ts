@@ -116,7 +116,6 @@ test("attachArgv runs the agent command directly under incus exec", () => {
   ]);
   // Invariant du commit c34a145 : aucun `su` entre incus exec et l'agent.
   assert.ok(!argv.includes("su"));
-  assert.ok(!argv.includes("tmux"));
 });
 
 test("the fake incus answers the transport, project included", async () => {

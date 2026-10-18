@@ -8,12 +8,13 @@ import { join } from "node:path";
 import type { Context, ExecResult } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
-import { checkNameCollision, forgeRepos, isRunning } from "../containers.ts";
+import { checkNameCollision, containerRepo, forgeRepos, isRunning } from "../containers.ts";
 import { hasOriginDevice, refreshMirror } from "../mirror.ts";
 import { mirrorPath, workspacesDir } from "../paths.ts";
-import { attachTask } from "../session.ts";
+import { claudeSlug } from "../session.ts";
+import { runTask } from "../tabs.ts";
 import { execAsAgent, instanceExists, startInstance } from "../incus.ts";
-import { agentBranches, branchExists, taskNames } from "../worktrees.ts";
+import { agentBranches, branchExists, taskNames, worktreeAbsPath } from "../worktrees.ts";
 import { egressAfterStart, egressBeforeStart, egressMode } from "../strict.ts";
 import { provisionContainer } from "./provision.ts";
 
@@ -85,7 +86,7 @@ export async function cmdStart(
   await egressAfterStart(ctx, container, egress);
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
-  return attachTask(ctx, container, taskName);
+  return runTask(ctx, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
 }
 
 // Comme resolveRepo, mais avec une entrée de plus : `forge start` est la seule
@@ -224,6 +225,18 @@ async function addWorktree(ctx: Context, container: string, task: string, ref: s
   if ((await execAsAgent(ctx, container, `test -e /workspace/.trees/${task}`)).code === 0) {
     ctx.out(`Worktree .trees/${task} is already there — attaching to it.`);
     return;
+  }
+
+  // Claude Code range les conversations par chemin de worktree, tout
+  // caractère hors [A-Za-z0-9] devenant « - » : `fix.v2` et `fix-v2`
+  // partageraient un même dossier, donc une même conversation.
+  const slug = claudeSlug(worktreeAbsPath(task));
+  for (const other of await taskNames(ctx, container)) {
+    if (other !== task && claudeSlug(worktreeAbsPath(other)) === slug) {
+      throw new ForgeError(
+        `task '${task}' would share Claude's transcript folder with '${other}' ` +
+        `(Claude Code maps both to ${slug}); pick another name.`);
+    }
   }
 
   if (ref) {
