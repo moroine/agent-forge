@@ -15,12 +15,16 @@
 // build`); when there is none, they are skipped with a message.
 import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, rmSync, statSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
 import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
+import { createContext } from "../../cli/lib/context.ts";
+import { cloneWorkspace, refreshMirror, MIRROR_MOUNT, ORIGIN_DEVICE } from "../../cli/lib/mirror.ts";
+import { mirrorPath } from "../../cli/lib/paths.ts";
+import { HOSTILE_HOOKS, hookScript, hostileConfig } from "../lib/hostile-repo.ts";
 import {
-  ENABLED, PREFIX, SENTINEL, asAgent, copyImage, forge as forgeIn, incus, launch, must, raw, run, teardownProject,
+  ENABLED, FORGE, PREFIX, SENTINEL, asAgent, copyImage, forge as forgeIn, incus, launch, must, raw, run, teardownProject,
   throwawayXdg,
 } from "./lib.ts";
 
@@ -216,4 +220,96 @@ test("restricted project: setup drops raw.lxc, and an instance runs with its wor
   must("add the workspace disk", incus(RESTRICTED, ["config", "device", "add", name, "workspace", "disk", `source=${dir}`, "path=/workspace"]));
   must("write in /workspace as aiuser", asAgent(RESTRICTED, name, "touch /workspace/probe"));
   assert.equal(statSync(join(dir, "probe")).uid, uid);
+});
+
+// POSIX single quoting, safe for any value.
+const sq = (s: string): string => `'${s.replaceAll("'", "'\\''")}'`;
+// Host git for fixtures, with an identity and no signing.
+const hostGit = (args: string[], cwd?: string) =>
+  must(`git ${args.join(" ")}`, run("git", ["-c", "user.name=t", "-c", "user.email=t@example.com",
+    "-c", "commit.gpgsign=false", ...(cwd ? ["-C", cwd] : []), ...args]));
+
+test("mirror: mounted read-only and locked", { skip: !ENABLED }, (t) => {
+  if (!c1) return t.skip("no container");
+  const bare = join(workspaces, "mirror-ro.git");
+  hostGit(["init", "-q", "--bare", bare]);
+  must("add the origin device", incus(PROJECT, ["config", "device", "add", c1, ORIGIN_DEVICE, "disk",
+    `source=${bare}`, `path=${MIRROR_MOUNT}`, "readonly=true"]));
+  const before = readdirSync(bare).sort();
+  // Positive control: the mount is there and readable.
+  must("the mount is readable", asAgent(PROJECT, c1, `ls ${MIRROR_MOUNT}/HEAD`));
+  const touch = asAgent(PROJECT, c1, `touch ${MIRROR_MOUNT}/x`);
+  assert.notEqual(touch.status, 0, raw("touch in the mirror succeeded", touch));
+  const remount = incus(PROJECT, ["exec", c1, "--", "mount", "-o", "remount,rw", MIRROR_MOUNT]);
+  assert.notEqual(remount.status, 0, raw("remount rw succeeded", remount));
+  assert.deepEqual(readdirSync(bare).sort(), before, "the host directory changed");
+});
+
+test("hostile workspace: refresh and retrieval run nothing the agent planted", { skip: !ENABLED }, async (t) => {
+  if (!haveImage) return t.skip("no agent-base");
+  const id = Math.random().toString(36).slice(2, 8);
+  const c = `${PREFIX}${id}-g`;
+  launch(PROJECT, c);
+  process.env.FORGE_INCUS_PROJECT = PROJECT;
+  process.env.FORGE_MIRRORS = join(workspaces, "mirrors");
+  const ctx = createContext();
+  const marker = join(workspaces, "HOST-MARKER");
+  const canary = join(workspaces, "CANARY");
+  writeFileSync(canary, "canary-content\n");
+
+  // A stand-in "GitHub" with one commit, cloned bare as the mirror, whose
+  // origin then points at a GitHub URL the test VM has no key for.
+  const standIn = join(workspaces, "standin");
+  mkdirSync(standIn);
+  hostGit(["init", "-q", "-b", "main", "."], standIn);
+  hostGit(["commit", "-q", "--allow-empty", "-m", "seed"], standIn);
+  const mirror = mirrorPath(c);
+  mkdirSync(join(workspaces, "mirrors"), { recursive: true });
+  hostGit(["clone", "-q", "--bare", standIn, mirror]);
+  hostGit(["--git-dir", mirror, "remote", "set-url", "origin", "git@github.com:forge-selftest/throwaway.git"]);
+
+  const ws = join(workspaces, "hostile");
+  mkdirSync(ws);
+  must("add origin", incus(PROJECT, ["config", "device", "add", c, ORIGIN_DEVICE, "disk",
+    `source=${mirror}`, `path=${MIRROR_MOUNT}`, "readonly=true"]));
+  must("add workspace", incus(PROJECT, ["config", "device", "add", c, "workspace", "disk", `source=${ws}`, "path=/workspace"]));
+  const cloned = await cloneWorkspace(ctx, c);
+  assert.equal(cloned.code, 0, raw("cloneWorkspace", { status: cloned.code, stdout: cloned.stdout, stderr: cloned.stderr }));
+
+  // The agent's side: a branch with a commit to retrieve, then the traps.
+  must("agent commit", asAgent(PROJECT, c,
+    "cd /workspace && git checkout -q -b agent/t && " +
+    "git -c user.name=t -c user.email=t@example.com -c commit.gpgsign=false commit -q --allow-empty -m agent-work"));
+  for (const [key, value] of hostileConfig(marker)) {
+    must(`plant ${key}`, asAgent(PROJECT, c, `git -C /workspace config ${sq(key)} ${sq(value)}`));
+  }
+  for (const hook of HOSTILE_HOOKS) {
+    const file = `/workspace/.git/hooks/${hook}`;
+    must(`plant hook ${hook}`, asAgent(PROJECT, c,
+      `printf %s ${sq(hookScript(marker))} > ${sq(file)} && chmod 755 ${sq(file)}`));
+  }
+  must("plant FETCH_HEAD", asAgent(PROJECT, c, `ln -sf ${sq(canary)} /workspace/.git/FETCH_HEAD`));
+
+  // Positive control: the traps are in place, so a run of them would be possible.
+  const planted = must("read back a planted key", asAgent(PROJECT, c, "git -C /workspace config core.fsmonitor"));
+  assert.ok(planted.stdout.includes(marker), raw("the planted command is not in the config", planted));
+
+  // The host's refresh fails (no GitHub key here); only its effects count.
+  const refreshed = await refreshMirror(ctx, mirror, SENTINEL);
+  assert.notEqual(refreshed.code, 0, "the refresh was expected to fail without a GitHub key");
+  asAgent(PROJECT, c, "git -C /workspace fetch origin");
+
+  // Retrieval through the real forge, from a clean client.
+  const client = mkdtempSync(join(workspaces, "client-"));
+  const emptyRemote = mkdtempSync(join(workspaces, "remote-"));
+  hostGit(["init", "-q", "."], client);
+  hostGit(["remote", "add", c, emptyRemote], client);
+  hostGit(["config", `remote.${c}.uploadpack`, `${FORGE} upload-pack ${c}`], client);
+  const fetched = run("git", ["-C", client, "fetch", c], { env: { FORGE_INCUS_PROJECT: PROJECT } });
+  must("client fetch", fetched);
+  const branch = hostGit(["branch", "-r", "--list", `${c}/agent/t`], client).stdout;
+  assert.match(branch, new RegExp(`${c}/agent/t`), raw("the agent's branch did not arrive", fetched));
+
+  assert.equal(existsSync(marker), false, "a planted command ran on the host");
+  assert.equal(readFileSync(canary, "utf8"), "canary-content\n", "CANARY changed");
 });
