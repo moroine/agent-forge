@@ -1,6 +1,8 @@
 // Runs a task's agent where the user is. Outside herdr this is the plain
 // foreground attach; inside herdr the task gets a tab in its repo's workspace.
 // This module imports session.ts, never the reverse.
+import { readdirSync } from "node:fs";
+import { join } from "node:path";
 import type { Context } from "./context.ts";
 import { ForgeError } from "./context.ts";
 import { AGENT } from "./agent.ts";
@@ -9,8 +11,8 @@ import {
   listTabs, listWorkspaces, paneForeground, paneRun, renameTab,
   type HerdrEnv, type Pane, type PaneState, type Tab, type Workspace,
 } from "./herdr.ts";
-import { containerRepo, listForgeContainers } from "./containers.ts";
-import { forgeCommand, forgeHome } from "./paths.ts";
+import { containerRepo, isRunning, listForgeContainers } from "./containers.ts";
+import { forgeCommand, forgeHome, workspacesDir } from "./paths.ts";
 import { attachTask, ensureRunning } from "./session.ts";
 import { shellQuote } from "./shell.ts";
 import { runningTasks, taskNames } from "./worktrees.ts";
@@ -107,6 +109,17 @@ async function tabState(
   return states.includes("live") ? "live" : (states[0] ?? "busy");
 }
 
+// The task directories the host sees in ~/workspaces/<c>/.trees, listed
+// without the container. The host lists the workspace, never runs git in it
+// (mirror.ts). null when the host cannot read them: the container answers.
+function hostTaskDirs(container: string): Set<string> | null {
+  try {
+    return new Set(readdirSync(join(workspacesDir(), container, ".trees")));
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code === "ENOENT" ? new Set() : null;
+  }
+}
+
 // Relaunches the agent in every forge tab a herdr restart left as a bare shell
 // (spec: "Resume after a herdr server restart or a VM reboot").
 export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
@@ -135,6 +148,12 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
     const { container, repo } = known;
     let run = probed.get(container);
     if (!run) {
+      // A stopped container is started only for a tab that may be one of its
+      // tasks; the worktree list itself still comes from the container.
+      if (!(await isRunning(ctx, container))) {
+        const dirs = hostTaskDirs(container);
+        if (dirs && !wsTabs.some((t) => dirs.has(t.label))) continue;
+      }
       try {
         await ensureRunning(ctx, container);
       } catch (e) {
