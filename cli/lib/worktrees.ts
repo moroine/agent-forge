@@ -87,8 +87,20 @@ export async function branchExists(ctx: Context, container: string, ref: string)
   return r.code === 0;
 }
 
-// Sonde : un `ps` en échec (container qui s'arrête) donne « rien ne tourne ».
-export async function runningTasks(ctx: Context, container: string): Promise<Set<string>> {
+export type RunningProbe = { ok: true; tasks: Set<string> } | { ok: false; error: string };
+
+// Sonde qui rapporte son échec : c'est sur elle que repose le refus d'un second
+// agent (attachTask), qui doit échouer fermé. `ps` tourne en uid 1001 et se
+// liste lui-même : un code non nul est une vraie panne, pas « rien ne tourne ».
+export async function probeRunningTasks(ctx: Context, container: string): Promise<RunningProbe> {
   const r = await execAsAgentArgv(ctx, container, ["ps", "-u", "1001", "-o", "args="]);
-  return parseRunningTasks(r.code === 0 ? r.stdout : "", container);
+  if (r.code !== 0) return { ok: false, error: `ps failed: ${r.stderr.trim() || `exit code ${r.code}`}` };
+  return { ok: true, tasks: parseRunningTasks(r.stdout, container) };
+}
+
+// Pour l'affichage seulement (forge list) : un `ps` en échec (container qui
+// s'arrête) donne « rien ne tourne ».
+export async function runningTasks(ctx: Context, container: string): Promise<Set<string>> {
+  const probe = await probeRunningTasks(ctx, container);
+  return probe.ok ? probe.tasks : new Set();
 }

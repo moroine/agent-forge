@@ -91,6 +91,38 @@ test("attachTask adds --continue only when a conversation exists", async () => {
   assert.ok(again.attachCalls[0].argv.at(-1)?.endsWith(" --continue"));
 });
 
+// One agent per worktree: the guard sits in attachTask, under every caller.
+const PS_CLI = { match: "ps -u 1001 -o args=", stdout: "claude --permission-mode auto --remote-control agent-x-cli\n" };
+
+test("attachTask refuses when the task's agent already runs, before attaching", async () => {
+  const c = fakeContext({ rules: [PS_CLI] });
+  await assert.rejects(attachTask(c, "agent-x", "cli", "o/r"), (e: Error) => e.message ===
+    "the agent for cli already runs in agent-x (in a herdr tab, or another terminal): " +
+    "attach to it there, or stop it first with 'forge stop o/r'.");
+  assert.equal(c.attachCalls.length, 0);
+});
+
+test("attachTask without the repo words the way out without it", async () => {
+  const c = fakeContext({ rules: [PS_CLI] });
+  await assert.rejects(attachTask(c, "agent-x", "cli"), (e: Error) => e.message ===
+    "the agent for cli already runs in agent-x (in a herdr tab, or another terminal): " +
+    "attach to it there, or stop the container first with 'forge stop'.");
+  assert.equal(c.attachCalls.length, 0);
+});
+
+test("attachTask ignores another task's agent", async () => {
+  const c = fakeContext({ rules: [{ match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-x-cli-2\n" }] });
+  assert.equal(await attachTask(c, "agent-x", "cli", "o/r"), 0);
+  assert.equal(c.attachCalls.length, 1);
+});
+
+test("attachTask fails closed when the probe fails", async () => {
+  const c = fakeContext({ rules: [{ match: "ps -u 1001", code: 1, stderr: "boom" }] });
+  await assert.rejects(attachTask(c, "agent-x", "cli", "o/r"), (e: Error) =>
+    e.message === "cannot check whether the agent for cli already runs in agent-x: ps failed: boom");
+  assert.equal(c.attachCalls.length, 0);
+});
+
 test("finishedStamp is the UTC time without separators or milliseconds", () => {
   assert.equal(finishedStamp(new Date("2026-10-18T09:05:03.456Z")), "20261018T090503Z");
 });

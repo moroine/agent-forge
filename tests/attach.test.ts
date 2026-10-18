@@ -40,6 +40,17 @@ test("the agent's exit code is returned", async () => {
   assert.equal(c.attachCalls.length, 1);
 });
 
+test("a second agent for the task is refused, naming the stored repo", async () => {
+  const c = fakeContext({ rules: [
+    { match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-x-cli --continue\n" },
+    ...BASE, { match: "test -e", code: 0 },
+  ] });
+  await assert.rejects(cmdAttach(c, "agent-x", "cli"), (e: Error) => e.message ===
+    "the agent for cli already runs in agent-x (in a herdr tab, or another terminal): " +
+    "attach to it there, or stop it first with 'forge stop moroine/x'.");
+  assert.equal(c.attachCalls.length, 0);
+});
+
 test("a stopped container is started first", async () => {
   const c = fakeContext({
     rules: [{ match: "agent-x user.forge.repo", stdout: "moroine/x" }, { match: "list", stdout: STOPPED }, { match: "test -e", code: 0 }],
