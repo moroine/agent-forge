@@ -69,8 +69,9 @@ export async function cmdStart(
   }
 
   // Avant le menu, pas après : les branches d'origin qu'il propose doivent
-  // être à jour.
-  await refreshMain(ctx, container, ownerRepo, { mirror: !justCreated });
+  // être à jour. L'URL du miroir vient du repo enregistré (user.forge.repo),
+  // pas de l'argument tel que tapé.
+  await refreshMain(ctx, container, await containerRepo(ctx, container), { mirror: !justCreated });
 
   if (!taskName) {
     const choice = await pickStartTask(ctx, container);
