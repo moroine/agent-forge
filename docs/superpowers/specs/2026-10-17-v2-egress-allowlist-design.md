@@ -179,9 +179,8 @@ Active:
 | Entry | Why |
 |---|---|
 | `api.anthropic.com` | API, Remote Control, feature flags, WebFetch's domain check |
-| `platform.claude.com` | OAuth token exchange and refresh, claude.ai accounts included |
-| `claude.ai` | Account authentication |
-| `downloads.claude.ai` | Anthropic's apt repository (Claude Code refresh at provisioning) |
+| `platform.claude.com` | OAuth token refresh, claude.ai accounts included |
+| `downloads.claude.ai` | Anthropic's apt repository (Claude Code refresh at provisioning) and Claude Code's update check |
 
 Shipped commented, grouped, each group with a warning where it applies:
 
@@ -190,14 +189,17 @@ Shipped commented, grouped, each group with a warning where it applies:
 | GitHub | `github.com`, `codeload.github.com`, `objects.githubusercontent.com`, `raw.githubusercontent.com` | Needed for the superpowers plugin. Anyone can publish there (repos, gists, releases): a hijacked agent can fetch from, and with a token push to, any of it |
 | npm | `registry.npmjs.org` | With a token, `npm publish` is an exfiltration channel |
 | PyPI | `pypi.org`, `files.pythonhosted.org` | Same remark for uploads |
+| claude.ai connectors | `mcp-proxy.anthropic.com` | The MCP servers configured on the claude.ai account (mail, drive, chat...) go through it. Claude Code works without it and shows it refused in `forge egress log`; allowing it hands a hijacked agent every service those connectors reach |
 | Docker Hub | `registry-1.docker.io`, `auth.docker.io`, `production.cloudflare.docker.com`, `docker-images-prod.s3.dualstack.us-east-1.amazonaws.com` | Same remark for pushes. The registry redirects image layers to a storage host (the last entry, seen in a real pull); when a pull is still refused, check `forge egress log` for the host it tried |
 | Claude telemetry | `http-intake.logs.us5.datadoghq.com`, `browser-intake-us5-datadoghq.com` | Optional: Claude Code works without them |
 
 The Anthropic list comes from Claude Code's documentation (network
-configuration, data usage, Remote Control requirements). Whether `claude.ai`
-is contacted at runtime with a copied credentials file is unconfirmed; the
-manual acceptance check (see "Testing") settles it, and the default list is
-trimmed or completed from what `forge egress log` shows there.
+configuration, data usage, Remote Control requirements), checked against a
+real session in the manual acceptance (see "Testing", 2026-10-18): with a
+copied credentials file, Claude Code never contacts `claude.ai` (the login
+happens on the host), so it is not in the list; `platform.claude.com` is
+contacted exactly when the token is refreshed; `downloads.claude.ai` at
+provisioning and at each start (update check).
 
 ## The proxy
 
@@ -309,7 +311,7 @@ devices:
 Report lines, in the existing style: `network acl forge-proxy: created`,
 `network acl forge-egress-strict: created`, `profile forge-proxy: created`,
 `instance forge-proxy: created`, `allowlist: created (default list)` /
-`allowlist: 4 entries` / `allowlist: empty (strict containers reach nothing)`.
+`allowlist: 3 entries` / `allowlist: empty (strict containers reach nothing)`.
 
 When the creation fails (no network, apt error), `forge setup` stops naming the
 step and leaves the incomplete instance for debugging; the next run replaces it
@@ -626,7 +628,10 @@ Not built in v2.0; recorded so B does not need a restructure.
   the automated suite): a strict container with the default list runs Claude
   Code (a prompt, Remote Control registration, WebFetch to an allowed and to a
   refused domain); `forge egress log` records which Anthropic hosts were used;
-  the default list is adjusted to match. Result recorded in the PR.
+  the default list is adjusted to match. Result recorded in the PR. Done on
+  2026-10-18 (Claude Code 2.1.292, Incus 7.0.1 under the test override): all
+  four checks passed, again after removing `claude.ai` and forcing a token
+  refresh; `claude.ai` was never contacted, so it left the list.
 
 ## Known limits (documented for the user)
 

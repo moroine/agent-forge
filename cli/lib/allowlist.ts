@@ -15,11 +15,17 @@ export const DEFAULT_ALLOWLIST = `# agent-forge egress allowlist: the only domai
 # The list applies to every strict container. Changes take effect at the next
 # \`forge setup\`. An empty list is valid: strict containers then reach nothing.
 
-# Anthropic: Claude Code needs these.
+# Anthropic: Claude Code needs these. claude.ai does not belong here: the
+# login happens on the host, and Claude Code never contacts it afterwards.
 api.anthropic.com      # API, Remote Control, feature flags, WebFetch's domain check
-platform.claude.com    # OAuth token exchange and refresh
-claude.ai              # account authentication
-downloads.claude.ai    # Claude Code's apt repository (refresh at provisioning)
+platform.claude.com    # OAuth token refresh
+downloads.claude.ai    # Claude Code's apt repository (refresh at provisioning) and update check
+
+# claude.ai connectors: the MCP servers configured on your claude.ai account
+# (mail, drive, chat...) go through this host. Claude Code works without it and
+# shows it refused in \`forge egress log\`. Allowing it hands a hijacked agent
+# every service those connectors reach.
+#mcp-proxy.anthropic.com
 
 # GitHub: the superpowers plugin needs it. Anyone can publish there (repos,
 # gists, releases): a hijacked agent can fetch from all of it, and push to it
