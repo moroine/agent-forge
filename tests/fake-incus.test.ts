@@ -148,6 +148,14 @@ test("device override copies the profile device; set needs a local device; remov
   assert.equal(dev("remove", "c1", "eth0").code, 1);
 });
 
+test("config unset of an absent key fails like real Incus", () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  const r = fake.run([...P, "config", "unset", "c1", "nope"]);
+  assert.equal(r.code, 1);
+  assert.equal(r.stderr.trim(), "Error: Can't unset key 'nope', it's not currently set");
+});
+
 test("config set takes several key=value pairs, unset removes a key", () => {
   const fake = FakeIncus.withRuntime();
   fake.addInstance("agent-forge", "c1");

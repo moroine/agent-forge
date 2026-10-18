@@ -102,8 +102,9 @@ const configHash = (conf: string, allowlist: string) =>
 // Pushes both files, then `squid -k parse`: a failure stops with squid's own
 // message and leaves the running configuration untouched. The loaded-config
 // key is unset first, so a failure after this point is retried next run.
-async function pushConfig(ctx: Context, conf: string, allowlist: string): Promise<void> {
-  await mustSucceed("unset proxy_config", configUnset(ctx, PROXY_INSTANCE, CONFIG_KEY));
+// Incus refuses to unset an absent key: the caller says whether it is set.
+async function pushConfig(ctx: Context, conf: string, allowlist: string, unsetLoaded: boolean): Promise<void> {
+  if (unsetLoaded) await mustSucceed("unset proxy_config", configUnset(ctx, PROXY_INSTANCE, CONFIG_KEY));
   const owner = { uid: 0, gid: 0, mode: "644" };
   await mustSucceed(`push ${SQUID_CONF}`, pushText(ctx, PROXY_INSTANCE, SQUID_CONF, conf, owner));
   await mustSucceed(`push ${SQUID_ALLOWLIST}`, pushText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST, allowlist, owner));
@@ -121,7 +122,7 @@ async function create(ctx: Context, plan: ProxyPlan, conf: string, allowlist: st
     const owner = { uid: 0, gid: 0, mode: "644" };
     await mustSucceed(`push ${AUTO_UPGRADES}`, pushText(ctx, PROXY_INSTANCE, AUTO_UPGRADES, AUTO_UPGRADES_TEXT, owner));
     await mustSucceed(`push ${KEEP_CONFFILES}`, pushText(ctx, PROXY_INSTANCE, KEEP_CONFFILES, KEEP_CONFFILES_TEXT, owner));
-    await pushConfig(ctx, conf, allowlist);
+    await pushConfig(ctx, conf, allowlist, false);
     await mustSucceed("enable squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "enable", "squid"]));
     await mustSucceed("restart squid", execArgv(ctx, PROXY_INSTANCE, ["systemctl", "restart", "squid"]));
     await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, configHash(conf, allowlist)));
@@ -173,7 +174,7 @@ export async function convergeProxy(
     && (await pullText(ctx, PROXY_INSTANCE, SQUID_ALLOWLIST)) === allowlist
     && inst.config[CONFIG_KEY] === hash;
   if (!same) {
-    await pushConfig(ctx, conf, allowlist);
+    await pushConfig(ctx, conf, allowlist, inst.config[CONFIG_KEY] !== undefined);
     const action = active ? ["squid", "-k", "reconfigure"] : ["systemctl", "restart", "squid"];
     await mustSucceed(action.join(" "), execArgv(ctx, PROXY_INSTANCE, action));
     await mustSucceed("record proxy_config", configSet(ctx, PROXY_INSTANCE, CONFIG_KEY, hash));

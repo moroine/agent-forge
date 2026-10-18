@@ -249,3 +249,32 @@ test("a stopped proxy is started", async () => {
   assert.ok(idx(line(ctx), " start forge-proxy") >= 0);
   assert.equal(fake.instances.get("agent-forge")!.get("forge-proxy")!.status, "Running");
 });
+
+test("creation never unsets the loaded-config key (absent on a fresh instance)", async () => {
+  const { ctx } = setup();
+  await convergeProxy(ctx, { plan, entries: ENTRIES, nic }, opts);
+  assert.ok(!line(ctx).some((c) => c.includes("config unset")));
+});
+
+test("a stamped instance without the hash key converges without an unset", async () => {
+  const fake = await converged();
+  delete fake.instances.get("agent-forge")!.get("forge-proxy")!.config["user.forge.proxy_config"];
+  const ctx = fakeContext({ incus: fake });
+  const r = await convergeProxy(ctx, { plan, entries: ENTRIES, nic }, opts);
+  assert.equal(r.outcome, "updated");
+  const calls = line(ctx);
+  assert.ok(!calls.some((c) => c.includes("config unset")));
+  assert.ok(idx(calls, "squid -k parse") >= 0 && idx(calls, "squid -k reconfigure") > idx(calls, "squid -k parse"));
+  assert.match(fake.instances.get("agent-forge")!.get("forge-proxy")!.config["user.forge.proxy_config"], /^[0-9a-f]{64}$/);
+});
+
+test("after a NIC-driven recreation the next run is unchanged", async () => {
+  const fake = await converged();
+  const profileNic = { type: "nic", network: "forgebr0", "security.acls": "forge-egress,forge-proxy" };
+  fake.addProfile("agent-forge", "forge-proxy", { devices: { eth0: profileNic } });
+  const want = { ...profileNic, "ipv4.address": plan.proxyAddress };
+  const first = await convergeProxy(fakeContext({ incus: fake }), { plan, entries: ENTRIES, nic: want }, opts);
+  assert.equal(first.outcome, "updated");
+  const second = await convergeProxy(fakeContext({ incus: fake }), { plan, entries: ENTRIES, nic: want }, opts);
+  assert.deepEqual(second, { outcome: "unchanged", previousAddress: null });
+});
