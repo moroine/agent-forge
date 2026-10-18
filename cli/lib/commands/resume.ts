@@ -6,14 +6,23 @@ import { ForgeError } from "../context.ts";
 import { ensureRunning } from "../session.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
 import { containerRepo, requireContainerForRepo } from "../containers.ts";
-import { runTask } from "../tabs.ts";
+import { herdrEnv } from "../herdr.ts";
+import { resumeAll, runTask } from "../tabs.ts";
 import { execAsAgent } from "../incus.ts";
 import { egressAfterStart, egressBeforeStart } from "../strict.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
-const USAGE = "Usage: forge resume <owner/repo> <task>";
+const USAGE = "Usage: forge resume <owner/repo> <task>\n       forge resume --all";
 
-export async function cmdResume(ctx: Context, repo?: string, task?: string): Promise<number> {
+export async function cmdResume(
+  ctx: Context, repo?: string, task?: string, all = false,
+): Promise<number> {
+  if (all) {
+    if (repo || task) throw new ForgeError(USAGE);
+    const h = herdrEnv();
+    if (!h) throw new ForgeError("resume --all only works inside herdr (prefix+shift+f).");
+    return resumeAll(ctx, h);
+  }
   const ownerRepo = await resolveRepo(ctx, repo, USAGE);
   validateRepo(ownerRepo);
   const container = await requireContainerForRepo(ctx, ownerRepo);

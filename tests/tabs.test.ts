@@ -2,7 +2,7 @@
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
-import { attachCommand, findTaskTab, openTask, runTask, shellQuote } from "../cli/lib/tabs.ts";
+import { attachCommand, closeBareTab, findTaskTab, openTask, resumeAll, runTask, shellQuote } from "../cli/lib/tabs.ts";
 
 const h = { bin: "/h/herdr", popup: false };
 const T = { container: "agent-x", ownerRepo: "o/r", task: "cli" };
@@ -138,6 +138,81 @@ test("findTaskTab returns the tab's panes", async () => {
   const r = await findTaskTab(c, h, "o/r", "cli");
   assert.equal(r.tab?.id, "w1:t1");
   assert.deepEqual(r.panes, [{ id: "w1:p1", tabId: "w1:t1" }]);
+});
+
+const wt = (...tasks: string[]) =>
+  `worktree /workspace\n${tasks.map((t) => `worktree /workspace/.trees/${t}\n`).join("")}`;
+const psOf = (container: string, stdout: string): ExecRule =>
+  ({ match: `exec ${container} --user 1001 --group 1001 --env HOME=/home/aiuser -- ps -u 1001`, stdout });
+const worktreesOf = (container: string, ...tasks: string[]): ExecRule =>
+  ({ match: `exec ${container} -- su - aiuser -c cd /workspace && git worktree list`, stdout: wt(...tasks) });
+const resumeRules = (): ExecRule[] => [
+  { match: "incus --project agent-forge list", stdout: JSON.stringify([
+    { name: "agent-r", status: "Running" }, { name: "agent-s", status: "Stopped" },
+  ]) },
+  { match: "agent-r user.forge.repo", stdout: "o/r" },
+  { match: "agent-s user.forge.repo", stdout: "o/s" },
+  worktreesOf("agent-r", "cli", "docs", "api"), worktreesOf("agent-s", "x"),
+  psOf("agent-r", "claude --remote-control agent-r-api\n"), psOf("agent-s", ""),
+  ws(["w1", "o/r"], ["w2", "O/S"], ["w3", "misc"]),
+  tabs(
+    ["w1:t1", "cli", "w1"], ["w1:t2", "docs", "w1"], ["w1:t3", "api", "w1"], ["w1:t4", "notes", "w1"],
+    ["w2:t1", "x", "w2"], ["w3:t1", "cli", "w3"],
+  ),
+  panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t2"], ["w1:p3", "w1:t3"], ["w1:p4", "w1:t4"], ["w2:p1", "w2:t1"], ["w3:p1", "w3:t1"]),
+  fg("w1:p1", ["-zsh"]), fg("w1:p2", ["forge", "attach", "agent-r", "docs"]), fg("w1:p3", ["bash"]),
+  fg("w2:p1", ["vim", "x"]),
+];
+
+test("resumeAll relaunches bare forge tabs and reports the others", async () => {
+  const c = fakeContext({ rules: resumeRules() });
+  assert.equal(await resumeAll(c, h), 0);
+  assert.deepEqual(c.out_lines, [
+    "o/r cli: resumed",
+    "o/r docs: already running",
+    "o/r api: skipped (agent runs outside this herdr)",
+    "o/s x: skipped (tab is busy)",
+  ]);
+  const runs = herdrCalls(c).filter((l) => l.startsWith("pane run"));
+  assert.deepEqual(runs, [`pane run w1:p1 ${attachCommand("agent-r", "cli")}`]);
+  // a stopped container is started before its tasks are listed
+  const start = c.calls.findIndex((a) => a.join(" ").includes("incus --project agent-forge start agent-s"));
+  const list = c.calls.findIndex((a) => a.join(" ").includes("exec agent-s -- su - aiuser -c cd /workspace"));
+  assert.ok(start >= 0 && start < list, `order: ${start} ${list}`);
+  // the non-forge workspace and the non-task tab are never inspected
+  assert.ok(!has(c, "pane process-info --pane w3:p1"));
+  assert.ok(!has(c, "pane process-info --pane w1:p4"));
+});
+
+test("resumeAll says so when nothing is to resume", async () => {
+  const c = fakeContext({ rules: [...resumeRules().slice(0, 2), ws(["w3", "misc"]), tabs(), panes()] });
+  assert.equal(await resumeAll(c, h), 0);
+  assert.deepEqual(c.out_lines, ["no forge tab to resume."]);
+});
+
+test("resumeAll reports a container that does not start and goes on", async () => {
+  const c = fakeContext({ rules: [
+    { match: "incus --project agent-forge start agent-s", code: 1, stderr: "Error: no space" },
+    ...resumeRules(),
+  ] });
+  await resumeAll(c, h);
+  assert.ok(c.out_lines.includes("o/s: skipped (container did not start: incus start failed: Error: no space)"),
+    c.out_lines.join(" | "));
+  assert.ok(c.out_lines.includes("o/r cli: resumed"));
+});
+
+test("closeBareTab closes a bare tab only", async () => {
+  const bare = fakeContext({ rules: [ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"]), panes(["w1:p1", "w1:t1"]), fg("w1:p1", ["-zsh"])] });
+  await closeBareTab(bare, h, T);
+  assert.equal(herdrCalls(bare).at(-1), "tab close w1:t1");
+  for (const argv of [["forge", "attach", "agent-x", "cli"], ["vim", "x"]]) {
+    const c = fakeContext({ rules: [ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"]), panes(["w1:p1", "w1:t1"]), fg("w1:p1", argv)] });
+    await closeBareTab(c, h, T);
+    assert.ok(!has(c, "tab close"));
+  }
+  const none = fakeContext({ rules: [ws(["w1", "o/r"]), tabs(), panes()] });
+  await closeBareTab(none, h, T);
+  assert.ok(!has(none, "tab close"));
 });
 
 test("runTask outside herdr makes no herdr call", async () => {

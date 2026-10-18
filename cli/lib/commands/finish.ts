@@ -4,7 +4,9 @@
 import type { Context } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { validateRepo, validateTaskName } from "../validate.ts";
-import { requireContainerForRepo } from "../containers.ts";
+import { containerRepo, requireContainerForRepo } from "../containers.ts";
+import { herdrEnv } from "../herdr.ts";
+import { closeBareTab } from "../tabs.ts";
 import { execAsAgent } from "../incus.ts";
 import { worktreeAbsPath } from "../worktrees.ts";
 import { setTranscriptsAside, stopAgent } from "../session.ts";
@@ -43,6 +45,11 @@ export async function cmdFinish(
 
   // Une tâche réutilisée repart d'une conversation neuve.
   await setTranscriptsAside(ctx, container, taskName);
+
+  // Dans herdr, l'onglet de la tâche n'a plus de raison d'être s'il est
+  // retombé sur un shell nu.
+  const h = herdrEnv();
+  if (h) await closeBareTab(ctx, h, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
 
   ctx.out(`Finished task ${taskName} (branch agent/${taskName} retained).`);
   return 0;

@@ -197,3 +197,60 @@ test("resume of a container switched to open clears forge's files before attachi
   const rm = l.findIndex((x) => x.includes("rm -f"));
   assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("exec claude")), l.join("\n"));
 });
+
+test("resume --all outside herdr is refused", async () => {
+  const c = fakeContext();
+  await assert.rejects(() => cmdResume(c, undefined, undefined, true), /resume --all only works inside herdr/);
+});
+
+test("resume --all with a repo or a task is a usage error", async () => {
+  process.env.HERDR_ENV = "1";
+  process.env.HERDR_BIN_PATH = "/h/herdr";
+  try {
+    const c = fakeContext();
+    await assert.rejects(() => cmdResume(c, "moroine/agent-forge", undefined, true), /Usage: forge resume/);
+    await assert.rejects(() => cmdResume(c, undefined, "cli", true), /Usage: forge resume/);
+  } finally {
+    delete process.env.HERDR_ENV;
+    delete process.env.HERDR_BIN_PATH;
+  }
+});
+
+const j = (result: unknown) => JSON.stringify({ id: "x", result });
+const HERDR_RULES = (fgArgv: string[]) => [
+  { match: "/h/herdr workspace list", stdout: j({ workspaces: [{ workspace_id: "w1", label: "moroine/agent-forge" }] }) },
+  { match: "/h/herdr tab list", stdout: j({ tabs: [{ tab_id: "w1:t1", label: "cli", workspace_id: "w1" }] }) },
+  { match: "/h/herdr pane list", stdout: j({ panes: [{ pane_id: "w1:p1", tab_id: "w1:t1" }] }) },
+  { match: "/h/herdr pane process-info", stdout: j({ process_info: { foreground_processes: [{ argv: fgArgv }] } }) },
+];
+
+async function finishInHerdr(fgArgv: string[]) {
+  process.env.HERDR_ENV = "1";
+  process.env.HERDR_BIN_PATH = "/h/herdr";
+  try {
+    const c = fakeContext({ rules: [...HERDR_RULES(fgArgv), ...FINISH_RULES] });
+    await cmdFinish(c, "moroine/agent-forge", "cli", false);
+    return c;
+  } finally {
+    delete process.env.HERDR_ENV;
+    delete process.env.HERDR_BIN_PATH;
+  }
+}
+
+test("finish closes the task's tab when it is a bare shell, inside herdr", async () => {
+  const c = await finishInHerdr(["-zsh"]);
+  const aside = c.calls.findIndex((call) => call.includes("sh") && call.join(" ").includes(".finished-"));
+  const close = c.calls.findIndex((call) => call.join(" ").includes("/h/herdr tab close w1:t1"));
+  assert.ok(aside >= 0 && close > aside, `order: ${aside} ${close}`);
+});
+
+test("finish leaves a live tab open", async () => {
+  const c = await finishInHerdr(["forge", "attach", "agent-moroine-agent-forge", "cli"]);
+  assert.ok(!c.calls.some((call) => call.join(" ").includes("tab close")));
+});
+
+test("finish makes no herdr call outside herdr", async () => {
+  const c = fakeContext({ rules: [...HERDR_RULES(["-zsh"]), ...FINISH_RULES] });
+  await cmdFinish(c, "moroine/agent-forge", "cli", false);
+  assert.ok(!c.calls.some((call) => call.join(" ").includes("herdr")));
+});

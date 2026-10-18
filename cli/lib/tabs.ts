@@ -5,13 +5,14 @@ import type { Context } from "./context.ts";
 import { ForgeError } from "./context.ts";
 import { AGENT } from "./agent.ts";
 import {
-  classifyPane, createTab, createWorkspace, focusTab, herdrEnv, listPanes,
+  classifyPane, closeTab, createTab, createWorkspace, focusTab, herdrEnv, listPanes,
   listTabs, listWorkspaces, paneForeground, paneRun, renameTab,
   type HerdrEnv, type Pane, type PaneState, type Tab, type Workspace,
 } from "./herdr.ts";
+import { containerRepo, listForgeContainers } from "./containers.ts";
 import { forgeCommand, forgeHome } from "./paths.ts";
-import { attachTask } from "./session.ts";
-import { runningTasks } from "./worktrees.ts";
+import { attachTask, ensureRunning } from "./session.ts";
+import { runningTasks, taskNames } from "./worktrees.ts";
 
 export type TaskRef = {
   container: string;
@@ -98,6 +99,69 @@ export async function openTask(ctx: Context, h: HerdrEnv, t: TaskRef): Promise<n
   }
   ctx.err(`Opened ${label} in herdr.`);
   return 0;
+}
+
+// A tab's state: live if any pane runs the attach, otherwise the first pane's.
+async function tabState(
+  ctx: Context, h: HerdrEnv, panes: Pane[], container: string, task: string,
+): Promise<PaneState> {
+  const states: PaneState[] = [];
+  for (const p of panes) states.push(classifyPane(await paneForeground(ctx, h, p.id), container, task));
+  return states.includes("live") ? "live" : (states[0] ?? "busy");
+}
+
+// Relaunches the agent in every forge tab a herdr restart left as a bare shell
+// (spec: "Resume after a herdr server restart or a VM reboot").
+export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
+  // Workspaces compare case-insensitively; lines use the repo as stored.
+  const byRepo = new Map<string, { container: string; repo: string }>();
+  for (const container of await listForgeContainers(ctx)) {
+    const repo = await containerRepo(ctx, container);
+    if (repo) byRepo.set(repo.toLowerCase(), { container, repo });
+  }
+  const workspaces = await listWorkspaces(ctx, h);
+  const allTabs = await listTabs(ctx, h);
+  const allPanes = await listPanes(ctx, h);
+  let printed = 0;
+  const line = (s: string) => { ctx.out(s); printed++; };
+
+  for (const w of workspaces) {
+    const known = byRepo.get(w.label.toLowerCase());
+    if (!known) continue;
+    const wsTabs = allTabs.filter((t) => t.workspaceId === w.id);
+    if (wsTabs.length === 0) continue;
+    const { container, repo } = known;
+    try {
+      await ensureRunning(ctx, container);
+    } catch (e) {
+      line(`${repo}: skipped (container did not start: ${e instanceof Error ? e.message : String(e)})`);
+      continue;
+    }
+    const tasks = new Set(await taskNames(ctx, container));
+    const running = await runningTasks(ctx, container);
+    for (const tab of wsTabs) {
+      if (!tasks.has(tab.label)) continue;
+      const panes = allPanes.filter((p) => p.tabId === tab.id);
+      const state = await tabState(ctx, h, panes, container, tab.label);
+      const label = `${repo} ${tab.label}`;
+      if (state === "live") line(`${label}: already running`);
+      else if (running.has(tab.label)) line(`${label}: skipped (agent runs outside this herdr)`);
+      else if (state === "shell" && panes[0]) {
+        await paneRun(ctx, h, panes[0].id, attachCommand(container, tab.label));
+        line(`${label}: resumed`);
+      } else line(`${label}: skipped (tab is busy)`);
+    }
+  }
+  if (printed === 0) ctx.out("no forge tab to resume.");
+  return 0;
+}
+
+// Closes the task's tab when it is left as a bare shell; never a live or busy one.
+export async function closeBareTab(ctx: Context, h: HerdrEnv, t: TaskRef): Promise<void> {
+  const { tab, panes } = await findTaskTab(ctx, h, t.ownerRepo, t.task);
+  if (!tab || panes.length === 0) return;
+  const state = classifyPane(await paneForeground(ctx, h, panes[0].id), t.container, t.task);
+  if (state === "shell") await closeTab(ctx, h, tab.id);
 }
 
 export async function runTask(ctx: Context, t: TaskRef): Promise<number> {
