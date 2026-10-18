@@ -45,6 +45,20 @@ expect host-missing-key nonzero 'no such private key' -- --host 203.0.113.10 --a
 ssh-keygen -q -t ed25519 -N "" -C vm-test -f "$TMP/admin"
 expect host-port-filtered nonzero 'port 2222 on 192.0.2.1 is not reachable' -- --host 192.0.2.1 --admin-key "$TMP/admin"
 
+# --lima targets a throwaway Lima VM: never together with --host.
+expect lima-and-host nonzero '--lima and --host are exclusive' -- --lima --host 203.0.113.10 --admin-key "$TMP/admin"
+# A PATH without limactl stands for a machine without Lima. The Lima check
+# comes before the Ansible ones, so CI (no Lima, no Ansible) gets this message.
+lima_missing() { PATH="/usr/bin:/bin" "$SCRIPT" --lima 2>&1; }
+code=0
+out="$(lima_missing)" || code=$?
+if [ "$code" -ne 0 ] && printf '%s' "$out" | grep -qF -- '--lima needs limactl'; then
+  PASS=$((PASS + 1))
+else
+  FAIL=$((FAIL + 1))
+  echo "FAIL (lima-missing): exit=$code, expected nonzero and [--lima needs limactl]; output: $out"
+fi
+
 # Options that take a value fail loudly when it is missing.
 expect exposure-last nonzero '--exposure needs a value' -- --exposure
 expect exposure-bad nonzero '--exposure must be public, lan or local' -- --exposure nope
