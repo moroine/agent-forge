@@ -17,7 +17,8 @@ const USAGE = `Usage: forge <command> [args]
 
 Commands:
   setup                             Create or update forge's Incus project, bridge, ACL and profile
-  start [<owner/repo>] [<task>]     Provision (if needed) and start/attach a task session
+  start [--strict] [<owner/repo>] [<task>]
+                                    Provision (if needed) and start/attach a task session
   resume [<owner/repo>] [<task>]    Re-attach an existing task's session
   finish [<owner/repo>] [<task>]    Remove a finished task's worktree
   stop [<owner/repo>] [--force]     Stop a container (blocked on dirty/unpushed WIP unless --force)
@@ -32,11 +33,13 @@ A bracketed argument is asked for when you leave it out, as a numbered menu.
 With no terminal on stdin (scripts, CI) nothing is asked and the command
 exits with this usage instead.`;
 
-function dispatch(ctx: Context, positionals: string[], force: boolean): Promise<number> {
+function dispatch(ctx: Context, positionals: string[], force: boolean, strict: boolean): Promise<number> {
   const [cmd, a, b] = positionals;
+  // --strict ne vaut que pour `start` (création d'un container strict).
+  if (strict && cmd !== "start") throw new ForgeError(`--strict only applies to 'forge start'\n${USAGE}`);
   switch (cmd) {
     case "setup": return cmdSetup(ctx);
-    case "start": return cmdStart(ctx, a, b);
+    case "start": return cmdStart(ctx, a, b, { strict });
     case "resume": return cmdResume(ctx, a, b);
     case "finish": return cmdFinish(ctx, a, b, force);
     case "stop": return cmdStop(ctx, a, force);
@@ -53,14 +56,14 @@ async function main(): Promise<number> {
   try {
     const { values, positionals } = parseArgs({
       args: process.argv.slice(2),
-      options: { force: { type: "boolean" }, help: { type: "boolean", short: "h" } },
+      options: { force: { type: "boolean" }, strict: { type: "boolean" }, help: { type: "boolean", short: "h" } },
       allowPositionals: true,
     });
     if (values.help || positionals.length === 0) {
       ctx.out(USAGE);
       return 0;
     }
-    return await dispatch(ctx, positionals, values.force === true);
+    return await dispatch(ctx, positionals, values.force === true, values.strict === true);
   } catch (e) {
     // Le préfixe "Error: " est ajouté ici, une seule fois : une ForgeError ne
     // porte que son message.

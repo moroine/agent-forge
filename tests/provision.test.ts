@@ -295,3 +295,79 @@ test("an empty workspace directory is cloned into", async () => {
   await run();
   assert.ok(flat(ctx).some((l) => l.startsWith("git clone git@github.com:o/r.git")));
 });
+
+// --- strict mode ---
+import { proxyPlan } from "../cli/lib/ipv4.ts";
+import { egressNames } from "../cli/lib/objects.ts";
+import { strictLaunchArgs } from "../cli/lib/strict.ts";
+
+// Default config (10.77.0.1/24): no config file under this XDG dir.
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "forge-prov-xdg-"));
+
+function strictFake(opts: { acl?: boolean; proxy?: boolean; version?: string } = {}): FakeIncus {
+  const fake = FakeIncus.withRuntime({ commit: "IMGSHA" });
+  if (opts.version) fake.serverVersion = opts.version;
+  if (opts.acl ?? true) {
+    fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
+  }
+  if (opts.proxy ?? true) fake.addInstance("agent-forge", "forge-proxy", { config: { "user.forge.proxy_recipe": "1" } });
+  return fake;
+}
+const strictProvision = (opts: { rules?: ExecRule[]; fake?: FakeIncus } = {}) => {
+  const fake = opts.fake ?? strictFake();
+  const ctx = fakeContext({ incus: fake, rules: [...(opts.rules ?? []), ...IDENTITY, ...HOOK_BLOCKS] });
+  return { fake, ctx, run: () => provisionContainer(ctx, "agent-x", "o/r", { strict: true }) };
+};
+
+test("--strict launches with every override in the same call; there is no launch without them", async () => {
+  const { ctx, run } = strictProvision();
+  await run();
+  const launches = ctx.calls.filter((c) => c.includes("launch"));
+  assert.equal(launches.length, 1);
+  assert.deepEqual(launches[0], ["incus", "--project", "agent-forge", "launch", "agent-base", "agent-x", "--profile", "agent-forge",
+    ...strictLaunchArgs(proxyPlan("10.77.0.1/24", 0), egressNames("agent-forge"))]);
+});
+
+test("--strict applies the settings right after waitReady, before the plugin install", async () => {
+  const { ctx, run } = strictProvision();
+  await run();
+  const calls = flat(ctx);
+  const ready = calls.findIndex((l) => l.includes("is-system-running --wait"));
+  const settings = calls.findIndex((l) => l.includes("file push") && l.includes("agent-x/etc/profile.d/agent-forge-proxy.sh"));
+  const plugin = calls.findIndex((l) => l.includes("claude plugin marketplace add"));
+  assert.ok(ready >= 0 && settings > ready && settings < plugin, calls.join("\n"));
+});
+
+for (const [what, fake] of [
+  ["the gate", () => strictFake({ version: "7.0.1" })],
+  ["the ACL", () => strictFake({ acl: false })],
+  ["the proxy", () => strictFake({ proxy: false })],
+] as const) {
+  test(`--strict refuses before creating anything when ${what} is missing`, async () => {
+    const { ctx, run } = strictProvision({ fake: fake() });
+    await assert.rejects(run, /forge setup|7\.0\.2/);
+    assert.equal(launched(ctx), false);
+  });
+}
+
+test("--strict: a failed plugin install is a warning naming the GitHub group", async () => {
+  const { fake, ctx, run } = strictProvision({ rules: [{ match: "claude plugin", code: 1, stderr: "fetch failed\n" }] });
+  await run();
+  assert.ok(ctx.err_lines.some((l) => /WARNING: .*superpowers.*fetch failed.*egress-allowlist.*forge setup/.test(l)), ctx.err_lines.join("\n"));
+  assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], "o/r");
+});
+
+test("--strict: the Claude refresh reads only Anthropic's apt source", async () => {
+  const { ctx, run } = strictProvision();
+  await run();
+  assert.ok(flat(ctx).some((l) => l.endsWith("-- apt-get update -o Dir::Etc::sourcelist=/etc/apt/sources.list.d/claude-code.sources " +
+    "-o Dir::Etc::sourceparts=- -o APT::Get::List-Cleanup=0")), flat(ctx).join("\n"));
+  assert.ok(flat(ctx).some((l) => l.endsWith("-- apt-get install --only-upgrade -y claude-code")));
+});
+
+test("without --strict, provisioning is unchanged", async () => {
+  const { ctx, run } = provision({ rules: [{ match: "claude plugin", code: 1, stderr: "fetch failed\n" }] });
+  await assert.rejects(run, /install Claude plugins/);
+  assert.ok(!flat(ctx).some((l) => l.includes(" launch ") && l.includes(" -d ")));
+  assert.ok(!flat(ctx).some((l) => l.includes("agent-forge-proxy.sh")));
+});

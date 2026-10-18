@@ -2,6 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import { cmdResume } from "../cli/lib/commands/resume.ts";
+import { FakeIncus } from "./lib/fake-incus.ts";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { cmdFinish } from "../cli/lib/commands/finish.ts";
 
 const BASE = [
@@ -103,4 +107,41 @@ test("resume fails when the container refuses to start", async () => {
     /incus start failed: Error: Failed to start device/,
   );
   assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec du démarrage");
+});
+
+// --- egress hooks ---
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "forge-resume-xdg-"));
+function egressFake(opts: { mode: string; version?: string }): FakeIncus {
+  const fake = FakeIncus.withRuntime();
+  if (opts.version) fake.serverVersion = opts.version;
+  fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
+  fake.addInstance("agent-forge", "forge-proxy", { config: { "user.forge.proxy_recipe": "1" } });
+  fake.addInstance("agent-forge", "agent-o-r", {
+    status: "Stopped", config: { "user.forge.repo": "o/r", "user.forge.egress": opts.mode },
+  });
+  return fake;
+}
+const EG = [{ match: "test -e /workspace/.trees/", code: 0 }];
+const lines = (c: ReturnType<typeof fakeContext>) => c.calls.map((x) => x.join(" "));
+
+test("resume of a strict container checks the gate before starting it", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "strict", version: "7.0.1" }), rules: EG });
+  await assert.rejects(() => cmdResume(c, "o/r", "t"), /7\.0\.2/);
+  assert.ok(!lines(c).some((l) => / start agent-o-r/.test(l)));
+});
+
+test("resume applies the strict settings before attaching", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "strict" }), rules: EG });
+  await cmdResume(c, "o/r", "t");
+  const l = lines(c);
+  const push = l.findIndex((x) => x.includes("file push") && x.includes("agent-forge-proxy.sh"));
+  assert.ok(push >= 0 && push < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
+});
+
+test("resume of a container switched to open clears forge's files before attaching", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "open" }), rules: EG });
+  await cmdResume(c, "o/r", "t");
+  const l = lines(c);
+  const rm = l.findIndex((x) => x.includes("rm -f"));
+  assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
 });

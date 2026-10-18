@@ -3,6 +3,12 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import type { ExecRule } from "./lib/fake-context.ts";
 import { cmdStart } from "../cli/lib/commands/start.ts";
+import { FakeIncus } from "./lib/fake-incus.ts";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+process.env.XDG_CONFIG_HOME = mkdtempSync(join(tmpdir(), "forge-start-xdg-"));
 
 const RUNNING = JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Running" }]);
 
@@ -194,4 +200,88 @@ test("a failed main update does not claim origin/main is stale", async () => {
   assert.doesNotMatch(errs, /stale origin\/main/);
   // Le worktree part quand même d'origin/main, qui EST à jour.
   assert.ok(added(c).includes("origin/main"), added(c));
+});
+
+// --- egress ---
+function egressFake(opts: { mode?: string; version?: string; proxy?: boolean } = {}): FakeIncus {
+  const fake = FakeIncus.withRuntime();
+  if (opts.version) fake.serverVersion = opts.version;
+  fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
+  if (opts.proxy ?? true) fake.addInstance("agent-forge", "forge-proxy", { config: { "user.forge.proxy_recipe": "1" } });
+  fake.addInstance("agent-forge", "agent-o-r", {
+    status: "Stopped", config: { "user.forge.repo": "o/r", "user.forge.mode": "supervised", ...(opts.mode ? { "user.forge.egress": opts.mode } : {}) },
+  });
+  return fake;
+}
+const egressRules: ExecRule[] = [{ match: "test -e /workspace/.trees/", code: 0 }];
+const flatCalls = (c: ReturnType<typeof fakeContext>) => c.calls.map((x) => x.join(" "));
+
+test("start --strict on an existing open container is refused, pointing at forge egress", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "open" }), rules: egressRules });
+  await assert.rejects(() => cmdStart(c, "o/r", "t", { strict: true }), /forge egress o\/r strict/);
+  assert.ok(!flatCalls(c).some((l) => l.includes(" start ")));
+});
+
+test("start --strict on an existing strict container goes through", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "strict" }), rules: egressRules });
+  assert.equal(await cmdStart(c, "o/r", "t", { strict: true }), 0);
+});
+
+test("start of a strict container checks the gate before starting it", async () => {
+  const fake = egressFake({ mode: "strict", version: "7.0.1" });
+  const c = fakeContext({ incus: fake, rules: egressRules });
+  await assert.rejects(() => cmdStart(c, "o/r", "t"), /7\.0\.2/);
+  assert.ok(!flatCalls(c).some((l) => / start agent-o-r/.test(l)));
+});
+
+test("start applies the strict settings after starting and before attaching", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "strict" }), rules: egressRules });
+  await cmdStart(c, "o/r", "t");
+  const l = flatCalls(c);
+  const started = l.findIndex((x) => / start agent-o-r/.test(x));
+  const push = l.findIndex((x) => x.includes("file push") && x.includes("agent-forge-proxy.sh"));
+  const attach = l.findIndex((x) => x.includes("tmux"));
+  assert.ok(started >= 0 && push > started && attach > push, l.join("\n"));
+});
+
+test("a strict container starts with a warning when the proxy is gone", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "strict", proxy: false }), rules: egressRules });
+  assert.equal(await cmdStart(c, "o/r", "t"), 0);
+  assert.ok(c.err_lines.some((x) => /forge setup/.test(x)));
+  assert.ok(flatCalls(c).some((x) => x.includes("tmux")));
+});
+
+test("start of a container switched to open clears forge's files before attaching", async () => {
+  const c = fakeContext({ incus: egressFake({ mode: "open" }), rules: egressRules });
+  await cmdStart(c, "o/r", "t");
+  const l = flatCalls(c);
+  const rm = l.findIndex((x) => x.includes("rm -f"));
+  assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
+});
+
+test("start --strict on a new repo provisions it strict", async () => {
+  const fake = FakeIncus.withRuntime();
+  fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
+  fake.addInstance("agent-forge", "forge-proxy", { config: { "user.forge.proxy_recipe": "1" } });
+  const home = mkdtempSync(join(tmpdir(), "forge-start-home-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".credentials.json"), "{}");
+  process.env.FORGE_HOME = home;
+  process.env.FORGE_REPO_DIR = process.cwd();
+  process.env.FORGE_WORKSPACES = join(home, "workspaces");
+  try {
+    const c = fakeContext({ incus: fake, rules: [
+      { match: "git config --global --includes user.name", stdout: "Ada\n" },
+      { match: "git config --global --includes user.email", stdout: "a@b.c\n" },
+      { match: "forge-hook-probe", code: 2 },
+      { match: "test -e /workspace/.trees/", code: 1 },
+      { match: "show-ref", code: 1 },
+    ] });
+    await cmdStart(c, "o/r", "t", { strict: true });
+    assert.equal(fake.instances.get("agent-forge")!.get("agent-o-r")!.config["user.forge.egress"], "strict");
+    assert.ok(flatCalls(c).some((x) => x.includes("tmux")));
+  } finally {
+    delete process.env.FORGE_HOME; delete process.env.FORGE_REPO_DIR; delete process.env.FORGE_WORKSPACES;
+    rmSync(home, { recursive: true, force: true });
+  }
 });

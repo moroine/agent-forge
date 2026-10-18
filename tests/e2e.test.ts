@@ -91,3 +91,10 @@ test("the bash shim runs the TypeScript entry", () => {
 test("setup appears in the usage", () => {
   assert.match(forge([]).stdout, /^\s+setup\s/m);
 });
+
+test("--strict is refused outside forge start", () => {
+  const r = forge(["stop", "--strict", "o/r"]);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /--strict only applies to 'forge start'/);
+  assert.match(r.stderr, /Usage: forge/);
+});

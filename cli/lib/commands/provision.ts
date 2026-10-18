@@ -14,13 +14,21 @@ import {
   configSet, execAsAgent, execAsAgentArgv, forgeProject, imageExists, incus, listObjects, waitReady,
 } from "../incus.ts";
 import { PROFILE } from "../objects.ts";
-import { forgeHome, repoRoot, workspacesDir } from "../paths.ts";
+import { allowlistPath, forgeHome, repoRoot, workspacesDir } from "../paths.ts";
+import { applyStrictSettings, requireStrictRuntime, strictLaunchArgs } from "../strict.ts";
+import { egressNames } from "../objects.ts";
 
 // Le concept de mode reste (pre-bash.sh, CLAUDE.md, user.forge.mode) : le mode
 // autonome pourra revenir sans restructurer. v2 n'en provisionne qu'un.
 const MODE = "supervised";
 
-export async function provisionContainer(ctx: Context, container: string, ownerRepo: string): Promise<void> {
+// `strict` : le container naît strict — jamais lancé ouvert, puis restreint :
+// l'ACL, les actions par défaut et l'environnement du proxy sont posés par le
+// launch lui-même.
+export async function provisionContainer(
+  ctx: Context, container: string, ownerRepo: string, opts: { strict?: boolean } = {},
+): Promise<void> {
+  const strict = opts.strict === true;
   // Préconditions, toutes vérifiées avant de rien créer.
   const credentials = join(forgeHome(), ".claude", ".credentials.json");
   if (!existsSync(credentials)) {
@@ -28,12 +36,16 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   }
   const identity = await hostGitIdentity(ctx);
   await requireRuntime(ctx);
+  const plan = strict ? await requireStrictRuntime(ctx) : null;
   const workspaceDir = join(workspacesDir(), container);
   const reuseWorkspace = await workspaceIsReusable(ctx, workspaceDir, ownerRepo);
 
   ctx.out(`Creating container ${container}...`);
-  await mustSucceed("incus launch", ctx.exec(incus("launch", BASE_IMAGE, container, "--profile", PROFILE)));
+  const strictArgs = plan ? strictLaunchArgs(plan, egressNames(forgeProject())) : [];
+  await mustSucceed("incus launch", ctx.exec(incus("launch", BASE_IMAGE, container, "--profile", PROFILE, ...strictArgs)));
   await waitReady(ctx, container);
+  // Dès que le container tourne, avant tout accès réseau (plugins, apt).
+  if (plan) await applyStrictSettings(ctx, container, plan);
 
   // Le clone vit sur l'hôte : le container n'a jamais de credential GitHub.
   const remote = `git@github.com:${ownerRepo}.git`;
@@ -77,8 +89,15 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
   // dernière en git@github.com, et le container n'a — délibérément — aucune
   // confiance SSH envers GitHub.
   ctx.out("Installing Claude plugins...");
-  await mustSucceed("install Claude plugins", execAsAgent(ctx, container,
-    "claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git && claude plugin install superpowers@claude-plugins-official"));
+  const plugins = await execAsAgent(ctx, container,
+    "claude plugin marketplace add https://github.com/anthropics/claude-plugins-official.git && claude plugin install superpowers@claude-plugins-official");
+  if (plugins.code !== 0) {
+    // En strict, github.com n'est joignable que si l'humain l'a autorisé : ce
+    // n'est pas une raison d'abandonner le provisioning.
+    if (!strict) await mustSucceed("install Claude plugins", Promise.resolve(plugins));
+    ctx.err(`WARNING: installing the superpowers plugin failed (strict mode: ${plugins.stderr.trim() || `exit code ${plugins.code}`}). ` +
+      `Allow the GitHub group in ${allowlistPath()}, run forge setup, then inside the container: claude plugin install superpowers@claude-plugins-official`);
+  }
 
   // Le hook et les réglages appartiennent à root : l'agent ne peut pas les
   // réécrire en place.
@@ -91,7 +110,7 @@ export async function provisionContainer(ctx: Context, container: string, ownerR
     container, "/home/aiuser/.claude/settings.json", 0, "644");
   await requireHookBlocks(ctx, container);
 
-  await refreshClaude(ctx, container);
+  await refreshClaude(ctx, container, strict);
 
   ctx.out("Recording forge mode marker...");
   await mustSucceed("record forge mode marker",
@@ -212,11 +231,16 @@ function pushFile(ctx: Context, step: string, source: string, container: string,
 
 // La version de l'image fonctionne : un échec ici (réseau, dépôt) est un
 // avertissement, pas une raison d'abandonner le provisioning.
-async function refreshClaude(ctx: Context, container: string): Promise<void> {
+// En strict, apt ne lit que la source d'Anthropic (les dépôts Ubuntu ne sont
+// pas dans la liste blanche), sans purger les listes des autres.
+async function refreshClaude(ctx: Context, container: string, strict: boolean): Promise<void> {
   ctx.out("Updating Claude Code...");
   const apt = (...args: string[]) =>
     ctx.exec(incus("exec", container, "--env", "DEBIAN_FRONTEND=noninteractive", "--", "apt-get", ...args));
-  let r = await apt("update");
+  let r = await apt("update", ...(strict ? [
+    "-o", "Dir::Etc::sourcelist=/etc/apt/sources.list.d/claude-code.sources",
+    "-o", "Dir::Etc::sourceparts=-", "-o", "APT::Get::List-Cleanup=0",
+  ] : []));
   if (r.code === 0) r = await apt("install", "--only-upgrade", "-y", "claude-code");
   if (r.code !== 0) {
     ctx.err(`WARNING: updating Claude Code failed, the image's version stays: ${r.stderr.trim() || `exit code ${r.code}`}`);

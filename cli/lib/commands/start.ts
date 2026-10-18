@@ -1,4 +1,4 @@
-// forge start [<owner/repo>] [<task>]
+// forge start [--strict] [<owner/repo>] [<task>]
 //
 // La branche de la tâche est *résolue* au lieu de partir systématiquement de
 // origin/main : c'est ce qui permet de reprendre une tâche existante — branche
@@ -10,13 +10,16 @@ import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName }
 import { checkNameCollision, containerMode, forgeRepos, isRunning } from "../containers.ts";
 import { attachArgv, execAsAgent, instanceExists, startInstance } from "../incus.ts";
 import { agentBranches, branchExists, taskNames } from "../worktrees.ts";
+import { egressAfterStart, egressBeforeStart, egressMode } from "../strict.ts";
 import { provisionContainer } from "./provision.ts";
 
-const USAGE = "Usage: forge start <owner/repo> [<task>]";
+const USAGE = "Usage: forge start [--strict] <owner/repo> [<task>]";
 
 type Choice = { task: string; ref: string };
 
-export async function cmdStart(ctx: Context, repo?: string, task?: string): Promise<number> {
+export async function cmdStart(
+  ctx: Context, repo?: string, task?: string, opts: { strict?: boolean } = {},
+): Promise<number> {
   const ownerRepo = await startResolveRepo(ctx, repo);
   validateRepo(ownerRepo);
 
@@ -35,8 +38,16 @@ export async function cmdStart(ctx: Context, repo?: string, task?: string): Prom
       taskName = asked;
     }
     validateTaskName(taskName);
-    await provisionContainer(ctx, container, ownerRepo);
+    await provisionContainer(ctx, container, ownerRepo, { strict: opts.strict });
+  } else if (opts.strict && (await egressMode(ctx, container)) !== "strict") {
+    // Le mode se choisit à la création ou se change explicitement : `start`
+    // ne bascule jamais un container en silence.
+    throw new ForgeError(`${container} is not a strict container. Switch it with: forge egress ${ownerRepo} strict`);
   }
+
+  // Avant le démarrage, même d'un container qui tourne déjà : la porte de
+  // version et le proxy.
+  const egress = await egressBeforeStart(ctx, container);
 
   ctx.out(`Starting container ${container}...`);
   if (!(await isRunning(ctx, container))) await mustSucceed("incus start", startInstance(ctx, container));
@@ -55,6 +66,8 @@ export async function cmdStart(ctx: Context, repo?: string, task?: string): Prom
   if (ref) validateGitRef(ref);
 
   await addWorktree(ctx, container, taskName, ref);
+
+  await egressAfterStart(ctx, container, egress);
 
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
   return ctx.attach(attachArgv(container, taskName, process.env.TERM ?? "xterm-256color"));

@@ -62,6 +62,10 @@ assert_not_contains 'next-task'
 assert_contains '.trees/'
 assert_contains 'worktree'
 
+# Mode strict (egress) : le paragraphe nomme le proxy et sa variable.
+assert_contains 'HTTPS_PROXY'
+assert_contains 'forge-proxy'
+
 # v2 : plus de mode super, des commits non signés, aucune valeur personnelle.
 assert_not_contains 'Super mode'
 assert_not_contains 'signés automatiquement'
