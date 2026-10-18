@@ -97,6 +97,39 @@ test("an Incus below the version gate skips the strict objects with a notice, an
   assert.ok(fake.networks.get("forgebr0")!.config["ipv4.dhcp.ranges"]);
 });
 
+test("the test override creates the strict objects on a 7.0.1 Incus, with a WARNING", async () => {
+  process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE = "1";
+  process.env.FORGE_INCUS_PROJECT = "forge-selftest";
+  try {
+    const fake = new FakeIncus();
+    fake.serverVersion = "7.0.1";
+    const c = fakeContext({ incus: fake });
+    assert.equal(await cmdSetup(c, opts()), 0, c.err_lines.join("\n"));
+    assert.ok(c.err_lines.some((l) => l.startsWith("WARNING: FORGE_TEST_ALLOW_INCUS_BELOW_GATE") &&
+      l.includes("Incus 7.0.1") && l.includes("forge-selftest")), c.err_lines.join("\n"));
+    assert.ok(!c.err_lines.some((l) => /NOTICE: .*too old/.test(l)), c.err_lines.join("\n"));
+    assert.ok(fake.acls.has("forge-proxy-forge-selftest"), [...fake.acls.keys()].join(","));
+  } finally {
+    delete process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE;
+    delete process.env.FORGE_INCUS_PROJECT;
+  }
+});
+
+test("the override set for the default project still gives the notice and no strict objects", async () => {
+  process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE = "1";
+  try {
+    const fake = new FakeIncus();
+    fake.serverVersion = "7.0.1";
+    const c = fakeContext({ incus: fake });
+    assert.equal(await cmdSetup(c, opts()), 0);
+    assert.ok(c.err_lines.some((l) => /NOTICE: .*7\.0\.1.*strict mode/.test(l)), c.err_lines.join("\n"));
+    assert.equal(fake.acls.has("forge-proxy"), false);
+    assert.equal(fake.instances.get("agent-forge")!.has("forge-proxy"), false);
+  } finally {
+    delete process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE;
+  }
+});
+
 test("a container holding the proxy address stops setup before the proxy, naming it", async () => {
   const fake = new FakeIncus();
   await cmdSetup(fakeContext({ incus: fake }), opts());

@@ -1,10 +1,10 @@
-import { test } from "node:test";
+import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import type { NetworkInterfaceInfo } from "node:os";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { fakeProc } from "./lib/fake-host.ts";
-import { checkHost, checkIpForward, strictModeSupported, requireStrictIncus, checkStoragePool, exposedHostAddresses, readProc } from "../cli/lib/host.ts";
+import { checkHost, checkIpForward, strictModeSupported, strictGateOverridden, requireStrictIncus, checkStoragePool, exposedHostAddresses, readProc } from "../cli/lib/host.ts";
 
 const USER = 1000;
 const ctx = (fake = new FakeIncus()) => fakeContext({ incus: fake });
@@ -113,4 +113,52 @@ test("requireStrictIncus returns the version when it is supported", async () => 
 test("requireStrictIncus fails when Incus cannot be reached", async () => {
   const c = fakeContext({ rules: [{ match: "query /1.0", code: 1, stderr: "nope" }] });
   await assert.rejects(requireStrictIncus(c), /cannot reach Incus/);
+});
+
+// The test-only override of the version gate: both variables are restored after each test.
+afterEach(() => { delete process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE; delete process.env.FORGE_INCUS_PROJECT; });
+const override = (project?: string, value = "1") => {
+  process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE = value;
+  if (project) process.env.FORGE_INCUS_PROJECT = project;
+};
+
+test("strictGateOverridden is false without the variable", () => {
+  process.env.FORGE_INCUS_PROJECT = "forge-selftest";
+  assert.equal(strictGateOverridden(), false);
+});
+
+test("strictGateOverridden is false for the default project and for other names", () => {
+  override();
+  assert.equal(strictGateOverridden(), false);
+  process.env.FORGE_INCUS_PROJECT = "other-project";
+  assert.equal(strictGateOverridden(), false);
+});
+
+for (const project of ["forge-selftest", "forge-selftest-egress"]) {
+  test(`strictGateOverridden is true for ${project}`, () => {
+    override(project);
+    assert.equal(strictGateOverridden(), true);
+  });
+}
+
+for (const value of ["true", "0", ""]) {
+  test(`strictGateOverridden is false when the variable is ${JSON.stringify(value)}`, () => {
+    override("forge-selftest", value);
+    assert.equal(strictGateOverridden(), false);
+  });
+}
+
+test("requireStrictIncus under the override warns and returns the version", async () => {
+  override("forge-selftest-egress");
+  const fake = new FakeIncus(); fake.serverVersion = "7.0.1";
+  const c = ctx(fake);
+  assert.equal(await requireStrictIncus(c), "7.0.1");
+  assert.ok(c.err_lines.some((l) => l.startsWith("WARNING: FORGE_TEST_ALLOW_INCUS_BELOW_GATE") &&
+    l.includes("Incus 7.0.1") && l.includes("forge-selftest-egress")), c.err_lines.join("\n"));
+});
+
+test("requireStrictIncus still refuses 7.0.1 when the override is set for the default project", async () => {
+  override();
+  const fake = new FakeIncus(); fake.serverVersion = "7.0.1";
+  await assert.rejects(requireStrictIncus(ctx(fake)), /7\.0\.2/);
 });
