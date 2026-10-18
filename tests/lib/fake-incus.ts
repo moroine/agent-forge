@@ -9,7 +9,8 @@
 //     as the real CLI does (spike, finding C);
 //   - `list -f json` is served from the state, in Incus' own shape: ACL rules
 //     with every field present, unmanaged host interfaces in `network list`,
-//     default features filled in on `project create`;
+//     default features filled in on `project create`, no eth0 address for a
+//     stopped instance (its lease stays in `network list-leases`);
 //   - every call is recorded with its stdin.
 // Anything it does not model fails with exit code 1, so that a test never
 // passes on a command the fake silently ignored.
@@ -168,7 +169,7 @@ export class FakeIncus {
     const p = project ?? "default";
     switch (cmd) {
       case "project": return this.project(rest, input);
-      case "network": return rest[0] === "acl" ? this.acl(rest.slice(1), input) : this.network(rest, input);
+      case "network": return rest[0] === "acl" ? this.acl(rest.slice(1), input) : this.network(p, rest, input);
       case "profile": return this.profile(p, rest, input);
       case "storage":
         return rest[0] === "list"
@@ -212,12 +213,14 @@ export class FakeIncus {
     return expanded;
   }
 
-  // One instance as `list -f json` shows it.
+  // One instance as `list -f json` shows it. A stopped instance has no
+  // address (its DHCP lease remains, see `network list-leases`).
   private listed(p: string, i: InstanceState): Record<string, unknown> {
+    const addresses = i.ipv4 && i.status === "Running" ? [{ family: "inet", address: i.ipv4 }] : [];
     return {
       name: i.name, status: i.status, config: i.config, devices: i.devices, profiles: i.profiles,
       expanded_devices: this.expandedDevices(p, i.name),
-      state: { network: { eth0: { addresses: i.ipv4 ? [{ family: "inet", address: i.ipv4 }] : [] } } },
+      state: { network: { eth0: { addresses } } },
     };
   }
 
@@ -235,8 +238,17 @@ export class FakeIncus {
     return ok();
   }
 
-  private network(rest: string[], input?: string): ExecResult {
+  private network(p: string, rest: string[], input?: string): ExecResult {
     const [sub, name] = rest;
+    if (sub === "list-leases") {
+      // The leases of the requested project's instances, running or not (a
+      // stopped instance keeps its lease), from their `ipv4`.
+      if (!this.networks.has(name)) return fail("Network not found");
+      const leases = [...this.instances.get(p)!.values()].filter((i) => i.ipv4).map((i) => ({
+        hostname: i.name, address: i.ipv4, hwaddr: "", type: "dynamic", location: "none", project: p,
+      }));
+      return ok(JSON.stringify(leases));
+    }
     if (sub === "list") {
       const unmanaged = this.hostInterfaces.map((n) => ({
         name: n, description: "", type: n === "lo" ? "loopback" : "physical", managed: false, config: {}, used_by: [],

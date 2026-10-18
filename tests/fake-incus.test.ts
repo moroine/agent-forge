@@ -203,6 +203,20 @@ test("list -f json reports expanded devices and the eth0 address", () => {
   assert.deepEqual(b.state.network.eth0.addresses, []);
 });
 
+test("a stopped instance has no eth0 address in list -f json; network list-leases still reports it", () => {
+  const fake = strictFake();
+  fake.networks.set("forgebr0", { name: "forgebr0", description: "", config: {}, type: "bridge", managed: true });
+  fake.addInstance("agent-forge", "up", { ipv4: "10.77.0.57" });
+  fake.addInstance("agent-forge", "down", { status: "Stopped", ipv4: "10.77.0.58" });
+  fake.addInstance("agent-forge", "none");
+  const listed = JSON.parse(fake.run([...P, "list", "-f", "json"]).stdout);
+  assert.deepEqual(listed.map((i: { state: { network: { eth0: { addresses: unknown[] } } } }) => i.state.network.eth0.addresses.length), [1, 0, 0]);
+  const leases = JSON.parse(fake.run([...P, "network", "list-leases", "forgebr0", "-f", "json"]).stdout);
+  assert.deepEqual(leases.map((l: { hostname: string; address: string }) => [l.hostname, l.address]),
+    [["up", "10.77.0.57"], ["down", "10.77.0.58"]]);
+  assert.match(fake.run([...P, "network", "list-leases", "nope", "-f", "json"]).stderr, /Network not found/);
+});
+
 test("query /1.0 reports serverVersion", () => {
   const fake = new FakeIncus();
   const version = () => JSON.parse(fake.run(["query", "/1.0"]).stdout).environment.server_version;

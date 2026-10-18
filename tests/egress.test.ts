@@ -1,8 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { ForgeError } from "../cli/lib/context.ts";
@@ -24,6 +24,7 @@ const STRICT_NIC = {
 function setup(opts: { mode?: "open" | "strict" | "manual"; status?: "Running" | "Stopped"; version?: string } = {}) {
   const fake = FakeIncus.withRuntime();
   if (opts.version) fake.serverVersion = opts.version;
+  fake.networks.set("forgebr0", { name: "forgebr0", description: "", config: {}, type: "bridge", managed: true });
   fake.addProfile(PROJECT, "agent-forge", { devices: { eth0: OPEN_NIC } });
   fake.acls.set("forge-egress-strict", { name: "forge-egress-strict", description: "", config: {}, ingress: [], egress: [] });
   fake.addInstance(PROJECT, "forge-proxy", { config: { "user.forge.proxy_recipe": "1" }, ipv4: "10.77.0.2" });
@@ -44,15 +45,81 @@ function setup(opts: { mode?: "open" | "strict" | "manual"; status?: "Running" |
 const cmds = (ctx: { calls: string[][] }) => ctx.calls.map((c) => c.join(" "));
 const writes = (ctx: { calls: string[][] }) => cmds(ctx).filter((c) => / config (set|unset|device) /.test(c));
 
-test("without a mode it prints the effective egress, and for strict the allowlist", async () => {
+test("without a mode it prints the effective egress, and for strict the allowlist, never creating it", async () => {
+  const path = join(dir, "agent-forge", "egress-allowlist");
   const { ctx } = setup({ mode: "strict" });
   assert.equal(await cmdEgress(ctx, "o/r"), 0);
-  assert.equal(ctx.out_lines[0], "o/r: strict");
-  // The default allowlist (created on first read) holds four entries.
-  assert.equal(ctx.out_lines[1], `allowlist: ${join(dir, "agent-forge", "egress-allowlist")} (4 entries)`);
+  assert.deepEqual(ctx.out_lines, ["o/r: strict", `allowlist: ${path} (not created yet: run forge setup)`]);
+  assert.equal(existsSync(path), false);
+  assert.deepEqual(ctx.err_lines, []);
+
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, "example.com\n.example.org\n");
+  try {
+    const again = setup({ mode: "strict" });
+    await cmdEgress(again.ctx, "o/r");
+    assert.deepEqual(again.ctx.out_lines, ["o/r: strict", `allowlist: ${path} (2 entries)`]);
+  } finally {
+    rmSync(path);
+  }
   const open = setup();
   await cmdEgress(open.ctx, "o/r");
   assert.deepEqual(open.ctx.out_lines, ["o/r: open"]);
+  assert.deepEqual(open.ctx.err_lines, []);
+});
+
+test("without a mode, a marker/NIC mismatch is reported with the commands that finish the switch", async () => {
+  // Marked strict, eth0 override removed by hand.
+  const lost = setup({ mode: "strict" });
+  lost.fake.instances.get(PROJECT)!.get(NAME)!.devices = {};
+  assert.equal(await cmdEgress(lost.ctx, "o/r"), 0);
+  assert.equal(lost.ctx.out_lines[0], "o/r: open");
+  assert.match(lost.ctx.err_lines.join("\n"),
+    /^WARNING: agent-o-r is marked user\.forge\.egress=strict but its eth0 is open\. .*forge egress o\/r strict .*forge egress o\/r open/);
+  // A switch to strict interrupted before the marker: strict NIC, marker open.
+  const half = setup();
+  half.fake.instances.get(PROJECT)!.get(NAME)!.devices.eth0 = { ...STRICT_NIC };
+  await cmdEgress(half.ctx, "o/r");
+  assert.equal(half.ctx.out_lines[0], "o/r: strict");
+  assert.match(half.ctx.err_lines.join("\n"), /user\.forge\.egress=open but its eth0 is strict\. .*forge egress o\/r strict/);
+});
+
+test("without a mode, a half-done switch whose marker agrees is reported with the command that finishes it", async () => {
+  const strict = setup({ mode: "strict" });
+  for (const k of ENV_KEYS) delete strict.fake.instances.get(PROJECT)!.get(NAME)!.config[k];
+  await cmdEgress(strict.ctx, "o/r");
+  assert.match(strict.ctx.err_lines.join("\n"), /^WARNING: the switch of agent-o-r to strict is not complete.*forge egress o\/r strict$/);
+  const open = setup();
+  open.fake.instances.get(PROJECT)!.get(NAME)!.config["environment.HTTPS_PROXY"] = "http://10.77.0.2:3128";
+  await cmdEgress(open.ctx, "o/r");
+  assert.match(open.ctx.err_lines.join("\n"), /the switch of agent-o-r to open is not complete.*forge egress o\/r open$/);
+});
+
+test("a switch prints one line per step it applied", async () => {
+  const next = "The settings inside the container follow at the next forge start.";
+  const toStrict = setup();
+  await cmdEgress(toStrict.ctx, "o/r", "strict");
+  assert.deepEqual(toStrict.ctx.out_lines, [
+    "changed: eth0 filtered by forge-egress-strict, default egress and ingress reject",
+    "changed: proxy environment set (7 keys, http://10.77.0.2:3128)",
+    "changed: user.forge.egress=strict",
+    `o/r: now strict. ${next}`,
+  ]);
+  const toOpen = setup({ mode: "strict" });
+  await cmdEgress(toOpen.ctx, "o/r", "open");
+  assert.deepEqual(toOpen.ctx.out_lines, [
+    "changed: user.forge.egress=open",
+    "changed: proxy environment removed (7 keys)",
+    "changed: eth0 override removed, the profile's NIC applies again",
+    `o/r: now open. ${next}`,
+  ]);
+  // Only the steps that had something to do: a strict marker left on an open NIC.
+  const marker = setup({ mode: "strict" });
+  const inst = marker.fake.instances.get(PROJECT)!.get(NAME)!;
+  inst.devices = {};
+  for (const k of ENV_KEYS) delete inst.config[k];
+  await cmdEgress(marker.ctx, "o/r", "open");
+  assert.deepEqual(marker.ctx.out_lines, ["changed: user.forge.egress=open", `o/r: now open. ${next}`]);
 });
 
 test("a running container is refused: stop it first", async () => {
@@ -170,6 +237,21 @@ test("an origin 403 over plain HTTP is allowed: the proxy let it through", () =>
   assert.equal(parseSquidLine("1760745600.1 3 10.77.0.57 TCP_MISS/403 10 GET http://example.com/ - HIER_DIRECT/x text/html")!.result, "allowed");
 });
 
+test("the result: denied for TCP_DENIED, error for NONE (invalid requests, squid errors), allowed otherwise", () => {
+  const result = (action: string, method = "CONNECT", url = "example.com:443") =>
+    parseSquidLine(`1760745600.1 0 10.77.0.57 ${action} 10 ${method} ${url} - HIER_NONE/- -`)!.result;
+  assert.equal(result("TCP_DENIED/403"), "denied");
+  assert.equal(result("TCP_DENIED_REPLY/403"), "denied");
+  assert.equal(result("NONE_NONE/400", "NONE", "error:invalid-request"), "error");
+  assert.equal(result("NONE/503"), "error");
+  assert.equal(result("NONE_NONE/000"), "error");
+  assert.equal(result("TCP_TUNNEL/200"), "allowed");
+  assert.equal(result("TCP_MISS/200", "GET", "http://example.com/"), "allowed");
+  // A URL without a host keeps its field: the column is never empty.
+  assert.equal(parseSquidLine("1760745600.1 0 10.77.0.57 NONE_NONE/400 10 NONE error:invalid-request - HIER_NONE/- -")!.host,
+    "error:invalid-request");
+});
+
 test("odd squid lines are skipped, plain HTTP URLs give their host", () => {
   assert.equal(parseSquidLine(""), null);
   assert.equal(parseSquidLine("1760745600.123 0 10.77"), null);
@@ -195,6 +277,40 @@ test("log maps addresses to container names and filters by repo", async () => {
   await cmdEgress(f, "log", "o/r");
   assert.equal(f.out_lines.length, 2);
   assert.ok(f.out_lines[1].includes("agent-o-r"));
+});
+
+test("log names a stopped container through its DHCP lease", async () => {
+  const { fake } = setup({ status: "Stopped" });
+  const c = fakeContext({ incus: fake, rules: [{ match: "tail -n 200", stdout: LOG }] });
+  await cmdEgress(c, "log", "o/r");
+  assert.ok(c.calls.some((x) => x.join(" ") === "incus --project agent-forge network list-leases forgebr0 -f json"));
+  assert.equal(c.out_lines.length, 2);
+  assert.match(c.out_lines[1], /^\S+\s+agent-o-r\s+allowed\s+CONNECT\s+api\.anthropic\.com:443$/);
+});
+
+test("log: an instance's current address wins over a lease naming another host", async () => {
+  const { fake } = setup({ status: "Running" });
+  const leases = JSON.stringify([{ hostname: "someone-else", address: "10.77.0.57" }, { hostname: "gone", address: "10.77.0.99" }]);
+  const c = fakeContext({ incus: fake, rules: [{ match: "tail -n 200", stdout: LOG }, { match: "list-leases", stdout: leases }] });
+  await cmdEgress(c, "log");
+  assert.match(c.out_lines[1], /\sagent-o-r\s/);
+  assert.match(c.out_lines[2], /\sgone\s+denied\s/);
+});
+
+test("log: a failed lease listing is not fatal", async () => {
+  const c = fakeContext({ incus: setup({ status: "Running" }).fake,
+    rules: [{ match: "tail -n 200", stdout: LOG }, { match: "list-leases", code: 1, stderr: "boom" }] });
+  assert.equal(await cmdEgress(c, "log"), 0);
+  assert.match(c.out_lines[1], /\sagent-o-r\s/);
+});
+
+test("log strips control characters (C0, DEL, C1) from every field it prints", async () => {
+  const evil = "1760745600.1 0 10.77.0.57 TCP_DENIED/403 10 CONNECT ev\x1b[2J\x1b]0;pwned\x07il\x7f\u009b31m.example:443 - HIER_NONE/- -";
+  const c = fakeContext({ incus: setup().fake, rules: [{ match: "tail -n 200", stdout: evil }] });
+  await cmdEgress(c, "log");
+  assert.equal(c.out_lines.length, 2);
+  assert.ok(!/[\x00-\x1f\x7f-\x9f]/.test(c.out_lines.join("")), JSON.stringify(c.out_lines));
+  assert.match(c.out_lines[1], /\sev\[2J\]0;pwnedil31m\.example:443$/);
 });
 
 test("log without a proxy names forge setup", async () => {
