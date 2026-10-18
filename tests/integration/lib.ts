@@ -19,9 +19,14 @@ export const REPO_ROOT = resolve(".");
 
 export type Run = { status: number | null; stdout: string; stderr: string };
 
-export function run(cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; input?: string } = {}): Run {
-  const r = spawnSync(cmd, args, { encoding: "utf8", input: opts.input ?? "", env: { ...process.env, ...opts.env } });
-  return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? String(r.error ?? "") };
+export function run(cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; input?: string; timeout?: number } = {}): Run {
+  // A default timeout, so a host-side hang cannot block the suite; a timed-out
+  // run has status null and says so in stderr.
+  const r = spawnSync(cmd, args, {
+    encoding: "utf8", input: opts.input ?? "", env: { ...process.env, ...opts.env }, timeout: opts.timeout ?? 600_000,
+  });
+  const failure = r.error ? `${String(r.error)}${(r.error as NodeJS.ErrnoException).code === "ETIMEDOUT" ? " (timed out)" : ""}` : "";
+  return { status: r.status, stdout: r.stdout ?? "", stderr: `${r.stderr ?? ""}${failure}` };
 }
 export const incus = (project: string, args: string[], input?: string) =>
   run("incus", ["--project", project, ...args], { input });
@@ -43,6 +48,10 @@ export function must(label: string, r: Run): Run {
 // in `default`: they are ours too, nothing else is touched there.
 export function teardownProject(project: string) {
   assert.ok(project.startsWith("forge-selftest"), `refusing to tear down ${project}`);
+  // The ACLs live in `default` and outlive their project: remove them first.
+  for (const acl of [`forge-proxy-${project}`, `forge-egress-strict-${project}`]) {
+    incus("default", ["network", "acl", "delete", acl]);
+  }
   const list = incus(project, ["list", "-f", "json"]);
   if (list.status !== 0) return;
   for (const inst of JSON.parse(list.stdout) as { name: string }[]) {
@@ -62,7 +71,7 @@ export function teardownProject(project: string) {
   }
   incus(project, ["profile", "delete", "agent-forge"]);
   incus(project, ["profile", "delete", "forge-proxy"]);
-  // After the profile and the instances that referenced them.
+  // The ACLs were attempted first; retry now that their users are gone.
   for (const acl of [`forge-proxy-${project}`, `forge-egress-strict-${project}`]) {
     incus("default", ["network", "acl", "delete", acl]);
   }
