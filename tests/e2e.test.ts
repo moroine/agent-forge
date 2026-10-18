@@ -10,6 +10,8 @@ import { join, resolve } from "node:path";
 
 let bin: string;
 let herdr: string;
+// Same fake incus, except that the agent itself (the attach argv) exits 3.
+let failingAgentBin: string;
 const ENTRY = resolve("cli/forge.ts");
 
 // Canned herdr 0.9.5 answers: workspace moroine/agent-forge holds a tab cli
@@ -33,9 +35,16 @@ before(() => {
   herdr = join(bin, "fake-herdr");
   writeFileSync(herdr, FAKE_HERDR);
   chmodSync(herdr, 0o755);
+  failingAgentBin = mkdtempSync(join(tmpdir(), "forge-e2e-failbin-"));
+  writeFileSync(join(failingAgentBin, "incus"),
+    `#!/bin/sh\ncase " $* " in *" --cwd /workspace/.trees/"*) exit 3 ;; esac\nexec node ${stub} "$@"\n`);
+  chmodSync(join(failingAgentBin, "incus"), 0o755);
 });
 
-after(() => rmSync(bin, { recursive: true, force: true }));
+after(() => {
+  rmSync(bin, { recursive: true, force: true });
+  rmSync(failingAgentBin, { recursive: true, force: true });
+});
 
 function forge(args: string[], input = "", extraEnv: Record<string, string> = {}) {
   // Never inherit the herdr session of the shell running the tests.
@@ -106,6 +115,32 @@ test("outside the popup a success never waits", () => {
   assert.equal(warned.status, 0, warned.stderr);
   assert.match(warned.stderr, /WARNING/);
   assert.doesNotMatch(warned.stderr, /Press Enter/);
+});
+
+// A herdr tab runs `exec forge attach …`: the pane closes with forge.
+test("an agent exiting non-zero in a herdr pane leaves its exit code to read", () => {
+  const r = forge(["attach", "agent-moroine-agent-forge", "cli"], "\n",
+    { ...pane(herdr), PATH: `${failingAgentBin}:${process.env.PATH}` });
+  assert.equal(r.status, 3, r.stderr);
+  assert.match(r.stderr, /the agent exited with code 3\nPress Enter to close/);
+});
+
+test("a failing attach in a herdr pane leaves its error to read", () => {
+  const r = forge(["attach", "agent-nope", "cli"], "\n", pane(herdr));
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Error: agent-nope is not a forge container\nPress Enter to close/);
+});
+
+test("an agent exiting 0 in a herdr pane closes it at once", () => {
+  const r = forge(["attach", "agent-moroine-agent-forge", "cli"], "\n", pane(herdr));
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stderr, /Press Enter|exited with code/);
+});
+
+test("outside herdr a failing agent does not wait", () => {
+  const r = forge(["attach", "agent-moroine-agent-forge", "cli"], "\n", { PATH: `${failingAgentBin}:${process.env.PATH}` });
+  assert.equal(r.status, 3);
+  assert.doesNotMatch(r.stderr, /Press Enter/);
 });
 
 test("attach with no arguments exits 1 with its usage", () => {

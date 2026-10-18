@@ -84,8 +84,16 @@ function withAttention(base: Context): { ctx: Context; needed: () => boolean } {
   return { ctx, needed: () => needed };
 }
 
+// Un onglet herdr lance `exec forge attach …` : le pane se ferme avec forge.
+// Dans un pane (HERDR_ENV=1 et HERDR_PANE_ID), un attach qui échoue ou un
+// agent sorti en erreur laisse donc de quoi lire avant la fermeture.
+function attachInHerdrPane(cmd: string | undefined): boolean {
+  return cmd === "attach" && process.env.HERDR_ENV === "1" && !!process.env.HERDR_PANE_ID;
+}
+
 async function main(): Promise<number> {
   const { ctx, needed } = withAttention(createContext());
+  let cmd: string | undefined;
   try {
     const { values, positionals } = parseArgs({
       args: process.argv.slice(2),
@@ -96,8 +104,13 @@ async function main(): Promise<number> {
       ctx.out(USAGE);
       return 0;
     }
+    cmd = positionals[0];
     const code = await dispatch(ctx, positionals, values.force === true, values.all === true);
-    if (herdrEnv()?.popup && needed()) {
+    if (code !== 0 && attachInHerdrPane(cmd)) {
+      ctx.err(`the agent exited with code ${code}`);
+      ctx.err("Press Enter to close");
+      await waitForLine();
+    } else if (herdrEnv()?.popup && needed()) {
       ctx.err("Press Enter to close");
       await waitForLine();
     }
@@ -107,8 +120,8 @@ async function main(): Promise<number> {
     // porte que son message.
     ctx.err(`Error: ${e instanceof Error ? e.message : String(e)}`);
     // Dans la popup herdr, la fenêtre se ferme avec le processus : on laisse
-    // le temps de lire l'erreur.
-    if (herdrEnv()?.popup) {
+    // le temps de lire l'erreur. De même pour un attach dans un pane herdr.
+    if (herdrEnv()?.popup || attachInHerdrPane(cmd)) {
       ctx.err("Press Enter to close");
       await waitForLine();
     }
