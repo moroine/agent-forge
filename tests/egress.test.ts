@@ -82,6 +82,14 @@ test("without a mode, a marker/NIC mismatch is reported with the commands that f
   await cmdEgress(half.ctx, "o/r");
   assert.equal(half.ctx.out_lines[0], "o/r: strict");
   assert.match(half.ctx.err_lines.join("\n"), /user\.forge\.egress=open but its eth0 is strict\. .*forge egress o\/r strict/);
+  // Marked strict, eth0 changed by hand: forge egress would refuse it, the device is named instead.
+  const manual = setup({ mode: "strict" });
+  manual.fake.instances.get(PROJECT)!.get(NAME)!.devices.eth0 = { ...OPEN_NIC, "security.acls": "mine" };
+  await cmdEgress(manual.ctx, "o/r");
+  assert.equal(manual.ctx.out_lines[0], "o/r: ?");
+  const warning = manual.ctx.err_lines.join("\n");
+  assert.match(warning, /changed by hand\?\)\. Inspect it: incus --project agent-forge config device show agent-o-r$/);
+  assert.doesNotMatch(warning, /forge egress/);
 });
 
 test("without a mode, a half-done switch whose marker agrees is reported with the command that finishes it", async () => {
@@ -295,6 +303,15 @@ test("log: an instance's current address wins over a lease naming another host",
   await cmdEgress(c, "log");
   assert.match(c.out_lines[1], /\sagent-o-r\s/);
   assert.match(c.out_lines[2], /\sgone\s+denied\s/);
+});
+
+test("log: a lease without a real hostname (dnsmasq's \"*\") leaves the address as is", async () => {
+  const leases = JSON.stringify([{ hostname: "*", address: "10.77.0.99" }, { hostname: "", address: "10.77.0.57" }]);
+  const c = fakeContext({ incus: setup({ status: "Stopped" }).fake,
+    rules: [{ match: "tail -n 200", stdout: LOG }, { match: "list-leases", stdout: leases }] });
+  await cmdEgress(c, "log");
+  assert.match(c.out_lines[1], /\s10\.77\.0\.57\s+allowed\s/);
+  assert.match(c.out_lines[2], /\s10\.77\.0\.99\s+denied\s/);
 });
 
 test("log: a failed lease listing is not fatal", async () => {

@@ -205,9 +205,16 @@ test("before start: a strict marker on a NIC that is not strict is refused, nami
       assert.ok(e instanceof ForgeError);
       assert.match(e.message, /web/);
       assert.match(e.message, /user\.forge\.egress=strict/);
-      assert.match(e.message, nic === "open" ? /eth0 is open/ : /eth0 is neither open nor strict/);
-      assert.match(e.message, /forge egress o\/r strict/);
-      assert.match(e.message, /forge egress o\/r open/);
+      if (nic === "open") {
+        assert.match(e.message, /eth0 is open/);
+        assert.match(e.message, /forge egress o\/r strict/);
+        assert.match(e.message, /forge egress o\/r open/);
+      } else {
+        // forge egress refuses a hand-made eth0 both ways: never advise it.
+        assert.match(e.message, /eth0 matches neither open nor strict \(changed by hand\?\)/);
+        assert.match(e.message, /incus --project agent-forge config device show web/);
+        assert.doesNotMatch(e.message, /forge egress/);
+      }
       return true;
     });
     assert.deepEqual(mutations(ctx), []);

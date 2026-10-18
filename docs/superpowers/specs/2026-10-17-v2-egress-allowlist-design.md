@@ -448,14 +448,23 @@ serves open containers, where the paragraph does not apply.
   - **strict**: check the version gate (a downgraded Incus refuses to start
     it), start the proxy if it is stopped, start the container, then "apply
     strict settings" before attaching;
-  - **open** (or unset): remove any file forge's strict settings wrote, a
-    no-op when there is none, before attaching. This completes a switch to open
-    made while the container was stopped.
-  - Before either, the marker is checked against the **effective** NIC (see
-    "`forge list`"): a `strict` marker on a NIC that is not strict, or a strict
-    NIC under an `open` or absent marker, is refused before anything starts,
-    naming both states and `forge egress <owner/repo> strict` / `… open`, which
-    finish the switch. An open or absent marker on a `?` NIC starts as open.
+  - **open**: remove any file forge's strict settings wrote, a no-op when
+    there is none, before attaching. This completes a switch to open made
+    while the container was stopped;
+  - **unset** (a container from before strict mode, never switched): nothing;
+    only a switch writes or removes forge's files.
+  - Before any of these, the marker is checked against the **effective** NIC
+    (see "`forge list`"), from the `incus list` entry of the container:
+    - a `strict` marker on an open NIC, or a strict NIC under an `open` or
+      absent marker, is refused before anything starts, naming both states and
+      `forge egress <owner/repo> strict` / `… open`, which finish the switch;
+    - a `strict` marker on a `?` NIC (changed by hand) is refused too, pointing
+      at `incus config device show <container>`: `forge egress` refuses to
+      overwrite such a NIC either way, so it is not suggested;
+    - a `strict` marker on a container that `incus list` does not show (a
+      failed listing) is refused: its NIC cannot be checked;
+    - an open or absent marker on a `?` NIC starts as above (open: files
+      removed; unset: nothing).
 
 ### `forge egress [<owner/repo>] [strict|open]`
 

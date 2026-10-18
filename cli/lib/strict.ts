@@ -149,14 +149,19 @@ export async function egressMode(ctx: Context, container: string): Promise<Egres
 // before its last step, or eth0 changed by hand): the message naming both
 // states and the commands that finish the switch, or null when they agree.
 // An open or absent marker on an unrecognized NIC ("?") is not a disagreement.
+// A strict marker on one is: `forge egress` refuses to overwrite a hand-made
+// eth0 either way, so the message points at the device instead.
 export function egressMismatch(instance: Instance, names: EgressNames): string | null {
   const marker = instance.config[EGRESS_KEY];
   const effective = effectiveEgress(instance.expandedDevices, names);
   if ((marker === "strict") === (effective === "strict")) return null;
-  const repo = instance.config[REPO_KEY] || instance.name;
   const markerText = marker === undefined ? "without user.forge.egress" : `marked user.forge.egress=${marker}`;
-  const nicText = effective === "?" ? "neither open nor strict (changed by hand?)" : effective;
-  return `${instance.name} is ${markerText} but its eth0 is ${nicText}. ` +
+  if (effective === "?") {
+    return `${instance.name} is ${markerText} but its eth0 matches neither open nor strict (changed by hand?). ` +
+      `Inspect it: incus --project ${forgeProject()} config device show ${instance.name}`;
+  }
+  const repo = instance.config[REPO_KEY] || instance.name;
+  return `${instance.name} is ${markerText} but its eth0 is ${effective}. ` +
     `Finish the switch on the stopped container: forge egress ${repo} strict (or forge egress ${repo} open).`;
 }
 
