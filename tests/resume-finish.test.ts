@@ -132,6 +132,20 @@ test("finish succeeds when no agent process was running (pkill exit 1)", async (
   assert.equal(await cmdFinish(c, "moroine/agent-forge", "cli", false), 0);
 });
 
+// Comme attach et resume : un container arrêté (après 'forge stop') démarre
+// avant qu'on y cherche le worktree, au lieu d'un faux « no worktree ».
+test("finish starts a stopped container before looking for the worktree", async () => {
+  const c = fakeContext({ rules: [
+    { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
+    ...FINISH_RULES,
+  ] });
+  assert.equal(await cmdFinish(c, "moroine/agent-forge", "cli", false), 0);
+  const flat = c.calls.map((call) => call.join(" "));
+  const start = flat.indexOf("incus --project agent-forge start agent-moroine-agent-forge");
+  const probe = flat.findIndex((l) => l.includes("test -e /workspace/.trees/cli"));
+  assert.ok(start >= 0 && start < probe, flat.join("\n"));
+});
+
 // Le worktree est le cwd de l'agent : jamais retiré sous un agent qu'on n'a
 // pas pu arrêter.
 test("finish keeps the worktree when stopping the agent fails", async () => {

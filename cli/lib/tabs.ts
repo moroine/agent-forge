@@ -1,7 +1,7 @@
 // Runs a task's agent where the user is. Outside herdr this is the plain
 // foreground attach; inside herdr the task gets a tab in its repo's workspace.
 // This module imports session.ts, never the reverse.
-import { readdirSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { Context } from "./context.ts";
 import { ForgeError } from "./context.ts";
@@ -111,10 +111,14 @@ async function tabState(
 
 // The task directories the host sees in ~/workspaces/<c>/.trees, listed
 // without the container. The host lists the workspace, never runs git in it
-// (mirror.ts). null when the host cannot read them: the container answers.
+// (mirror.ts). Only a missing .trees in a workspace the host sees means no
+// task. null when the host cannot tell (no such workspace here, unreadable):
+// the container answers.
 function hostTaskDirs(container: string): Set<string> | null {
+  const workspace = join(workspacesDir(), container);
+  if (!existsSync(workspace)) return null;
   try {
-    return new Set(readdirSync(join(workspacesDir(), container, ".trees")));
+    return new Set(readdirSync(join(workspace, ".trees")));
   } catch (e) {
     return (e as NodeJS.ErrnoException).code === "ENOENT" ? new Set() : null;
   }
@@ -180,9 +184,11 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
           run.launched.add(tab.label);
         } else if (run.running.has(tab.label)) line(`${label}: skipped (agent runs outside this herdr)`);
         else if (state === "shell" && panes[0]) {
+          // Counted before typing: herdr may type the attach and still fail,
+          // and a duplicate tab must not get a second agent.
+          run.launched.add(tab.label);
           await paneRun(ctx, h, panes[0].id, attachCommand(container, tab.label));
           line(`${label}: resumed`);
-          run.launched.add(tab.label);
         } else line(`${label}: skipped (tab is busy)`);
       } catch (e) {
         line(`${label}: skipped (${e instanceof Error ? e.message : String(e)})`);
