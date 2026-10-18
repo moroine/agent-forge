@@ -60,10 +60,17 @@ export async function attachTask(ctx: Context, container: string, task: string, 
   );
 }
 
-// Stops the task's agent. `pkill -f` matches the full command line; the marker
-// is anchored so task "a" never matches "a-b". Exit 1 means nothing was running.
+// Every ERE metacharacter, escaped: task names allow ".", so "v1.2" must not
+// also match "v1x2".
+function ereEscape(s: string): string {
+  return s.replace(/[.[\]()*+?{}|^$\\]/g, "\\$&");
+}
+
+// Stops the task's agent. `pkill -f` matches the full command line against an
+// extended regex; the marker is escaped, and anchored so task "a" never
+// matches "a-b". Exit 1 means nothing was running.
 export async function stopAgent(ctx: Context, container: string, task: string): Promise<void> {
-  await execAsAgentArgv(ctx, container, ["pkill", "-f", "--", `${AGENT.marker(container, task)}( |$)`]);
+  await execAsAgentArgv(ctx, container, ["pkill", "-f", "--", `${ereEscape(AGENT.marker(container, task))}( |$)`]);
 }
 
 // UTC YYYYMMDDTHHMMSSZ.
