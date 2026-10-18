@@ -40,9 +40,9 @@ export async function findTaskTab(
   const workspaces = (await listWorkspaces(ctx, h)).filter((w) => w.label.toLowerCase() === wanted);
   if (workspaces.length > 1) ctx.err(`several herdr workspaces are labelled ${ownerRepo}; using the first`);
   const workspace = workspaces[0] ?? null;
+  if (!workspace) return { workspace: null, tab: null, panes: [] };
   const allTabs = await listTabs(ctx, h);
   const allPanes = await listPanes(ctx, h);
-  if (!workspace) return { workspace: null, tab: null, panes: [] };
   const matching = allTabs.filter((t) => t.workspaceId === workspace.id && t.label === task);
   if (matching.length > 1) ctx.err(`several herdr tabs are labelled ${task} in ${ownerRepo}; using the first`);
   const tab = matching[0] ?? null;
@@ -72,7 +72,7 @@ export async function openTask(ctx: Context, h: HerdrEnv, t: TaskRef): Promise<n
   const label = `${t.ownerRepo} ${t.task}`;
   if (state === "live") {
     await focusTab(ctx, h, (tab as Tab).id);
-    ctx.err(`Focused ${label} in herdr.`);
+    ctx.out(`Focused ${label} in herdr.`);
     return 0;
   }
   if (running) {
@@ -96,7 +96,7 @@ export async function openTask(ctx: Context, h: HerdrEnv, t: TaskRef): Promise<n
     await renameTab(ctx, h, created.tabId, t.task);
     await paneRun(ctx, h, created.paneId, command);
   }
-  ctx.err(`Opened ${label} in herdr.`);
+  ctx.out(`Opened ${label} in herdr.`);
   return 0;
 }
 
@@ -172,16 +172,21 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
         continue;
       }
       const panes = allPanes.filter((p) => p.tabId === tab.id);
-      const state = await tabState(ctx, h, panes, container, tab.label);
-      if (state === "live") {
-        line(`${label}: already running`);
-        run.launched.add(tab.label);
-      } else if (run.running.has(tab.label)) line(`${label}: skipped (agent runs outside this herdr)`);
-      else if (state === "shell" && panes[0]) {
-        await paneRun(ctx, h, panes[0].id, attachCommand(container, tab.label));
-        line(`${label}: resumed`);
-        run.launched.add(tab.label);
-      } else line(`${label}: skipped (tab is busy)`);
+      // A herdr failure on one tab is that tab's line, never the end of the run.
+      try {
+        const state = await tabState(ctx, h, panes, container, tab.label);
+        if (state === "live") {
+          line(`${label}: already running`);
+          run.launched.add(tab.label);
+        } else if (run.running.has(tab.label)) line(`${label}: skipped (agent runs outside this herdr)`);
+        else if (state === "shell" && panes[0]) {
+          await paneRun(ctx, h, panes[0].id, attachCommand(container, tab.label));
+          line(`${label}: resumed`);
+          run.launched.add(tab.label);
+        } else line(`${label}: skipped (tab is busy)`);
+      } catch (e) {
+        line(`${label}: skipped (${e instanceof Error ? e.message : String(e)})`);
+      }
     }
   }
   if (printed === 0) ctx.out("no forge tab to resume.");

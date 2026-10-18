@@ -59,13 +59,15 @@ test("no agent, no workspace: creates the workspace, renames its tab, runs in it
     { match: "/h/herdr workspace create", stdout: j({ workspace: { workspace_id: "w2" }, tab: { tab_id: "w2:t1" }, root_pane: { pane_id: "w2:p1" } }) },
   ] });
   assert.equal(await openTask(c, h, T), 0);
-  assert.deepEqual(herdrCalls(c).slice(3), [
+  // Without the workspace there is no tab or pane to list.
+  assert.deepEqual(herdrCalls(c), [
+    "workspace list",
     "workspace create --label o/r --cwd /home/f --focus",
     "tab rename w2:t1 cli",
     `pane run w2:p1 ${CMD}`,
   ]);
-  assert.ok(!has(c, "tab create"));
-  assert.ok(c.err_lines.includes("Opened o/r cli in herdr.") || c.out_lines.includes("Opened o/r cli in herdr."));
+  // Progress goes to stdout, as everywhere in forge.
+  assert.deepEqual(c.out_lines, ["Opened o/r cli in herdr."]);
 });
 
 test("no agent, workspace without the tab: creates the tab and runs in it", async () => {
@@ -107,7 +109,35 @@ test("agent running, live tab: only focuses", async () => {
   assert.equal(await openTask(c, h, T), 0);
   assert.ok(!has(c, "pane run"));
   assert.equal(herdrCalls(c).at(-1), "tab focus w1:t1");
-  assert.ok([...c.err_lines, ...c.out_lines].includes("Focused o/r cli in herdr."));
+  assert.deepEqual(c.out_lines, ["Focused o/r cli in herdr."]);
+});
+
+// The pane already runs the attach, and the agent is not up yet (or the probe
+// missed it): focusing is enough, never a second attach.
+test("no agent, live tab: only focuses", async () => {
+  const c = fakeContext({ rules: [
+    agent(false), ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"]), panes(["w1:p1", "w1:t1"]),
+    fg("w1:p1", ["forge", "attach", "agent-x", "cli"]),
+  ] });
+  assert.equal(await openTask(c, h, T), 0);
+  assert.ok(!has(c, "pane run"));
+  assert.equal(herdrCalls(c).at(-1), "tab focus w1:t1");
+});
+
+test("a tab without a pane counts as busy, and nothing is typed", async () => {
+  const c = fakeContext({ rules: [agent(false), ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"]), panes()] });
+  await assert.rejects(openTask(c, h, T), /herdr tab cli in o\/r is busy \(it runs nothing\)/);
+  assert.ok(!has(c, "pane run") && !has(c, "tab create"));
+});
+
+test("two tabs with the task's label: the first is used and stderr says so", async () => {
+  const c = fakeContext({ rules: [
+    agent(false), ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"], ["w1:t2", "cli", "w1"]),
+    panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t2"]), fg("w1:p1", ["-zsh"]),
+  ] });
+  await openTask(c, h, T);
+  assert.ok(c.err_lines.includes("several herdr tabs are labelled cli in o/r; using the first"), c.err_lines.join(" | "));
+  assert.deepEqual(herdrCalls(c).slice(-2), [`pane run w1:p1 ${CMD}`, "tab focus w1:t1"]);
 });
 
 test("agent running, no tab or a bare tab: refuses a second agent", async () => {
@@ -268,6 +298,20 @@ const oneRepo = (...extra: ExecRule[]): ExecRule[] => [
   ...extra,
 ];
 const runsOf = (c: { calls: string[][] }) => herdrCalls(c).filter((l) => l.startsWith("pane run"));
+
+// One tab that herdr refuses must not cost the others their agent.
+test("resumeAll reports a tab herdr fails on and goes on with the next", async () => {
+  const c = fakeContext({ rules: [
+    { match: "/h/herdr pane run w1:p1", code: 1, stderr: "pane gone\n" },
+    worktreesOf("agent-r", "cli", "docs"),
+    ...oneRepo(
+      ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"], ["w1:t2", "docs", "w1"]),
+      panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t2"]), fg("w1:p1", ["-zsh"]), fg("w1:p2", ["-zsh"]),
+    ),
+  ] });
+  assert.equal(await resumeAll(c, h), 0);
+  assert.deepEqual(c.out_lines, ["o/r cli: skipped (herdr pane run failed: pane gone)", "o/r docs: resumed"]);
+});
 
 test("resumeAll launches one agent for two bare tabs with the same task label", async () => {
   const c = fakeContext({ rules: oneRepo(

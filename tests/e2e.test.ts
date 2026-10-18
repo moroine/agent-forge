@@ -103,7 +103,7 @@ test("the popup waits after a success that printed a WARNING", () => {
 test("focusing a live tab from the popup closes it at once", () => {
   const r = forge(["resume", "moroine/agent-forge", "cli"], "\n", popup(herdr));
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stderr, /Focused moroine\/agent-forge cli in herdr\./);
+  assert.match(r.stdout, /Focused moroine\/agent-forge cli in herdr\./);
   assert.doesNotMatch(r.stderr, /Press Enter/);
 });
 
@@ -174,6 +174,15 @@ test("a missing argument with no TTY prints the usage instead of hanging", () =>
   const r = forge(["resume"], "1\n");
   assert.equal(r.status, 1);
   assert.match(r.stderr, /Usage: forge resume/);
+});
+
+// --all n'a de sens que pour resume : ailleurs, il était ignoré en silence.
+test("--all with another command than resume is refused", () => {
+  for (const cmd of ["start", "finish", "list"]) {
+    const r = forge([cmd, "--all"]);
+    assert.equal(r.status, 1, `${cmd}: ${r.stderr}`);
+    assert.match(r.stderr, /^Error: --all only goes with resume: forge resume --all$/m, cmd);
+  }
 });
 
 test("an unknown option fails cleanly rather than crashing", () => {
