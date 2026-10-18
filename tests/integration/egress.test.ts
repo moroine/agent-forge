@@ -7,7 +7,8 @@
 //
 // One test project, forge-selftest-egress, with its own proxy slot (3) and a
 // throwaway XDG_CONFIG_HOME whose allowlist holds example.com only, so a real
-// agent-forge setup on the same host (its ACLs, its allowlist) is untouched.
+// agent-forge setup on the same host (its ACLs, its allowlist) is untouched;
+// the user's config.json is copied in, so the shared bridge keeps its address.
 //
 // The strict container is not created with `forge start --strict` (that would
 // clone from GitHub on the host): the arguments forge itself would pass to
@@ -23,13 +24,13 @@
 // positive control, so a broken probe cannot pass one.
 import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { homedir, tmpdir } from "node:os";
+import { rmSync, writeFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { createServer, type AddressInfo } from "node:net";
 import { join } from "node:path";
 import {
   ENABLED, PREFIX, REPO_ROOT, SENTINEL, SENTINEL_PEER, asAgent, copyImage, forge as forgeIn, incus, incusBelowGate, launch, must, raw, run,
-  teardownProject, waitReady, type Run,
+  teardownProject, throwawayXdg, waitReady, type Run,
 } from "./lib.ts";
 
 const PROJECT = "forge-selftest-egress";
@@ -129,8 +130,7 @@ before((t) => {
   teardownProject(PROJECT);
   gateLifted = incusBelowGate();
   if (gateLifted) console.log(`NOTE: this host's Incus is below the strict-mode version gate: it is lifted for ${PROJECT} in this run`);
-  xdg = mkdtempSync(join(tmpdir(), "forge-selftest-egress-xdg-"));
-  mkdirSync(join(xdg, "agent-forge"));
+  xdg = throwawayXdg("forge-selftest-egress-xdg-");
   writeFileSync(allowlistFile(), "example.com\n");
 });
 
@@ -312,7 +312,8 @@ test("a container run by Docker has no proxy unless given it", { skip: !ENABLED 
   if (process.env.FORGE_INTEGRATION_DOCKER !== "1") return t.skip("set FORGE_INTEGRATION_DOCKER=1 (needs Docker Hub; pulls an image)");
   if (!ready) return t.skip("no strict container");
   const original = allowlistFile();
-  const hubList = "example.com\n.docker.io\n.docker.com\nproduction.cloudflare.docker.com\n";
+  // Exactly the default list's Docker Hub group (no overlapping entries).
+  const hubList = "example.com\nregistry-1.docker.io\nauth.docker.io\nproduction.cloudflare.docker.com\n";
   writeFileSync(original, hubList);
   try {
     must("forge setup with the Docker Hub list", forge(["setup"]));
@@ -383,6 +384,10 @@ test("forge egress open, then strict, on a stopped container round-trips", { ski
 
   assert.match(listRow(), /\bstrict\b/, `forge list: ${listRow()}`);
   must("stop", incus(PROJECT, ["stop", S1]));
+  // Stopped, S1 has no address in `incus list`: its DHCP lease still names it
+  // in the log (the earlier tests left denied lines there).
+  const stoppedLog = must("forge egress log, S1 stopped", forge(["egress", "log", SENTINEL])).stdout;
+  assert.match(stoppedLog, new RegExp(`${S1}\\s+denied\\s+CONNECT\\s+example\\.org:443`), stoppedLog);
   assert.match(must("egress", forge(["egress", SENTINEL])).stdout, new RegExp(`^${SENTINEL}: strict$`, "m"));
 
   // strict → open

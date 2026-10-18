@@ -3,10 +3,11 @@
 // unless a suite is enabled with FORGE_INTEGRATION=1.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
-import { homedir } from "node:os";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { strictModeSupported } from "../../cli/lib/host.ts";
+import { configPath } from "../../cli/lib/paths.ts";
 
 export const ENABLED = process.env.FORGE_INTEGRATION === "1";
 // Instances are deleted only when both their name prefix and their sentinel
@@ -34,6 +35,20 @@ export const incus = (project: string, args: string[], input?: string) =>
 // `env` adds variables on top of FORGE_INCUS_PROJECT (FORGE_PROXY_SLOT, XDG_CONFIG_HOME…).
 export const forge = (project: string, args: string[], env: NodeJS.ProcessEnv = {}) =>
   run(FORGE, args, { env: { ...env, FORGE_INCUS_PROJECT: project } });
+// A throwaway XDG_CONFIG_HOME for forge (its config and allowlist), so the
+// user's own files are never touched. The invoking user's config.json, when
+// there is one, is copied in: forgebr0 and forge-egress are shared with the
+// real agent-forge project, and `forge setup` with the defaults would move
+// the bridge to the default address.
+export function throwawayXdg(prefix: string): string {
+  const xdg = mkdtempSync(join(tmpdir(), prefix));
+  mkdirSync(join(xdg, "agent-forge"));
+  // configPath() here is the user's: this process keeps its own environment.
+  const real = configPath();
+  if (existsSync(real)) copyFileSync(real, join(xdg, "agent-forge", "config.json"));
+  return xdg;
+}
+
 export const raw = (label: string, r: Run) =>
   `${label}\n  exit=${r.status}\n  stdout=${JSON.stringify(r.stdout)}\n  stderr=${JSON.stringify(r.stderr)}`;
 export function must(label: string, r: Run): Run {
