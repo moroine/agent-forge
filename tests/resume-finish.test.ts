@@ -144,7 +144,7 @@ test("resume applies the strict settings before attaching", async () => {
   assert.ok(push >= 0 && push < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
 });
 
-test("resume d'un container marqué open dont la NIC est restée stricte : refusé avant tout démarrage", async () => {
+test("resume of a container marked open whose eth0 is still strict is refused before any start", async () => {
   const c = fakeContext({ incus: egressFake({ mode: "open", nic: "strict" }), rules: EG });
   await assert.rejects(() => cmdResume(c, "o/r", "t"), /eth0 is strict.*forge egress o\/r strict/);
   assert.ok(!lines(c).some((l) => / start agent-o-r|rm -f|tmux/.test(l)), lines(c).join("\n"));

@@ -69,8 +69,8 @@ export type Lease = { hostname: string; address: string };
 
 // Sonde : les baux DHCP d'un réseau, ceux des instances arrêtées compris
 // (`incus list` ne leur montre plus d'adresse). Le bridge vit dans `default`,
-// atteint par --project comme les autres commandes réseau ; Incus ne rend alors
-// que les baux des instances du projet. Un échec vaut « aucun bail ».
+// atteint par --project comme les autres commandes réseau. Le hostname d'un
+// bail dynamique est celui que le client a envoyé. Un échec vaut « aucun bail ».
 export async function listLeases(ctx: Context, network: string): Promise<Lease[]> {
   const r = await ctx.exec(incus("network", "list-leases", network, "-f", "json"));
   if (r.code !== 0) return [];
