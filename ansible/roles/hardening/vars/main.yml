@@ -25,3 +25,8 @@ hardening_ssh_match_user:
 # make a password-holding admin (bare metal) renew its password every 60 days,
 # and sudo, Ansible's become included, would demand it.
 hardening_users_without_password_ageing: ["{{ forge_admin_user }}"]
+# devsec counts every account below UID_MIN (1000) as a system account and
+# gives it a nologin shell. A Lima VM's admin has the Mac's UID (501): it was
+# locked out after the first run, Ansible included. vagrant and kitchen are
+# devsec's own default list.
+hardening_ignore_users: [vagrant, kitchen, "{{ forge_admin_user }}"]

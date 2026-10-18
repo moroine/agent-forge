@@ -33,6 +33,21 @@
     verify_cfg: "{{ dict(verify_sshd.stdout_lines | map('split', ' ', 1)) }}"
     verify_cfg_forge: "{{ dict(verify_sshd_forge.stdout_lines | map('split', ' ', 1)) }}"
 
+# devsec gives accounts below UID_MIN a nologin shell; a Lima admin has the
+# Mac's UID (501) and must keep its shell, or the next run is locked out.
+- name: Read the admin's account
+  ansible.builtin.getent:
+    database: passwd
+    key: "{{ ansible_user }}"
+
+- name: Check the admin keeps a login shell
+  ansible.builtin.assert:
+    that:
+      - ansible_facts.getent_passwd[ansible_user][5] not in ['/usr/sbin/nologin', '/bin/false']
+    fail_msg: >-
+      {{ ansible_user }}'s shell is {{ ansible_facts.getent_passwd[ansible_user][5] }}:
+      the admin can no longer log in.
+
 - name: Read the kernel settings the hardening role overrides
   ansible.builtin.command:
     cmd: sysctl -n net.ipv4.ip_forward kernel.apparmor_restrict_unprivileged_userns kernel.yama.ptrace_scope

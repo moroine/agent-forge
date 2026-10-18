@@ -7,6 +7,7 @@
     # UFW is not used: the firewall role runs native nftables.
     ufw_manage_defaults: false
     os_users_without_password_ageing: "{{ hardening_users_without_password_ageing }}"
+    os_ignore_users: "{{ hardening_ignore_users }}"
 
 # apport (Ubuntu's crash reporter) writes fs.suid_dumpable=2 when it starts,
 # after systemd-sysctl applied devsec's 0: without this, the setting did not
