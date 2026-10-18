@@ -8,7 +8,7 @@ import { converge, ensureProject, type Outcome } from "../converge.ts";
 import { loadAllowlist } from "../allowlist.ts";
 import { ForgeError } from "../context.ts";
 import {
-  checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, strictModeSupported, type ProcPaths,
+  checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, gateOverrideWarning, strictGateOverridden, strictModeSupported, type ProcPaths,
 } from "../host.ts";
 import { forgeProject, listInstances, serverInfo } from "../incus.ts";
 import { proxyPlan } from "../ipv4.ts";
@@ -72,7 +72,9 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
   // update fails, so they get the open mode only.
   const server = await serverInfo(ctx);
   const version = server.ok ? server.info.environment?.server_version ?? "unknown" : "unknown";
-  if (!strictModeSupported(version)) {
+  const lifted = !strictModeSupported(version) && strictGateOverridden();
+  if (lifted) ctx.err(gateOverrideWarning(version));
+  if (!strictModeSupported(version) && !lifted) {
     ctx.err(`NOTICE: Incus ${version} is too old for strict mode (needs 7.0.2 or later on the 7.0 LTS line, or ` +
       "7.5.0 or later): the strict egress objects and forge-proxy are not created. Open mode is unaffected.");
   } else {

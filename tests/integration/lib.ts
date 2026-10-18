@@ -6,6 +6,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readdirSync, rmSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
+import { strictModeSupported } from "../../cli/lib/host.ts";
 
 export const ENABLED = process.env.FORGE_INTEGRATION === "1";
 // Instances are deleted only when both their name prefix and their sentinel
@@ -118,3 +119,13 @@ export function copyImage(from: string, to: string): Run {
 
 export const asAgent = (project: string, name: string, cmd: string) =>
   incus(project, ["exec", name, "--", "su", "-", "aiuser", "-c", cmd]);
+
+// True when the host's Incus fails the strict-mode version gate (e.g. 7.0.1
+// while 7.0.2 is not packaged): the egress suite then lifts the gate for its
+// own forge-selftest project through the test-only override.
+export function incusBelowGate(): boolean {
+  const r = run("incus", ["query", "/1.0"]);
+  if (r.status !== 0) return false;
+  const version = (JSON.parse(r.stdout) as { environment?: { server_version?: string } }).environment?.server_version ?? "";
+  return !strictModeSupported(version);
+}

@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import type { NetworkInterfaceInfo } from "node:os";
 import type { Context } from "./context.ts";
 import { ForgeError } from "./context.ts";
-import { serverInfo, storagePoolExists } from "./incus.ts";
+import { forgeProject, serverInfo, storagePoolExists } from "./incus.ts";
 import { REJECTED_RANGES, addressIn, parseAddress } from "./ipv4.ts";
 import { BRIDGE } from "./objects.ts";
 
@@ -119,6 +119,20 @@ export function strictModeSupported(version: string): boolean {
   return minor >= 5 || (minor === 0 && patch >= 2);
 }
 
+// Test-only lift of the version gate, so the integration suite can exercise
+// strict mode on an Incus that is not packaged at 7.0.2 yet. It needs both the
+// variable and a forge-selftest* project: the agent-forge project (the
+// default) keeps the gate whatever the environment says. Deliberately not
+// documented for users, like FORGE_INCUS_PROJECT.
+export function strictGateOverridden(): boolean {
+  return process.env.FORGE_TEST_ALLOW_INCUS_BELOW_GATE === "1" && forgeProject().startsWith("forge-selftest");
+}
+
+export function gateOverrideWarning(version: string): string {
+  return `WARNING: FORGE_TEST_ALLOW_INCUS_BELOW_GATE lifts the strict-mode Incus version gate (Incus ${version}) ` +
+    `for test project ${forgeProject()}: never use it outside the integration tests.`;
+}
+
 export async function requireStrictIncus(ctx: Context): Promise<string> {
   const server = await serverInfo(ctx);
   if (!server.ok) {
@@ -127,7 +141,9 @@ export async function requireStrictIncus(ctx: Context): Promise<string> {
       "in the incus-admin group (log in again after being added to it).");
   }
   const version = server.info.environment?.server_version ?? "unknown";
-  if (!strictModeSupported(version)) {
+  if (!strictModeSupported(version) && strictGateOverridden()) {
+    ctx.err(gateOverrideWarning(version));
+  } else if (!strictModeSupported(version)) {
     throw new ForgeError(
       "strict mode needs Incus 7.0.2 or later on the 7.0 LTS line, or 7.5.0 or later " +
       `(this host runs ${version}): earlier releases can leave a NIC unfiltered when a filter update fails. ` +

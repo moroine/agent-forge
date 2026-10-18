@@ -27,7 +27,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import {
-  ENABLED, PREFIX, REPO_ROOT, SENTINEL, SENTINEL_PEER, asAgent, copyImage, forge as forgeIn, incus, launch, must, raw, run,
+  ENABLED, PREFIX, REPO_ROOT, SENTINEL, SENTINEL_PEER, asAgent, copyImage, forge as forgeIn, incus, incusBelowGate, launch, must, raw, run,
   teardownProject, waitReady, type Run,
 } from "./lib.ts";
 
@@ -59,8 +59,12 @@ function exampleIp(): string {
 
 // XDG_CONFIG_HOME is overridden for forge's allowlist and config: the incus
 // client keeps its own configuration through INCUS_CONF.
+// FORGE_TEST_ALLOW_INCUS_BELOW_GATE is added only when the host's Incus fails
+// the strict-mode version gate (decided once, in before()).
+let gateLifted = false;
 const env = () => ({
   FORGE_PROXY_SLOT: SLOT, XDG_CONFIG_HOME: xdg,
+  ...(gateLifted ? { FORGE_TEST_ALLOW_INCUS_BELOW_GATE: "1" } : {}),
   INCUS_CONF: process.env.INCUS_CONF ?? join(homedir(), ".config", "incus"),
 });
 const forge = (args: string[]) => forgeIn(PROJECT, args, env());
@@ -122,6 +126,8 @@ before((t) => {
   if (!ENABLED) return (t as TestContext).skip("set FORGE_INTEGRATION=1 to run against a test Incus");
   must("no usable incus client", run("incus", ["--version"]));
   teardownProject(PROJECT);
+  gateLifted = incusBelowGate();
+  if (gateLifted) console.log(`NOTE: this host's Incus is below the strict-mode version gate: it is lifted for ${PROJECT} in this run`);
   xdg = mkdtempSync(join(tmpdir(), "forge-selftest-egress-xdg-"));
   mkdirSync(join(xdg, "agent-forge"));
   writeFileSync(allowlistFile(), "example.com\n");
