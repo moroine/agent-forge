@@ -4,7 +4,8 @@ import { spawn } from "node:child_process";
 import { createPrompt } from "./prompt.ts";
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
-export type ExecOptions = { input?: string; env?: Record<string, string> };
+// `cwd` absent : le répertoire courant de forge, hérité.
+export type ExecOptions = { input?: string; env?: Record<string, string>; cwd?: string };
 export type AttachOptions = { env?: Record<string, string> };
 
 export type Prompt = {
@@ -59,6 +60,7 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
       stdio: ["pipe", "pipe", "pipe"],
       // Les variables en plus se superposent à l'environnement hérité (PATH…).
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
+      cwd: opts.cwd,
     });
     let stdout = "";
     let stderr = "";
