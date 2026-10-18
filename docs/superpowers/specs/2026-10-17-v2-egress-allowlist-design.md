@@ -321,12 +321,16 @@ is the builder's):
 - `http_access` order:
   1. deny ports other than 80 and 443;
   2. deny `CONNECT` to ports other than 443;
-  3. deny IP-literal destinations (`dstdom_regex -n` for IPv4 and bracketed
+  3. deny FTP;
+  4. deny IP-literal destinations (`dstdom_regex -n` for IPv4 and bracketed
      IPv6) — without `-n`, `dstdomain` would reverse-resolve an IP literal and
      an attacker-controlled PTR record could match an allowed suffix;
-  4. deny private, loopback, link-local and CGNAT destinations (`dst`), IPv4
-     and IPv6;
-  5. allow `agents` to `dstdomain -n "/etc/squid/allowlist"`;
+  5. allow `agents` to `dstdomain -n "/etc/squid/allowlist"` **and not** to a
+     private, loopback, link-local or CGNAT destination (`!privdst`, a `dst`
+     ACL, IPv4 and IPv6), in that order on one line: `dst` makes squid resolve
+     the name, and squid stops at the first ACL that does not match, so only a
+     listed name is ever resolved (a refused name causes no DNS query, no DNS
+     channel through the proxy);
   6. deny all.
 - With an empty allowlist, rule 5 is omitted (squid treats an empty ACL file
   inconsistently across versions).
