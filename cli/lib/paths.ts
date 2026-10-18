@@ -22,6 +22,15 @@ export function workspacesDir(): string {
 
 // An empty XDG_CONFIG_HOME counts as unset, as the XDG spec says.
 export function configPath(): string {
+  return join(configDir(), "config.json");
+}
+
+// The egress allowlist sits next to the config.
+export function allowlistPath(): string {
+  return join(configDir(), "egress-allowlist");
+}
+
+function configDir(): string {
   const base = process.env.XDG_CONFIG_HOME || join(forgeHome(), ".config");
-  return join(base, "agent-forge", "config.json");
+  return join(base, "agent-forge");
 }
