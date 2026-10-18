@@ -158,6 +158,43 @@ test("right after a fresh mirror clone, start does not fetch GitHub again", asyn
   }
 });
 
+// The very first prefix+f: no forge container yet, nothing typed on a command line.
+test("with no forge container yet, start asks owner/repo and provisions it", async () => {
+  const home = mkdtempSync(join(tmpdir(), "forge-start-"));
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", ".credentials.json"), "{}");
+  process.env.FORGE_HOME = home;
+  process.env.FORGE_REPO_DIR = process.cwd();
+  process.env.FORGE_WORKSPACES = join(home, "workspaces");
+  process.env.FORGE_MIRRORS = join(home, "mirrors");
+  try {
+    const c = fakeContext({
+      incus: FakeIncus.withRuntime({ commit: "IMGSHA" }),
+      rules: [
+        { match: "git config --global --includes user.name", stdout: "Ada\n" },
+        { match: "git config --global --includes user.email", stdout: "ada@example.com\n" },
+        { match: "forge-hook-probe", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" },
+      ],
+      answers: ["o/r", "fresh"],
+    });
+    await cmdStart(c, undefined, undefined);
+    assert.ok(c.err_lines.includes("owner/repo> "), c.err_lines.join(" | "));
+    const flat = c.calls.map((x) => x.join(" "));
+    assert.ok(flat.some((l) => l.includes("clone --bare git@github.com:o/r.git")), flat.join("\n"));
+    assert.ok(c.out_lines.includes("Container agent-o-r provisioned."), c.out_lines.join(" | "));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+    for (const k of ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "FORGE_MIRRORS"]) delete process.env[k];
+  }
+});
+
+test("with no forge container yet and no TTY, start exits with its message", async () => {
+  const c = fakeContext({ incus: FakeIncus.withRuntime(), tty: false });
+  await assert.rejects(() => cmdStart(c, undefined, undefined),
+    /no forge container yet\. Name the repo: forge start <owner\/repo> <task>\./);
+  assert.ok(!c.calls.some((call) => call.includes("launch")));
+});
+
 test("the task menu mixes worktrees, local branches and origin branches", async () => {
   const c = fakeContext({
     rules: rules([
