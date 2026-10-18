@@ -39,7 +39,10 @@ function run(cmd: string, args: string[], opts: { env?: NodeJS.ProcessEnv; input
   return { status: r.status, stdout: r.stdout ?? "", stderr: r.stderr ?? String(r.error ?? "") };
 }
 const incus = (project: string, args: string[], input?: string) => run("incus", ["--project", project, ...args], { input });
-const forge = (project: string, args: string[]) => run(FORGE, args, { env: { FORGE_INCUS_PROJECT: project } });
+const forge = (project: string, args: string[]) => run(FORGE, args, {
+  // The herdr config block goes to a throwaway file, never the real config.
+  env: { FORGE_INCUS_PROJECT: project, HERDR_CONFIG_PATH: join(workspaces, "herdr.toml") },
+});
 const raw = (label: string, r: Run) =>
   `${label}\n  exit=${r.status}\n  stdout=${JSON.stringify(r.stdout)}\n  stderr=${JSON.stringify(r.stderr)}`;
 function must(label: string, r: Run): Run {
@@ -141,7 +144,7 @@ test("forge setup converges, then reports only unchanged", { skip: !ENABLED }, (
   assert.equal(idmap.stdout.trim(), `uid ${process.getuid!()} 1001\ngid ${process.getgid!()} 1001`, raw("raw.idmap", idmap));
   const second = must("second forge setup", forge(PROJECT, ["setup"]));
   const lines = second.stdout.trim().split("\n");
-  assert.equal(lines.length, 4, raw("second setup", second));
+  assert.equal(lines.length, 5, raw("second setup", second));
   for (const line of lines) assert.match(line, /: unchanged$/, raw("second setup", second));
 });
 
