@@ -10,7 +10,7 @@ test("comments, inline comments and blank lines are ignored", () =>
   assert.deepEqual(parseAllowlist("f", "# head\n\napi.anthropic.com   # why\n.example.com\n"), ["api.anthropic.com", ".example.com"]));
 
 test("CRLF, a BOM, tabs and trailing spaces read like plain LF", () =>
-  assert.deepEqual(parseAllowlist("f", "﻿a.example.com\t \r\n\t.b.example.org  # x\r\n"), ["a.example.com", ".b.example.org"]));
+  assert.deepEqual(parseAllowlist("f", "\uFEFFa.example.com\t \r\n\t.b.example.org  # x\r\n"), ["a.example.com", ".b.example.org"]));
 
 for (const [line, why] of [
   ["Example.com", /lowercase/], ["example", /two labels/], ["10.0.0.1", /IP/], ["[::1]", /IP/],
