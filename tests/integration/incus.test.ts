@@ -17,10 +17,11 @@ import { test, before, after, type TestContext } from "node:test";
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, statSync } from "node:fs";
 import { createServer, type AddressInfo } from "node:net";
-import { homedir, networkInterfaces, tmpdir } from "node:os";
+import { homedir, networkInterfaces } from "node:os";
 import { join } from "node:path";
 import {
   ENABLED, PREFIX, SENTINEL, asAgent, copyImage, forge as forgeIn, incus, launch, must, raw, run, teardownProject,
+  throwawayXdg,
 } from "./lib.ts";
 
 const BUILD_IMAGE = process.env.FORGE_INTEGRATION_IMAGE === "1";
@@ -29,7 +30,8 @@ const RESTRICTED = "forge-selftest-restricted";
 // Distinct proxy slots: each project has its own forge-proxy on the bridge.
 const SLOTS: Record<string, string> = { [PROJECT]: "1", [RESTRICTED]: "2" };
 
-// A throwaway XDG_CONFIG_HOME: the user's allowlist and config are never touched.
+// A throwaway XDG_CONFIG_HOME: the user's allowlist and config are never
+// touched (the config is copied in, see throwawayXdg).
 let xdg = "";
 const forge = (project: string, args: string[]) =>
   forgeIn(project, args, { FORGE_PROXY_SLOT: SLOTS[project], XDG_CONFIG_HOME: xdg });
@@ -48,7 +50,7 @@ before((t) => {
   // In the home: the restricted project's restricted.devices.disk.paths names
   // this directory.
   workspaces = mkdtempSync(join(homedir(), "forge-selftest-ws-"));
-  xdg = mkdtempSync(join(tmpdir(), "forge-selftest-xdg-"));
+  xdg = throwawayXdg("forge-selftest-xdg-");
 });
 
 after(() => {
