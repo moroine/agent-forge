@@ -32,3 +32,10 @@
       ansible.builtin.assert:
         that:
           - hardening_users_without_password_ageing == ['ubuntu']
+
+    # devsec gives every account below UID_MIN a nologin shell; Lima's admin
+    # has the Mac's UID (501). The admin must keep its shell.
+    - name: Check the admin keeps its login shell
+      ansible.builtin.assert:
+        that:
+          - hardening_ignore_users == ['vagrant', 'kitchen', 'ubuntu']
