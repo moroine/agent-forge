@@ -3,7 +3,9 @@
 // idempotent block in the forge user's herdr config. The block is always kept
 // LAST in the file: a bare TOML key written after it would land in its last
 // [[keys.command]] table (herdr 0.9.5: "unknown config key keys.command.0.bogus").
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import {
+  chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { ForgeError, type Context } from "./context.ts";
 import { forgeCommand, forgeHome, herdrConfigPath } from "./paths.ts";
@@ -120,8 +122,11 @@ function readConfig(path: string): string {
 }
 
 // Atomic write: temp file next to the target, then rename. The mode of an
-// existing file is kept; a new file is 0644 and its directory 0700.
-function writeConfig(path: string, text: string): void {
+// existing file is kept; a new file is 0644 and its directory 0700. A
+// symlinked config (stow, chezmoi) stays a link: the file it points to is
+// the one replaced.
+function writeConfig(configPath: string, text: string): void {
+  const path = existsSync(configPath) ? realpathSync(configPath) : configPath;
   const dir = dirname(path);
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true, mode: 0o700 });
   const mode = existsSync(path) ? statSync(path).mode & 0o777 : 0o644;

@@ -1,6 +1,8 @@
 import { test, beforeEach, afterEach } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync, chmodSync } from "node:fs";
+import {
+  chmodSync, lstatSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
@@ -132,6 +134,23 @@ test("ensureHerdrConfig keeps an existing file's mode on update", async () => {
   assert.deepEqual(c.out_lines, [`herdr config ${path}: updated`]);
   assert.equal(statSync(path).mode & 0o777, 0o600);
   assert.equal(readFileSync(path, "utf8"), "x = 1\n\n" + BLOCK);
+});
+
+// stow and chezmoi link the config from a dotfiles directory, relatively.
+test("ensureHerdrConfig keeps a symlinked config a symlink and updates the file it points to", async () => {
+  const real = join(dir, "dotfiles", "herdr.toml");
+  mkdirSync(join(dir, "dotfiles"), { recursive: true });
+  writeFileSync(real, "x = 1\n");
+  chmodSync(real, 0o600);
+  mkdirSync(join(dir, "sub", "herdr"), { recursive: true });
+  symlinkSync(join("..", "..", "dotfiles", "herdr.toml"), path);
+  const c = fakeContext({ rules: [noHerdr] });
+  await ensureHerdrConfig(c);
+  assert.deepEqual(c.out_lines, [`herdr config ${path}: created`]);
+  assert.ok(lstatSync(path).isSymbolicLink(), "the link was replaced by a regular file");
+  assert.equal(readFileSync(real, "utf8"), "x = 1\n\n" + BLOCK);
+  assert.equal(statSync(real).mode & 0o777, 0o600);
+  assert.deepEqual(readdirSync(join(dir, "dotfiles")), ["herdr.toml"]);
 });
 
 test("ensureHerdrConfig says when herdr is not installed, and does not check", async () => {
