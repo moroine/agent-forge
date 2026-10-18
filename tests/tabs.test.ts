@@ -1,6 +1,9 @@
 // Opening a task inside herdr: the spec's table, against canned herdr answers.
 import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
+import { chmodSync, mkdirSync, mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
 import { attachCommand, closeBareTab, findTaskTab, openTask, resumeAll, runTask } from "../cli/lib/tabs.ts";
 import { shellQuote } from "../cli/lib/shell.ts";
@@ -9,15 +12,22 @@ const h = { bin: "/h/herdr", popup: false };
 const T = { container: "agent-x", ownerRepo: "o/r", task: "cli" };
 const CMD = "exec env HERDR_AGENT=claude '/usr/local/bin/forge' attach agent-x cli";
 
-const saved = { as: process.env.FORGE_INVOKED_AS, home: process.env.FORGE_HOME };
+// The host's view of the workspaces: agent-s has a worktree directory for
+// task x, so resume --all may start agent-s for a tab labelled x.
+const workspaces = mkdtempSync(join(tmpdir(), "forge-tabs-"));
+mkdirSync(join(workspaces, "agent-s", ".trees", "x"), { recursive: true });
+
+const saved = { as: process.env.FORGE_INVOKED_AS, home: process.env.FORGE_HOME, ws: process.env.FORGE_WORKSPACES };
 process.env.FORGE_INVOKED_AS = "/usr/local/bin/forge";
 process.env.FORGE_HOME = "/home/f";
+process.env.FORGE_WORKSPACES = workspaces;
 afterEach(() => {
   process.env.FORGE_INVOKED_AS = "/usr/local/bin/forge";
   process.env.FORGE_HOME = "/home/f";
+  process.env.FORGE_WORKSPACES = workspaces;
 });
 process.on("exit", () => {
-  for (const [k, v] of [["FORGE_INVOKED_AS", saved.as], ["FORGE_HOME", saved.home]] as const) {
+  for (const [k, v] of [["FORGE_INVOKED_AS", saved.as], ["FORGE_HOME", saved.home], ["FORGE_WORKSPACES", saved.ws]] as const) {
     if (v === undefined) delete process.env[k];
     else process.env[k] = v;
   }
@@ -209,6 +219,45 @@ test("resumeAll reports a container that does not start and goes on", async () =
   assert.ok(c.out_lines.includes("o/s: skipped (container did not start: incus start failed: Error: no space)"),
     c.out_lines.join(" | "));
   assert.ok(c.out_lines.includes("o/r cli: resumed"));
+});
+
+// A stopped container whose workspace has no task tab stays stopped: the host
+// reads the worktree directories in ~/workspaces/<c>, without git, before
+// starting it.
+const stoppedRepo = (container: string, ...extra: ExecRule[]): ExecRule[] => [
+  { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: container, status: "Stopped" }]) },
+  { match: `${container} user.forge.repo`, stdout: "o/s" },
+  worktreesOf(container, "x"), psOf(container, ""),
+  ...extra,
+];
+const started = (c: { calls: string[][] }, container: string) =>
+  c.calls.some((a) => a.join(" ") === `incus --project agent-forge start ${container}`);
+
+test("resumeAll leaves a stopped container stopped when no tab of its workspace is a task", async () => {
+  const c = fakeContext({ rules: stoppedRepo("agent-s",
+    ws(["w2", "o/s"]), tabs(["w2:t1", "notes", "w2"]), panes(["w2:p1", "w2:t1"]), fg("w2:p1", ["-zsh"]),
+  ) });
+  await resumeAll(c, h);
+  assert.ok(!started(c, "agent-s"), c.calls.map((a) => a.join(" ")).join("\n"));
+  assert.deepEqual(c.out_lines, ["no forge tab to resume."]);
+});
+
+test("resumeAll starts a stopped container when the host cannot read its worktree directories", {
+  skip: process.getuid?.() === 0 ? "root reads any directory" : false,
+}, async () => {
+  const trees = join(workspaces, "agent-u", ".trees");
+  mkdirSync(trees, { recursive: true });
+  chmodSync(trees, 0o000);
+  try {
+    const c = fakeContext({ rules: stoppedRepo("agent-u",
+      ws(["w2", "o/s"]), tabs(["w2:t1", "x", "w2"]), panes(["w2:p1", "w2:t1"]), fg("w2:p1", ["-zsh"]),
+    ) });
+    await resumeAll(c, h);
+    assert.ok(started(c, "agent-u"));
+    assert.deepEqual(c.out_lines, ["o/s x: resumed"]);
+  } finally {
+    chmodSync(trees, 0o755);
+  }
 });
 
 // One agent per task at most, however many tabs carry its label.
