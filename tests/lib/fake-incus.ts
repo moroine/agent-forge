@@ -13,6 +13,7 @@
 //   - every call is recorded with its stdin.
 // Anything it does not model fails with exit code 1, so that a test never
 // passes on a command the fake silently ignored.
+import { readFileSync } from "node:fs";
 import type { ExecResult } from "../../cli/lib/context.ts";
 
 export type Config = Record<string, string>;
@@ -24,7 +25,10 @@ export type AclState = { name: string; description: string; config: Config; ingr
 export type ProfileState = { name: string; description: string; config: Config; devices: Devices };
 export type InstanceState = {
   name: string; status: "Running" | "Stopped"; profiles: string[]; config: Config; devices: Devices;
+  // The address `list -f json` reports for eth0.
+  ipv4?: string;
 };
+export type FileState = { content: string; uid: string; gid: string; mode: string };
 export type ImageState = { fingerprint: string; aliases: { name: string; description: string }[]; properties: Config };
 export type FakeCall = { argv: string[]; input: string | undefined };
 
@@ -44,7 +48,7 @@ const DEFAULT_FEATURES: Config = {
 
 // The commands that act on project-scoped objects (spec "Testing").
 const NEEDS_PROJECT = new Set([
-  "list", "info", "launch", "start", "stop", "delete", "config", "exec", "file", "publish", "image", "profile",
+  "list", "info", "launch", "start", "stop", "restart", "delete", "config", "exec", "file", "publish", "image", "profile",
 ]);
 
 const ok = (stdout = ""): ExecResult => ({ code: 0, stdout, stderr: "" });
@@ -81,11 +85,20 @@ function parseBody(input: string | undefined): Parsed {
   }
 }
 
+// "k=v" → [k, v]; the value may contain "=".
+const splitPair = (kv: string): [string, string] => {
+  const i = kv.indexOf("=");
+  return i < 0 ? [kv, ""] : [kv.slice(0, i), kv.slice(i + 1)];
+};
+
 export class FakeIncus {
   readonly calls: FakeCall[] = [];
   // Incus 7.0.1 removes the image that held the alias on `publish --reuse`; set to
   // true to model an Incus that keeps it.
   publishReuseKeepsOld = false;
+  serverVersion = "7.0.2";
+  // Files pushed into instances, keyed "<project>/<instance><path>".
+  readonly files = new Map<string, FileState>();
   readonly projects = new Map<string, ProjectState>([
     ["default", { name: "default", description: "Default Incus project", config: {} }],
   ]);
@@ -163,21 +176,45 @@ export class FakeIncus {
           : unsupported(argv);
       case "query":
         return rest[0] === "/1.0"
-          ? ok(JSON.stringify({ api_version: "1.0", environment: { firewall: this.firewall, server_version: "7.0.1" } }))
+          ? ok(JSON.stringify({ api_version: "1.0", environment: { firewall: this.firewall, server_version: this.serverVersion } }))
           : unsupported(argv);
-      case "list": return ok(JSON.stringify([...this.instances.get(p)!.values()]));
+      case "list": return ok(JSON.stringify([...this.instances.get(p)!.values()].map((i) => this.listed(p, i))));
       case "info": return this.instances.get(p)!.has(rest[0]) ? ok(`Name: ${rest[0]}\n`) : fail("Instance not found");
       case "launch": return this.launch(p, rest);
       case "start": return this.setStatus(p, rest[0], "Running");
+      case "restart": return this.setStatus(p, rest[0], "Running");
       case "stop": return this.setStatus(p, rest[0], "Stopped");
       case "delete": return this.deleteInstance(p, rest);
       case "config": return this.config(p, rest);
       case "exec": return this.exec(p, rest);
-      case "file": return rest[0] === "push" ? ok() : unsupported(argv);
+      case "file": return this.file(p, rest);
       case "publish": return this.publish(p, rest);
       case "image": return this.image(p, rest);
       default: return unsupported(argv);
     }
+  }
+
+  // Profile devices in profile order, overlaid by the instance's local devices
+  // (whole-device replacement by name, as Incus does).
+  expandedDevices(project: string, name: string): Devices {
+    const inst = this.instances.get(project)!.get(name)!;
+    const expanded: Devices = {};
+    for (const profile of inst.profiles) {
+      for (const [dev, conf] of Object.entries(this.profiles.get(project)?.get(profile)?.devices ?? {})) {
+        expanded[dev] = { ...conf };
+      }
+    }
+    for (const [dev, conf] of Object.entries(inst.devices)) expanded[dev] = { ...conf };
+    return expanded;
+  }
+
+  // One instance as `list -f json` shows it.
+  private listed(p: string, i: InstanceState): Record<string, unknown> {
+    return {
+      name: i.name, status: i.status, config: i.config, devices: i.devices, profiles: i.profiles,
+      expanded_devices: this.expandedDevices(p, i.name),
+      state: { network: { eth0: { addresses: i.ipv4 ? [{ family: "inet", address: i.ipv4 }] : [] } } },
+    };
   }
 
   private project(rest: string[], input?: string): ExecResult {
@@ -256,16 +293,29 @@ export class FakeIncus {
   private launch(p: string, rest: string[]): ExecResult {
     const [image, name, ...flags] = rest;
     const profiles: string[] = [];
+    const deviceFlags: string[] = [];
+    const config: Config = {};
     for (let i = 0; i < flags.length; i++) {
-      if (flags[i] !== "--profile") return fail(`fake incus: unsupported launch flag ${flags[i]}`);
-      profiles.push(flags[++i]);
+      if (flags[i] === "--profile") profiles.push(flags[++i]);
+      else if (flags[i] === "-d") deviceFlags.push(flags[++i]);
+      else if (flags[i] === "-c") {
+        const [k, v] = splitPair(flags[++i] ?? "");
+        config[k] = v;
+      } else return fail(`fake incus: unsupported launch flag ${flags[i]}`);
     }
     if (this.instances.get(p)!.has(name)) return fail(`Instance "${name}" already exists`);
     if (!image.startsWith("images:") && !this.findImage(p, image)) return fail("Image not found");
     for (const profile of profiles) {
       if (!this.profiles.get(p)!.has(profile)) return fail(`Profile "${profile}" not found`);
     }
-    this.instances.get(p)!.set(name, { name, status: "Running", profiles, config: {}, devices: {} });
+    const devices: Devices = {};
+    for (const flag of deviceFlags) {
+      const [dev, ...pairs] = flag.split(",");
+      // A local copy of the profile's device of that name, with the keys overlaid.
+      const base = profiles.map((n) => this.profiles.get(p)!.get(n)!.devices[dev]).find((d) => d !== undefined);
+      devices[dev] = { ...base, ...Object.fromEntries(pairs.map(splitPair)) };
+    }
+    this.instances.get(p)!.set(name, { name, status: "Running", profiles, config, devices });
     return ok();
   }
 
@@ -285,6 +335,7 @@ export class FakeIncus {
   }
 
   private config(p: string, rest: string[]): ExecResult {
+    if (rest[0] === "device" && rest[1] !== "add") return this.configDevice(p, rest.slice(1));
     if (rest[0] === "device" && rest[1] === "add") {
       const [, , name, device, type, ...pairs] = rest;
       const inst = this.instances.get(p)!.get(name);
@@ -297,10 +348,84 @@ export class FakeIncus {
     if (!inst) return fail("Instance not found");
     if (sub === "get") return ok(`${inst.config[key] ?? ""}\n`);
     if (sub === "set") {
-      inst.config[key] = value;
+      // `set <i> k=v [k=v…]` or `set <i> <key> <value>`.
+      if (key !== undefined && key.includes("=")) {
+        for (const kv of rest.slice(2)) {
+          const [k, v] = splitPair(kv);
+          inst.config[k] = v;
+        }
+      } else inst.config[key] = value;
+      return ok();
+    }
+    if (sub === "unset") {
+      delete inst.config[key];
       return ok();
     }
     return unsupported(["config", ...rest]);
+  }
+
+  // config device override|set|remove <instance> <device> [k=v…]
+  private configDevice(p: string, rest: string[]): ExecResult {
+    const [sub, name, dev, ...pairs] = rest;
+    const inst = this.instances.get(p)!.get(name);
+    if (!inst) return fail("Instance not found");
+    const keys = Object.fromEntries(pairs.map(splitPair));
+    const local = inst.devices[dev];
+    switch (sub) {
+      case "override": {
+        if (local) return fail(`The device already exists`);
+        const base = this.expandedDevices(p, name)[dev];
+        if (!base) return fail(`Device from profile(s) doesn't exist`);
+        inst.devices[dev] = { ...base, ...keys };
+        return ok();
+      }
+      case "set":
+        if (!local) return fail(`Device doesn't exist`);
+        Object.assign(local, keys);
+        return ok();
+      case "remove":
+        if (!local) return fail(`Device doesn't exist`);
+        delete inst.devices[dev];
+        return ok();
+      default: return unsupported(["config", "device", ...rest]);
+    }
+  }
+
+  // file push <src> <instance><path> [--uid U] [--gid G] [--mode M] [--create-dirs]
+  // file pull <instance><path> -
+  private file(p: string, rest: string[]): ExecResult {
+    const [sub, ...args] = rest;
+    const target = (t: string): { name: string; key: string } | undefined => {
+      const slash = t.indexOf("/");
+      return slash > 0 ? { name: t.slice(0, slash), key: `${p}/${t}` } : undefined;
+    };
+    if (sub === "push") {
+      const [src, dest, ...flags] = args;
+      const t = dest === undefined ? undefined : target(dest);
+      if (src === undefined || !t) return fail("fake incus: file push needs <src> <instance><path>");
+      const state: FileState = { content: "", uid: "0", gid: "0", mode: "644" };
+      for (let i = 0; i < flags.length; i++) {
+        if (flags[i] === "--uid") state.uid = flags[++i];
+        else if (flags[i] === "--gid") state.gid = flags[++i];
+        else if (flags[i] === "--mode") state.mode = flags[++i];
+        else if (flags[i] !== "--create-dirs") return fail(`fake incus: unsupported file push flag ${flags[i]}`);
+      }
+      if (!this.instances.get(p)!.has(t.name)) return fail("Instance not found");
+      try {
+        state.content = readFileSync(src, "utf8");
+      } catch {
+        return fail(`stat ${src}: no such file or directory`);
+      }
+      this.files.set(t.key, state);
+      return ok();
+    }
+    if (sub === "pull" && args.length === 2 && args[1] === "-") {
+      const t = target(args[0]);
+      if (!t || !this.instances.get(p)!.has(t.name)) return fail("Instance not found");
+      const f = this.files.get(t.key);
+      return f ? ok(f.content) : fail("No such file or directory");
+    }
+    return unsupported(["file", ...rest]);
   }
 
   private exec(p: string, rest: string[]): ExecResult {

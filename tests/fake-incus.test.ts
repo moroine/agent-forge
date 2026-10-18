@@ -1,5 +1,8 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { FakeIncus } from "./lib/fake-incus.ts";
 
 const P = ["--project", "agent-forge"];
@@ -105,6 +108,96 @@ test("every call is recorded with its stdin", () => {
   const fake = new FakeIncus();
   fake.run(["project", "create", "p"], "{}");
   assert.deepEqual(fake.calls, [{ argv: ["project", "create", "p"], input: "{}" }]);
+});
+
+const strictFake = () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addProfile("agent-forge", "agent-forge", {
+    devices: { eth0: { type: "nic", network: "forgebr0", "security.acls": "forge-egress" } },
+  });
+  return fake;
+};
+
+test("launch applies -d device overrides on top of the profile device, and -c keys", () => {
+  const fake = strictFake();
+  const r = fake.run([...P, "launch", "agent-base", "c1", "--profile", "agent-forge",
+    "-d", "eth0,security.acls=forge-egress-strict", "-c", "user.forge.egress=strict"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fake.expandedDevices("agent-forge", "c1").eth0,
+    { type: "nic", network: "forgebr0", "security.acls": "forge-egress-strict" });
+  assert.equal(fake.instances.get("agent-forge")!.get("c1")!.config["user.forge.egress"], "strict");
+  // a device created by launch -d accepts device set
+  assert.equal(fake.run([...P, "config", "device", "set", "c1", "eth0", "ipv4.address=10.77.0.9"]).code, 0);
+  assert.equal(fake.expandedDevices("agent-forge", "c1").eth0["ipv4.address"], "10.77.0.9");
+});
+
+test("device override copies the profile device; set needs a local device; remove restores the profile's", () => {
+  const fake = strictFake();
+  fake.run([...P, "launch", "agent-base", "c1", "--profile", "agent-forge"]);
+  const dev = (...a: string[]) => fake.run([...P, "config", "device", ...a]);
+  assert.equal(dev("set", "c1", "eth0", "a=b").code, 1);
+  assert.equal(dev("override", "c1", "nope", "a=b").code, 1);
+  assert.equal(dev("override", "c1", "eth0", "security.acls=x").code, 0);
+  assert.equal(dev("override", "c1", "eth0", "security.acls=y").code, 1);
+  assert.deepEqual(fake.instances.get("agent-forge")!.get("c1")!.devices.eth0,
+    { type: "nic", network: "forgebr0", "security.acls": "x" });
+  assert.equal(dev("set", "c1", "eth0", "security.acls=z").code, 0);
+  assert.equal(fake.expandedDevices("agent-forge", "c1").eth0["security.acls"], "z");
+  assert.equal(dev("remove", "c1", "eth0").code, 0);
+  assert.equal(fake.expandedDevices("agent-forge", "c1").eth0["security.acls"], "forge-egress");
+  assert.equal(dev("remove", "c1", "eth0").code, 1);
+});
+
+test("config set takes several key=value pairs, unset removes a key", () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  const cfg = () => fake.instances.get("agent-forge")!.get("c1")!.config;
+  assert.equal(fake.run([...P, "config", "set", "c1", "a=1", "b=x=y"]).code, 0);
+  assert.deepEqual(cfg(), { a: "1", b: "x=y" });
+  assert.equal(fake.run([...P, "config", "set", "c1", "c", "3"]).code, 0);
+  assert.equal(cfg().c, "3");
+  assert.equal(fake.run([...P, "config", "unset", "c1", "a"]).code, 0);
+  assert.deepEqual(cfg(), { b: "x=y", c: "3" });
+});
+
+test("file push stores content, owner and mode; file pull - serves it; a missing file fails", () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  const src = join(mkdtempSync(join(tmpdir(), "fake-incus-")), "src");
+  writeFileSync(src, "hello\n");
+  const r = fake.run([...P, "file", "push", src, "c1/etc/x", "--uid", "0", "--gid", "0", "--mode", "644", "--create-dirs"]);
+  assert.equal(r.code, 0, r.stderr);
+  assert.deepEqual(fake.files.get("agent-forge/c1/etc/x"), { content: "hello\n", uid: "0", gid: "0", mode: "644" });
+  assert.equal(fake.run([...P, "file", "pull", "c1/etc/x", "-"]).stdout, "hello\n");
+  assert.equal(fake.run([...P, "file", "pull", "c1/etc/missing", "-"]).code, 1);
+});
+
+test("list -f json reports expanded devices and the eth0 address", () => {
+  const fake = strictFake();
+  fake.addInstance("agent-forge", "c1", { profiles: ["agent-forge"], ipv4: "10.77.0.57" });
+  fake.addInstance("agent-forge", "c2");
+  const [a, b] = JSON.parse(fake.run([...P, "list", "-f", "json"]).stdout);
+  assert.equal(a.state.network.eth0.addresses[0].address, "10.77.0.57");
+  assert.equal(a.state.network.eth0.addresses[0].family, "inet");
+  assert.equal(a.expanded_devices.eth0.network, "forgebr0");
+  assert.deepEqual(b.state.network.eth0.addresses, []);
+});
+
+test("query /1.0 reports serverVersion", () => {
+  const fake = new FakeIncus();
+  const version = () => JSON.parse(fake.run(["query", "/1.0"]).stdout).environment.server_version;
+  assert.equal(version(), "7.0.2");
+  fake.serverVersion = "7.0.1";
+  assert.equal(version(), "7.0.1");
+});
+
+test("restart keeps a running instance running and fails on a missing one", () => {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "c1");
+  assert.equal(fake.run([...P, "restart", "c1"]).code, 0);
+  assert.equal(fake.instances.get("agent-forge")!.get("c1")!.status, "Running");
+  assert.equal(fake.run([...P, "restart", "nope"]).code, 1);
+  assert.match(new FakeIncus().run(["restart", "c1"]).stderr, /--project is required/);
 });
 
 test("an unsupported command fails instead of passing silently", () => {
