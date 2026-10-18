@@ -4,7 +4,7 @@
 // talks to Incus.
 import type { ForgeConfig } from "./config.ts";
 import { DEFAULT_PROJECT } from "./incus.ts";
-import { REJECTED_RANGES } from "./ipv4.ts";
+import { REJECTED_RANGES, dhcpRanges, type ProxyPlan } from "./ipv4.ts";
 
 // Shared with sub-project 1: the host firewall matches the bridge by name.
 export const BRIDGE = "forgebr0";
@@ -51,7 +51,10 @@ export function desiredProject(): Desired {
 export function desiredBridge(cfg: ForgeConfig): Desired {
   return {
     description: "agent-forge: bridge of the agent containers (managed by forge setup)",
-    config: { "ipv4.address": cfg.network.ipv4Address, "ipv4.nat": "true", "ipv6.address": "none" },
+    config: { "ipv4.address": cfg.network.ipv4Address, "ipv4.nat": "true", "ipv6.address": "none",
+      // The block below .10 is reserved for the proxies' fixed addresses.
+      "ipv4.dhcp.ranges": dhcpRanges(cfg.network.ipv4Address),
+    },
   };
 }
 
@@ -116,4 +119,67 @@ export function egressNames(project: string): EgressNames {
   const slot = /^[0-9]+$/.test(raw) ? Number(raw) : NaN;
   if (!(slot >= 1 && slot <= 7)) throw new Error(`FORGE_PROXY_SLOT must be an integer from 1 to 7, got "${raw}"`);
   return { slot, proxyAcl: `forge-proxy-${project}`, strictAcl: `forge-egress-strict-${project}` };
+}
+
+// forge-proxy: attached to the proxy only. Lets the bridge subnet reach the
+// proxy's listening port and nothing else (the default ingress is reject).
+export function desiredProxyAcl(plan: ProxyPlan): DesiredAcl {
+  return {
+    description: "agent-forge: the proxy accepts the bridge subnet on its port only (managed by forge setup)",
+    config: {},
+    ingress: [{ action: "allow", state: "enabled", protocol: "tcp", source: plan.subnet, destination_port: String(PROXY_PORT) }],
+    egress: [],
+  };
+}
+
+// forge-egress-strict: attached to strict containers, whose default egress is
+// reject. Only the proxy and DHCP renewals (to the bridge) get through.
+export function desiredStrictAcl(plan: ProxyPlan): DesiredAcl {
+  return {
+    description: "agent-forge: strict containers reach the proxy and DHCP only (managed by forge setup)",
+    config: {},
+    ingress: [],
+    egress: [
+      { action: "allow", state: "enabled", protocol: "tcp", destination: plan.proxyAddress, destination_port: String(PROXY_PORT) },
+      { action: "allow", state: "enabled", protocol: "udp", destination: plan.bridgeAddress, destination_port: "67" },
+    ],
+  };
+}
+
+export function desiredProxyProfile(cfg: ForgeConfig, names: EgressNames, opts: { rawLxc: boolean }): DesiredProfile {
+  const config: Record<string, string> = {
+    "security.privileged": "false",
+    "security.nesting": "false",
+    "security.syscalls.deny_default": "true",
+    "limits.memory": "512MiB",
+    "limits.processes": "1000",
+    "boot.autostart": "true",
+  };
+  if (opts.rawLxc) config["raw.lxc"] = RAW_LXC;
+  return {
+    description: "agent-forge: the egress proxy (managed by forge setup)",
+    config,
+    devices: {
+      // No ipv4.address here: the address is set per instance (slot).
+      eth0: {
+        type: "nic",
+        name: "eth0",
+        network: BRIDGE,
+        "security.acls": `${ACL},${names.proxyAcl}`,
+        "security.acls.default.egress.action": "allow",
+        "security.acls.default.ingress.action": "reject",
+      },
+      root: { type: "disk", path: "/", pool: cfg.storagePool, size: "4GiB" },
+    },
+  };
+}
+
+export type EgressMode = "open" | "strict";
+
+// The mode a container really has, read from its expanded NIC (never a label).
+export function effectiveEgress(devices: Record<string, Record<string, string>>, names: EgressNames): EgressMode | "?" {
+  const nic = devices.eth0;
+  if (nic?.["security.acls"] === names.strictAcl && nic["security.acls.default.egress.action"] === "reject") return "strict";
+  if (nic?.["security.acls"] === ACL) return "open";
+  return "?";
 }

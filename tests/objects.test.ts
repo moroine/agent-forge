@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_CONFIG, type ForgeConfig, type Limits } from "../cli/lib/config.ts";
 import {
-  ACL, BRIDGE, PROFILE, RAW_LXC, desiredAcl, desiredBridge, desiredProfile, desiredProject, egressNames, rawLxcAllowed,
+  ACL, BRIDGE, PROFILE, RAW_LXC, desiredAcl, desiredBridge, desiredProfile, desiredProject, desiredProxyAcl,
+  desiredProxyProfile, desiredStrictAcl, effectiveEgress, egressNames, rawLxcAllowed,
 } from "../cli/lib/objects.ts";
+import { parseAddress, parseCidr, proxyPlan } from "../cli/lib/ipv4.ts";
 
 const IDS = { uid: 501, gid: 20 };
 const cfg = (limits: Partial<Limits> = {}): ForgeConfig => {
@@ -71,7 +73,9 @@ test("raw.lxc keeps v1's capability drops", () => {
 
 test("the bridge: address from the config, NAT on, IPv6 off", () => {
   const c = { ...cfg(), network: { ipv4Address: "10.88.0.1/24" } };
-  assert.deepEqual(desiredBridge(c).config, { "ipv4.address": "10.88.0.1/24", "ipv4.nat": "true", "ipv6.address": "none" });
+  assert.deepEqual(desiredBridge(c).config, {
+    "ipv4.address": "10.88.0.1/24", "ipv4.nat": "true", "ipv6.address": "none", "ipv4.dhcp.ranges": "10.88.0.10-10.88.0.254",
+  });
 });
 
 test("the ACL: one egress reject rule, no ingress rule", () => {
@@ -119,4 +123,45 @@ test("another project gets FORGE_PROXY_SLOT (default 1) and suffixed names", () 
   } finally {
     if (saved === undefined) delete process.env.FORGE_PROXY_SLOT; else process.env.FORGE_PROXY_SLOT = saved;
   }
+});
+
+const plan = proxyPlan("10.77.0.1/24", 0);
+test("the bridge keeps the reserved block out of DHCP", () =>
+  assert.equal(desiredBridge(DEFAULT_CONFIG).config["ipv4.dhcp.ranges"], "10.77.0.10-10.77.0.254"));
+test("the proxy ACL lets the bridge subnet in on TCP 3128 only", () =>
+  assert.deepEqual([desiredProxyAcl(plan).ingress, desiredProxyAcl(plan).egress], [[
+    { action: "allow", state: "enabled", protocol: "tcp", source: "10.77.0.0/24", destination_port: "3128" }], []]));
+test("the strict ACL allows the proxy and DHCP renewals, nothing else", () =>
+  assert.deepEqual([desiredStrictAcl(plan).egress, desiredStrictAcl(plan).ingress], [[
+    { action: "allow", state: "enabled", protocol: "tcp", destination: "10.77.0.2", destination_port: "3128" },
+    { action: "allow", state: "enabled", protocol: "udp", destination: "10.77.0.1", destination_port: "67" }], []]));
+test("no ACL rule names another ACL", () => {
+  for (const acl of [desiredProxyAcl(plan), desiredStrictAcl(plan)])
+    for (const rule of [...acl.ingress, ...acl.egress])
+      for (const k of ["source", "destination"])
+        if (rule[k] !== undefined)
+          assert.ok(parseAddress(rule[k]) !== null || parseCidr(rule[k]) !== null, `${k}: ${rule[k]}`);
+});
+test("the proxy profile: small, unnested, both ACLs on eth0, no idmap, no address", () => {
+  const p = desiredProxyProfile(DEFAULT_CONFIG, egressNames("agent-forge"), { rawLxc: true });
+  assert.equal(p.config["security.nesting"], "false");
+  assert.equal(p.config["limits.memory"], "512MiB");
+  assert.equal(p.config["limits.processes"], "1000");
+  assert.equal(p.config["boot.autostart"], "true");
+  assert.equal(p.config["raw.lxc"], RAW_LXC);
+  assert.equal(p.config["raw.idmap"], undefined);
+  assert.equal(p.devices.eth0["security.acls"], "forge-egress,forge-proxy");
+  assert.equal(p.devices.eth0["ipv4.address"], undefined);
+  assert.deepEqual(p.devices.root, { type: "disk", path: "/", pool: "default", size: "4GiB" });
+});
+test("in a restricted project the proxy profile goes without raw.lxc", () => {
+  const p = desiredProxyProfile(DEFAULT_CONFIG, egressNames("agent-forge"), { rawLxc: false });
+  assert.equal("raw.lxc" in p.config, false);
+});
+test("effectiveEgress reads the expanded NIC, not a label", () => {
+  const n = egressNames("agent-forge");
+  assert.equal(effectiveEgress({ eth0: { "security.acls": "forge-egress-strict", "security.acls.default.egress.action": "reject" } }, n), "strict");
+  assert.equal(effectiveEgress({ eth0: { "security.acls": "forge-egress" } }, n), "open");
+  assert.equal(effectiveEgress({ eth0: { "security.acls": "forge-egress-strict", "security.acls.default.egress.action": "allow" } }, n), "?");
+  assert.equal(effectiveEgress({}, n), "?");
 });

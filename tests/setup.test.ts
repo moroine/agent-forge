@@ -70,7 +70,9 @@ test("a changed bridge address gives exactly one edit, of the whole bridge", asy
   const w = writes(fake).slice(n);
   assert.equal(w.length, 1);
   assert.deepEqual(w[0].argv.slice(-3), ["network", "edit", "forgebr0"]);
-  assert.deepEqual(JSON.parse(w[0].input!).config, { "ipv4.address": "10.78.0.1/24", "ipv4.nat": "true", "ipv6.address": "none" });
+  assert.deepEqual(JSON.parse(w[0].input!).config, {
+    "ipv4.address": "10.78.0.1/24", "ipv4.nat": "true", "ipv6.address": "none", "ipv4.dhcp.ranges": "10.78.0.10-10.78.0.254",
+  });
   assert.ok(c.out_lines.includes("network forgebr0: updated"));
 });
 
