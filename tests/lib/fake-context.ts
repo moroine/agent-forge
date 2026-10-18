@@ -1,7 +1,7 @@
 // Contexte scripté pour les tests unitaires. `exec` répond selon une table de
 // règles ordonnée (première correspondance gagnante, comme un routeur), et
 // `prompt` sert une file de réponses préparées.
-import type { Context, ExecOptions, ExecResult, Prompt } from "../../cli/lib/context.ts";
+import type { AttachOptions, Context, ExecOptions, ExecResult, Prompt } from "../../cli/lib/context.ts";
 import type { FakeIncus } from "./fake-incus.ts";
 
 // Unit tests never inherit a herdr session from the shell running them.
@@ -17,7 +17,7 @@ export type FakeOptions = {
   tty?: boolean;
   // Faux incus à état : reçoit tout appel `incus …` qu'aucune règle n'a pris.
   incus?: FakeIncus;
-  // Code de sortie rendu par attach (ansible-playbook, tmux) ; 0 par défaut.
+  // Code de sortie rendu par attach (ansible-playbook, agent) ; 0 par défaut.
   attachCode?: number;
 };
 
@@ -27,6 +27,8 @@ export type FakeContext = Context & {
   // à l'appel exec qui a produit calls[i]. Séparé de `calls` (et non fusionné
   // dedans) pour ne rien casser des tests existants qui indexent `calls`.
   execOptions: (ExecOptions | undefined)[];
+  // Appels à attach avec leurs options (env) ; l'argv reste aussi dans `calls`.
+  attachCalls: { argv: string[]; opts?: AttachOptions }[];
   out_lines: string[];
   err_lines: string[];
 };
@@ -37,6 +39,7 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
   const tty = opts.tty ?? true;
   const calls: string[][] = [];
   const execOptions: (ExecOptions | undefined)[] = [];
+  const attachCalls: { argv: string[]; opts?: AttachOptions }[] = [];
   const out_lines: string[] = [];
   const err_lines: string[] = [];
 
@@ -78,12 +81,13 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
 
   return {
     exec,
-    attach: async (argv) => { calls.push(argv); return opts.attachCode ?? 0; },
+    attach: async (argv, attachOpts) => { calls.push(argv); attachCalls.push({ argv, opts: attachOpts }); return opts.attachCode ?? 0; },
     prompt,
     out: (line) => out_lines.push(line),
     err: (line) => err_lines.push(line),
     calls,
     execOptions,
+    attachCalls,
     out_lines,
     err_lines,
   };

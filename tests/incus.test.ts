@@ -10,6 +10,7 @@ import {
   pushText, pullText, configSetMany, configUnset, deviceOverride, deviceSet, deviceRemove,
   restartInstance, execArgv,
 } from "../cli/lib/incus.ts";
+import { AGENT } from "../cli/lib/agent.ts";
 
 const P = ["incus", "--project", "agent-forge"];
 const LIST_JSON = JSON.stringify([
@@ -40,7 +41,7 @@ test("FORGE_INCUS_PROJECT points every call at another project", async () => {
   const ctx = fakeContext();
   await configSet(ctx, "c", "k", "v");
   assert.deepEqual(ctx.calls[0], ["incus", "--project", "forge-selftest", "config", "set", "c", "k", "v"]);
-  assert.deepEqual(attachArgv("c", "t", "xterm").slice(0, 3), ["incus", "--project", "forge-selftest"]);
+  assert.deepEqual(attachArgv("c", "t", "xterm", ["bash"]).slice(0, 3), ["incus", "--project", "forge-selftest"]);
 });
 
 test("listInstances parses incus list -f json without jq", async () => {
@@ -104,20 +105,18 @@ test("deleteInstance always forces, since the caller has already decided", async
   assert.deepEqual(ctx.calls[0], [...P, "delete", "agent-x", "--force"]);
 });
 
-test("attachArgv keeps tmux the direct target of incus exec", () => {
-  const argv = attachArgv("agent-x", "cli", "xterm-256color");
+test("attachArgv runs the agent command directly under incus exec", () => {
+  const argv = attachArgv("agent-x", "cli", "xterm-256color", AGENT.command("agent-x", "cli", false));
   assert.deepEqual(argv, [
     ...P, "exec", "agent-x",
     "--user", "1001", "--group", "1001",
     "--cwd", "/workspace/.trees/cli",
     "--env", "TERM=xterm-256color",
-    "--", "tmux", "new-session", "-A", "-s", "cli",
-    "exec bash -lc 'claude --permission-mode auto --remote-control agent-x-cli'",
+    "--", "bash", "-lc", "exec claude --permission-mode auto --remote-control agent-x-cli",
   ]);
-  // Invariant du commit c34a145 : aucun `su` entre incus exec et tmux, sinon
-  // SIGWINCH n'atteint jamais le client tmux au redimensionnement.
+  // Invariant du commit c34a145 : aucun `su` entre incus exec et l'agent.
   assert.ok(!argv.includes("su"));
-  assert.equal(argv[argv.indexOf("--", 3) + 1], "tmux");
+  assert.ok(!argv.includes("tmux"));
 });
 
 test("the fake incus answers the transport, project included", async () => {

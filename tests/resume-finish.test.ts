@@ -14,12 +14,13 @@ const BASE = [
   { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\n" },
 ];
 
-test("resume attaches the task's tmux session", async () => {
+test("resume attaches the task's agent", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
   assert.equal(await cmdResume(c, "moroine/agent-forge", "cli"), 0);
-  const attach = c.calls.find((call) => call.includes("tmux"));
+  const attach = c.attachCalls[0]?.argv;
   assert.ok(attach, "no attach happened");
-  assert.ok(attach.includes("new-session") && attach.includes("cli"));
+  assert.ok(attach.includes("bash") && attach.includes("--cwd") && attach.includes("/workspace/.trees/cli"));
+  assert.match(attach.at(-1) ?? "", /^exec claude /);
 });
 
 test("resume never creates a worktree", async () => {
@@ -36,8 +37,8 @@ test("resume errors when the worktree is absent, pointing at start", async () =>
 test("resume asks for repo then task when both are missing", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }], answers: [1, 2] });
   await cmdResume(c, undefined, undefined);
-  const attach = c.calls.find((call) => call.includes("tmux"));
-  assert.ok(attach?.includes("docs"), `attached to the wrong session: ${attach?.join(" ")}`);
+  const attach = c.attachCalls[0]?.argv;
+  assert.ok(attach?.includes("/workspace/.trees/docs"), `attached to the wrong session: ${attach?.join(" ")}`);
 });
 
 test("finish removes the worktree after the pre-flight", async () => {
@@ -106,7 +107,7 @@ test("resume fails when the container refuses to start", async () => {
     () => cmdResume(c, "moroine/agent-forge", "cli"),
     /incus start failed: Error: Failed to start device/,
   );
-  assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec du démarrage");
+  assert.equal(c.attachCalls.length, 0, "attaché malgré l'échec du démarrage");
 });
 
 // --- egress hooks ---
@@ -141,13 +142,13 @@ test("resume applies the strict settings before attaching", async () => {
   await cmdResume(c, "o/r", "t");
   const l = lines(c);
   const push = l.findIndex((x) => x.includes("file push") && x.includes("agent-forge-proxy.sh"));
-  assert.ok(push >= 0 && push < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
+  assert.ok(push >= 0 && push < l.findIndex((x) => x.includes("exec claude")), l.join("\n"));
 });
 
 test("resume of a container marked open whose eth0 is still strict is refused before any start", async () => {
   const c = fakeContext({ incus: egressFake({ mode: "open", nic: "strict" }), rules: EG });
   await assert.rejects(() => cmdResume(c, "o/r", "t"), /eth0 is strict.*forge egress o\/r strict/);
-  assert.ok(!lines(c).some((l) => / start agent-o-r|rm -f|tmux/.test(l)), lines(c).join("\n"));
+  assert.ok(!lines(c).some((l) => / start agent-o-r|rm -f|exec claude/.test(l)), lines(c).join("\n"));
 });
 
 test("resume of a container switched to open clears forge's files before attaching", async () => {
@@ -155,5 +156,5 @@ test("resume of a container switched to open clears forge's files before attachi
   await cmdResume(c, "o/r", "t");
   const l = lines(c);
   const rm = l.findIndex((x) => x.includes("rm -f"));
-  assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
+  assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("exec claude")), l.join("\n"));
 });

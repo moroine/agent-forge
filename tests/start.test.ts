@@ -34,7 +34,7 @@ test("an existing worktree is attached, not refused", async () => {
   const c = fakeContext({ rules: rules([{ match: "test -e /workspace/.trees/cli", code: 0 }]) });
   assert.equal(await cmdStart(c, "moroine/agent-forge", "cli"), 0);
   assert.equal(added(c), "", "aucun worktree ne doit être créé");
-  assert.ok(c.calls.some((call) => call.includes("tmux")));
+  assert.ok(c.attachCalls.length > 0);
 });
 
 test("an existing local branch is resumed in a new worktree", async () => {
@@ -182,7 +182,7 @@ test("a failing worktree add aborts instead of attaching to a missing directory"
     () => cmdStart(c, "moroine/agent-forge", "fresh"),
     /git worktree add failed: fatal: invalid reference: origin\/main/,
   );
-  assert.ok(!c.calls.some((call) => call.includes("tmux")), "attaché malgré l'échec de la création");
+  assert.equal(c.attachCalls.length, 0, "attaché malgré l'échec de la création");
   assert.ok(!c.out_lines.some((l) => l.includes("Attaching to")), c.out_lines.join(" | "));
 });
 
@@ -308,7 +308,7 @@ test("start applies the strict settings after starting and before attaching", as
   const l = flatCalls(c);
   const started = l.findIndex((x) => / start agent-o-r/.test(x));
   const push = l.findIndex((x) => x.includes("file push") && x.includes("agent-forge-proxy.sh"));
-  const attach = l.findIndex((x) => x.includes("tmux"));
+  const attach = l.findIndex((x) => x.includes("exec claude"));
   assert.ok(started >= 0 && push > started && attach > push, l.join("\n"));
 });
 
@@ -322,14 +322,14 @@ test("start of a container marked strict whose eth0 lost the filter is refused b
   inst.devices = {};
   const c = fakeContext({ incus: fake, rules: egressRules });
   await assert.rejects(() => cmdStart(c, "o/r", "t"), /refusing to start agent-o-r: .*user\.forge\.egress=strict.*forge egress o\/r strict/);
-  assert.ok(!flatCalls(c).some((x) => / start agent-o-r|file push|tmux/.test(x)), flatCalls(c).join("\n"));
+  assert.ok(!flatCalls(c).some((x) => / start agent-o-r|file push|exec claude/.test(x)), flatCalls(c).join("\n"));
 });
 
 test("a strict container starts with a warning when the proxy is gone", async () => {
   const c = fakeContext({ incus: egressFake({ mode: "strict", proxy: false }), rules: egressRules });
   assert.equal(await cmdStart(c, "o/r", "t"), 0);
   assert.ok(c.err_lines.some((x) => /forge setup/.test(x)));
-  assert.ok(flatCalls(c).some((x) => x.includes("tmux")));
+  assert.ok(flatCalls(c).some((x) => x.includes("exec claude")));
 });
 
 test("start of a container switched to open clears forge's files before attaching", async () => {
@@ -337,7 +337,7 @@ test("start of a container switched to open clears forge's files before attachin
   await cmdStart(c, "o/r", "t");
   const l = flatCalls(c);
   const rm = l.findIndex((x) => x.includes("rm -f"));
-  assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("tmux")), l.join("\n"));
+  assert.ok(rm >= 0 && rm < l.findIndex((x) => x.includes("exec claude")), l.join("\n"));
 });
 
 test("start --strict on a new repo provisions it strict", async () => {
@@ -360,7 +360,7 @@ test("start --strict on a new repo provisions it strict", async () => {
     ] });
     await cmdStart(c, "o/r", "t", { strict: true });
     assert.equal(fake.instances.get("agent-forge")!.get("agent-o-r")!.config["user.forge.egress"], "strict");
-    assert.ok(flatCalls(c).some((x) => x.includes("tmux")));
+    assert.ok(flatCalls(c).some((x) => x.includes("exec claude")));
   } finally {
     delete process.env.FORGE_HOME; delete process.env.FORGE_REPO_DIR; delete process.env.FORGE_WORKSPACES;
     rmSync(home, { recursive: true, force: true });
