@@ -37,7 +37,7 @@ const SLOT = "3";
 // sanitizeContainerName("forge-selftest/throwaway") and ("forge-selftest/peer").
 const S1 = "agent-forge-selftest-throwaway";
 const PEER = "agent-forge-selftest-peer";
-const DOCKER_DIR = "/home/aiuser/.config/systemd/user/docker.service.d";
+const DOCKER_DIR = "/etc/systemd/user/docker.service.d";
 const PROFILE_FILE = "/etc/profile.d/agent-forge-proxy.sh";
 const DOCKER_DROP_IN = `${DOCKER_DIR}/agent-forge-proxy.conf`;
 
@@ -295,12 +295,11 @@ test("Node, git and Chrome go through the proxy", { skip: !ENABLED }, (t) => {
 
 test("the Docker daemon has the proxy", { skip: !ENABLED }, (t) => {
   if (!ready) return t.skip("no strict container");
-  // The drop-in's directory was created by `incus file push --create-dirs`:
-  // it must belong to aiuser, or the user manager could not read it.
-  const home = "/home/aiuser";
-  for (const path of [`${home}/.config`, `${home}/.config/systemd`, `${home}/.config/systemd/user`, DOCKER_DIR, DOCKER_DROP_IN]) {
+  // The drop-in and its directory (created by `incus file push --create-dirs`)
+  // are root's, under /etc: forge never writes as root into a path aiuser owns.
+  for (const path of [DOCKER_DIR, DOCKER_DROP_IN]) {
     const owner = must(`stat ${path}`, incus(PROJECT, ["exec", S1, "--", "stat", "-c", "%u:%g", path]));
-    assert.equal(owner.stdout.trim(), "1001:1001", raw(`owner of ${path}`, owner));
+    assert.equal(owner.stdout.trim(), "0:0", raw(`owner of ${path}`, owner));
   }
   const show = asAgent(PROJECT, S1,
     "for i in $(seq 1 30); do XDG_RUNTIME_DIR=/run/user/1001 systemctl --user show docker -p Environment && exit 0; sleep 1; done; exit 1");

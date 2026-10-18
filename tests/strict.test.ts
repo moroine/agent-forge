@@ -74,8 +74,29 @@ test("applyStrictSettings writes the keys and the three files, then restarts the
   const env = proxyEnv(plan);
   assert.deepEqual(fake.files.get(key(PROXY_FILES.profile)), { content: profileScript(env), uid: "0", gid: "0", mode: "644" });
   assert.deepEqual(fake.files.get(key(PROXY_FILES.apt)), { content: aptConf(plan), uid: "0", gid: "0", mode: "644" });
-  assert.deepEqual(fake.files.get(key(PROXY_FILES.docker)), { content: dockerDropIn(env), uid: "1001", gid: "1001", mode: "644" });
+  assert.deepEqual(fake.files.get(key(PROXY_FILES.docker)), { content: dockerDropIn(env), uid: "0", gid: "0", mode: "644" });
   assert.ok(cmds(ctx).some((c) => c.includes("systemctl --user daemon-reload && systemctl --user restart docker")));
+});
+
+test("the Docker drop-in is a system-wide user drop-in under /etc, not in aiuser's home", () => {
+  assert.equal(PROXY_FILES.docker, "/etc/systemd/user/docker.service.d/agent-forge-proxy.conf");
+});
+
+test("after provisioning, forge never writes or reads as root through a path under /home/aiuser", async () => {
+  const { ctx } = setup();
+  // Twice: the first run writes, the second only reads back.
+  await applyStrictSettings(ctx, "web", plan);
+  await applyStrictSettings(ctx, "web", proxyPlan("10.77.0.1/24", 1));
+  await clearStrictSettings(ctx, "web");
+  const pushes = ctx.calls.filter((c) => c.includes("file") && c.includes("push"));
+  assert.equal(pushes.length, 6);
+  for (const argv of pushes) {
+    const dest = argv[argv.indexOf("push") + 2];
+    assert.ok(dest.startsWith("web/etc/"), dest);
+    assert.equal(argv[argv.indexOf("--uid") + 1], "0");
+    assert.equal(argv[argv.indexOf("--gid") + 1], "0");
+  }
+  for (const c of cmds(ctx)) assert.ok(!c.includes("/home/aiuser"), c);
 });
 
 test("a failing Docker restart is a warning, not an error", async () => {
