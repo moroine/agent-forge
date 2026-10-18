@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import { AGENT } from "../cli/lib/agent.ts";
 import {
-  attachTask, claudeSlug, ensureRunning, finishedStamp, hasConversation, transcriptDir,
+  attachTask, claudeSlug, ensureRunning, finishedStamp, hasConversation, stopAgent, transcriptDir,
 } from "../cli/lib/session.ts";
 
 const P = ["incus", "--project", "agent-forge"];
@@ -121,6 +121,16 @@ test("attachTask fails closed when the probe fails", async () => {
   await assert.rejects(attachTask(c, "agent-x", "cli", "o/r"), (e: Error) =>
     e.message === "cannot check whether the agent for cli already runs in agent-x: ps failed: boom");
   assert.equal(c.attachCalls.length, 0);
+});
+
+// pkill -f takes an extended regex: task v1.2 must not also stop v1x2.
+test("stopAgent escapes the regex metacharacters of the task name", async () => {
+  const c = fakeContext();
+  await stopAgent(c, "agent-x", "v1.2");
+  assert.deepEqual(c.calls[0].slice(-4), ["pkill", "-f", "--", "--remote-control agent-x-v1\\.2( |$)"]);
+  const pattern = new RegExp(c.calls[0].at(-1) as string);
+  assert.ok(pattern.test("claude --remote-control agent-x-v1.2 --continue"));
+  assert.ok(!pattern.test("claude --remote-control agent-x-v1x2"));
 });
 
 test("finishedStamp is the UTC time without separators or milliseconds", () => {
