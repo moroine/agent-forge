@@ -20,11 +20,13 @@ before(() => {
 
 after(() => rmSync(bin, { recursive: true, force: true }));
 
-function forge(args: string[], input = "") {
+function forge(args: string[], input = "", extraEnv: Record<string, string> = {}) {
+  // Never inherit the herdr session of the shell running the tests.
+  const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !k.startsWith("HERDR_")));
   return spawnSync("node", [ENTRY, ...args], {
     encoding: "utf8",
     input,
-    env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
+    env: { ...env, PATH: `${bin}:${process.env.PATH}`, ...extraEnv },
   });
 }
 
@@ -39,6 +41,18 @@ test("an unknown command exits 1 with Error: on stderr", () => {
   assert.equal(r.status, 1);
   assert.match(r.stderr, /^Error: unknown command 'frobnicate'/m);
   assert.equal(r.stdout, "");
+});
+
+test("a failure in the herdr popup waits for Enter", () => {
+  const r = forge(["frobnicate"], "\n", { HERDR_ENV: "1", HERDR_BIN_PATH: "/bin/false" });
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /Error: unknown command[\s\S]*Press Enter to close/);
+});
+
+test("outside the popup there is no wait", () => {
+  const r = forge(["frobnicate"], "\n", { HERDR_ENV: "1", HERDR_BIN_PATH: "/bin/false", HERDR_PANE_ID: "w1:p1" });
+  assert.equal(r.status, 1);
+  assert.doesNotMatch(r.stderr, /Press Enter/);
 });
 
 test("attach with no arguments exits 1 with its usage", () => {

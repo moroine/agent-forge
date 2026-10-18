@@ -2,9 +2,9 @@ import { test, afterEach } from "node:test";
 import assert from "node:assert/strict";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
-import { configPath, forgeHome, mirrorPath, repoRoot, workspacesDir } from "../cli/lib/paths.ts";
+import { configPath, forgeCommand, forgeHome, mirrorPath, repoRoot, workspacesDir } from "../cli/lib/paths.ts";
 
-const KEYS = ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "FORGE_MIRRORS", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
+const KEYS = ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "FORGE_MIRRORS", "XDG_CONFIG_HOME", "XDG_DATA_HOME", "FORGE_INVOKED_AS"];
 const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]));
 afterEach(() => {
   for (const k of KEYS) {
@@ -63,4 +63,14 @@ test("an empty XDG_DATA_HOME means unset", () => {
   process.env.XDG_DATA_HOME = "";
   process.env.FORGE_HOME = "/h";
   assert.equal(mirrorPath("agent-x"), "/h/.local/share/agent-forge/mirrors/agent-x.git");
+});
+
+test("forgeCommand is the invoked path, made absolute but not resolved", () => {
+  process.env.FORGE_INVOKED_AS = "./cli/forge";
+  assert.equal(forgeCommand(), resolve("./cli/forge"));
+});
+
+test("forgeCommand falls back to forge", () => {
+  delete process.env.FORGE_INVOKED_AS;
+  assert.equal(forgeCommand(), "forge");
 });

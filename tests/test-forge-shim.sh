@@ -19,6 +19,7 @@ assert_contains() {
 
 bash -n "$FORGE"
 assert_contains 'exec node "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/forge.ts" "$@"'
+assert_contains 'export FORGE_INVOKED_AS="${BASH_SOURCE[0]}"'
 assert_contains 'forge requires Node 24+'
 
 echo ""
