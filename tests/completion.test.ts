@@ -1,7 +1,12 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
 import { ForgeError } from "../cli/lib/context.ts";
+import { shellQuote } from "../cli/lib/shell.ts";
 import { cmdCompletion, completionScript, FORGE_BIN } from "../cli/lib/commands/completion.ts";
 
 const LIST = JSON.stringify([
@@ -90,4 +95,34 @@ test("the completion script offers tasks in third position and --force where it 
 
 test("the completion script offers setup", () => {
   assert.match(completionScript("/x/forge"), /compgen -W "setup start resume finish stop delete list image completion"/);
+});
+
+// Lance la fonction émise dans un vrai bash, contre un forge factice qui
+// répond o/r aux repos et cli aux tâches de n'importe quel argument.
+function complete(words: string[]): string[] {
+  const dir = mkdtempSync(join(tmpdir(), "forge-compl-"));
+  try {
+    const stub = join(dir, "forge");
+    writeFileSync(stub, '#!/bin/sh\n[ "$2" = repos ] && echo o/r\n[ "$2" = tasks ] && echo cli\nexit 0\n', { mode: 0o755 });
+    const r = spawnSync("bash", ["-c", [
+      completionScript(stub),
+      `COMP_WORDS=(${words.map(shellQuote).join(" ")}); COMP_CWORD=${words.length - 1}`,
+      '_forge_completions; printf "%s\\n" "${COMPREPLY[@]}"',
+    ].join("\n")], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return r.stdout.split("\n").filter(Boolean);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test("resume completes --all beside the repos, and only resume does", () => {
+  assert.deepEqual(complete(["forge", "resume", ""]).sort(), ["--all", "o/r"]);
+  assert.deepEqual(complete(["forge", "resume", "--"]), ["--all"]);
+  assert.deepEqual(complete(["forge", "start", ""]), ["o/r"]);
+  assert.deepEqual(complete(["forge", "resume", "o/r", ""]), ["cli"]);
+});
+
+test("nothing is offered after resume --all", () => {
+  assert.deepEqual(complete(["forge", "resume", "--all", ""]), []);
 });
