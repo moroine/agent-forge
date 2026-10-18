@@ -5,14 +5,15 @@
 // la branche d'une tâche (toujours agent/<task>).
 import type { Context } from "../context.ts";
 import { columnWidths, formatRow } from "../table.ts";
-import { listInstances } from "../incus.ts";
+import { forgeProject, listInstances } from "../incus.ts";
+import { effectiveEgress, egressNames } from "../objects.ts";
 import {
   buildStatus, containerImageCommit, containerMode, containerRepo,
   latestImageCommit, forgeContainerNames,
 } from "../containers.ts";
 import { sessionStates, taskNames } from "../worktrees.ts";
 
-const HEADER = ["REPO", "MODE", "STATE", "BUILD"];
+const HEADER = ["REPO", "MODE", "EGRESS", "STATE", "BUILD"];
 
 type Entry = { cells: string[]; tasks: string[][] };
 
@@ -32,16 +33,21 @@ export async function cmdList(ctx: Context): Promise<number> {
   // nom suffit. `forge list` est la commande la plus lancée.
   const instances = await listInstances(ctx);
   const statuses = new Map(instances.map((i) => [i.name, i.status]));
+  const byName = new Map(instances.map((i) => [i.name, i]));
+  const names = egressNames(forgeProject());
 
   for (const name of forgeContainerNames(instances)) {
     const repo = await containerRepo(ctx, name);
     const mode = await containerMode(ctx, name);
     const status = statuses.get(name) ?? "Unknown";
+    // Dérivé de la NIC effective, pas du marqueur : une modification manuelle
+    // doit se voir (« ? »).
+    const egress = effectiveEgress(byName.get(name)?.expandedDevices ?? {}, names);
     const stamp = await containerImageCommit(ctx, name);
 
     const entry: Entry = {
       // Un container sans métadonnée repo n'a que son nom comme identifiant.
-      cells: [repo || name, mode || "-", status, buildLabel(buildStatus(stamp, latest))],
+      cells: [repo || name, mode || "-", egress, status, buildLabel(buildStatus(stamp, latest))],
       tasks: [],
     };
 

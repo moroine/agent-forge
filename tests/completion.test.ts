@@ -1,4 +1,8 @@
 import { test } from "node:test";
+import { spawnSync } from "node:child_process";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import { ForgeError } from "../cli/lib/context.ts";
@@ -89,5 +93,23 @@ test("the completion script offers tasks in third position and --force where it 
 });
 
 test("the completion script offers setup", () => {
-  assert.match(completionScript("/x/forge"), /compgen -W "setup start resume finish stop delete list image completion"/);
+  assert.match(completionScript("/x/forge"), /compgen -W "setup start resume finish stop delete list egress image completion"/);
+});
+
+// Runs the emitted function in bash with a stub in place of the forge shim.
+function complete(words: string[]): string[] {
+  const dir = mkdtempSync(join(tmpdir(), "forge-comp-"));
+  const stub = join(dir, "forge");
+  writeFileSync(stub, "#!/bin/sh\nif [ \"$2\" = repos ]; then printf 'o/r\\nacme/w\\n'; fi\n", { mode: 0o755 });
+  const script = `${completionScript(stub)}\nCOMP_WORDS=(${words.map((w) => `'${w}'`).join(" ")})\n` +
+    `COMP_CWORD=$((${words.length} - 1))\n_forge_completions\nprintf '%s\\n' "\${COMPREPLY[@]}"`;
+  const r = spawnSync("bash", ["-c", script], { encoding: "utf8" });
+  return r.stdout.split("\n").filter(Boolean);
+}
+
+test("egress completes repos and log, then the modes, and log's repos", () => {
+  assert.ok(completionScript("/x/forge").includes("egress"));
+  assert.deepEqual(complete(["forge", "egress", ""]), ["log", "o/r", "acme/w"]);
+  assert.deepEqual(complete(["forge", "egress", "o/r", ""]), ["strict", "open"]);
+  assert.deepEqual(complete(["forge", "egress", "log", ""]), ["o/r", "acme/w"]);
 });

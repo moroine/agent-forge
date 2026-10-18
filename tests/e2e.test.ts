@@ -44,7 +44,7 @@ test("an unknown command exits 1 with Error: on stderr", () => {
 test("list renders the table on stdout", () => {
   const r = forge(["list"]);
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /^REPO\s+MODE\s+STATE\s+BUILD$/m);
+  assert.match(r.stdout, /^REPO\s+MODE\s+EGRESS\s+STATE\s+BUILD$/m);
   assert.match(r.stdout, /moroine\/agent-forge/);
 });
 
@@ -85,7 +85,7 @@ test("the bash shim runs the TypeScript entry", () => {
     env: { ...process.env, PATH: `${bin}:${process.env.PATH}` },
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /^REPO\s+MODE\s+STATE\s+BUILD$/m);
+  assert.match(r.stdout, /^REPO\s+MODE\s+EGRESS\s+STATE\s+BUILD$/m);
 });
 
 test("setup appears in the usage", () => {
