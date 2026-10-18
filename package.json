@@ -7,7 +7,7 @@
     "test:unit": "node --test tests/*.test.ts",
     "test:contract": "node --test tests/contract/*.test.ts",
     "test:bash": "for t in tests/test-*.sh; do bash \"$t\" || exit 1; done",
-    "test:integration": "node --test tests/integration/*.test.ts",
+    "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.ts",
     "test:ansible": "ansible-playbook -i ansible/tests/unit-inventory.yml ansible/tests/unit.yml",
     "check": "tsc --noEmit"
   },
