@@ -1,6 +1,7 @@
 // Le seam injecté : tout ce que le CLI fait au monde extérieur passe par ici,
 // ce qui permet aux tests de le remplacer sans pty ni stub sur le PATH.
 import { spawn } from "node:child_process";
+import { constants } from "node:os";
 import { createPrompt } from "./prompt.ts";
 
 export type ExecResult = { code: number; stdout: string; stderr: string };
@@ -41,8 +42,8 @@ export class ForgeError extends Error {}
 // `r.stderr` dans le message, le diagnostic d'incus/git — la seule chose que
 // l'opérateur pouvait lire en bash — serait perdu.
 //
-// Les sondes (test -e, show-ref, rev-parse, list-sessions) ne passent JAMAIS
-// par ici : leur code de sortie est une réponse, pas une panne.
+// Les sondes (test -e, show-ref, rev-parse, ps) ne passent JAMAIS par ici :
+// leur code de sortie est une réponse, pas une panne.
 export async function mustSucceed(step: string, result: Promise<ExecResult>): Promise<ExecResult> {
   const r = await result;
   if (r.code !== 0) {
@@ -51,9 +52,17 @@ export async function mustSucceed(step: string, result: Promise<ExecResult>): Pr
   return r;
 }
 
+// Le code de sortie d'un enfant, à la manière du shell : tué par un signal, il
+// vaut 128 + le numéro du signal. Jamais 0 : git (upload-pack) croirait à un
+// succès.
+function exitCode(code: number | null, signal: NodeJS.Signals | null): number {
+  if (code !== null) return code;
+  return 128 + (signal ? constants.signals[signal] : 0);
+}
+
 // Ne rejette jamais sur un code non nul : plusieurs sondes (show-ref, test -e,
-// pkill) se servent du code de sortie comme réponse. Un binaire
-// absent est rapporté de la même façon, par un code non nul.
+// pkill) se servent du code de sortie comme réponse. Un binaire absent est
+// rapporté de la même façon, par un code non nul.
 function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
     const child = spawn(argv[0], argv.slice(1), {
@@ -74,16 +83,16 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
     child.on("error", (e) => resolve({ code: 127, stdout, stderr: String(e) }));
-    child.on("close", (code) => resolve({ code: code ?? 0, stdout, stderr }));
+    child.on("close", (code, signal) => resolve({ code: exitCode(code, signal), stdout, stderr }));
     if (opts.input !== undefined) child.stdin.end(opts.input);
     else child.stdin.end();
   });
 }
 
 // Hérite du terminal au lieu de capturer : c'est le cas de l'agent et
-// d'ansible-playbook. L'agent doit
-// rester la cible directe de `incus exec`, sinon SIGWINCH n'atteint jamais le
-// client au redimensionnement. opts.env se superpose à l'environnement hérité.
+// d'ansible-playbook. L'agent doit rester la cible directe de `incus exec`,
+// sinon SIGWINCH n'atteint jamais le client au redimensionnement. opts.env se
+// superpose à l'environnement hérité.
 function attach(argv: string[], opts?: AttachOptions): Promise<number> {
   return new Promise((resolve) => {
     const child = spawn(argv[0], argv.slice(1), {
@@ -91,7 +100,7 @@ function attach(argv: string[], opts?: AttachOptions): Promise<number> {
       env: opts?.env ? { ...process.env, ...opts.env } : process.env,
     });
     child.on("error", () => resolve(127));
-    child.on("close", (code) => resolve(code ?? 0));
+    child.on("close", (code, signal) => resolve(exitCode(code, signal)));
   });
 }
 

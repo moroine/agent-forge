@@ -68,6 +68,25 @@ test("a new task whose transcript folder would collide with an existing task is 
   assert.equal(c.attachCalls.length, 0);
 });
 
+// Two worktrees left from before the guard: attaching to either stays allowed.
+test("the transcript-folder guard stays quiet for an existing worktree", async () => {
+  const c = fakeContext({ rules: rules([
+    { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/fix.v2\nworktree /workspace/.trees/fix-v2\n" },
+    { match: "test -e /workspace/.trees/fix-v2", code: 0 },
+  ]) });
+  assert.equal(await cmdStart(c, "moroine/agent-forge", "fix-v2"), 0);
+  assert.equal(added(c), "");
+  assert.equal(c.attachCalls.length, 1);
+});
+
+test("start names the stored repo, not the case typed", async () => {
+  const c = fakeContext({ rules: rules([
+    { match: "test -e /workspace/.trees/cli", code: 0 },
+    { match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-moroine-agent-forge-cli\n" },
+  ]) });
+  await assert.rejects(() => cmdStart(c, "Moroine/Agent-Forge", "cli"), /'forge stop moroine\/agent-forge'\./);
+});
+
 test("an existing local branch is resumed in a new worktree", async () => {
   const c = fakeContext({ rules: rules([{ match: "show-ref --verify --quiet refs/heads/agent/docs", code: 0 }]) });
   await cmdStart(c, "moroine/agent-forge", "docs");

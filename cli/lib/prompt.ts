@@ -20,7 +20,8 @@ export function createPrompt(
   // close() explicite l'interface garde stdin résumé et son listener
   // 'data' attaché après la résolution de l'appel, ce qui volerait les
   // frappes destinées à un attach() lancé ensuite (ex. l'attach de
-  // l'agent en stdio "inherit"). D'où le close() explicite ici, pas de raccourci possible.
+  // l'agent en stdio "inherit"). D'où le close() explicite ici, pas de
+  // raccourci possible.
   async function withReadLine<T>(fn: (next: () => Promise<string | null>) => Promise<T>): Promise<T> {
     const rl = createInterface({ input, terminal: false });
     const lines = rl[Symbol.asyncIterator]();

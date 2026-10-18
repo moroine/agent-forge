@@ -1,8 +1,9 @@
 // Worktrees, branches agent/* et tâches en cours d'un container.
 //
-// Les fonctions parse* sont pures et exportées à part : ce sont elles que les
-// tests de contrat (couche 2) alimentent avec la sortie d'un *vrai* git et
-// de `ps`, sans LXD.
+// Les fonctions parse* sont pures et exportées à part : les tests de contrat
+// (couche 2) alimentent celles de git avec la sortie d'un *vrai* git, sans
+// Incus ; parseRunningTasks, elle, s'appuie sur la forme de `ps` vérifiée sur
+// un vrai Incus.
 import type { Context } from "./context.ts";
 import { execAsAgent, execAsAgentArgv } from "./incus.ts";
 import { AGENT } from "./agent.ts";
@@ -63,6 +64,11 @@ export function parseRunningTasks(ps: string, container: string): Set<string> {
     }
   }
   return tasks;
+}
+
+// Sonde : la worktree de la tâche est là. Le nom est validé par l'appelant.
+export async function worktreeExists(ctx: Context, container: string, task: string): Promise<boolean> {
+  return (await execAsAgent(ctx, container, `test -e ${worktreeAbsPath(task)}`)).code === 0;
 }
 
 export async function worktreeDirs(ctx: Context, container: string): Promise<string[]> {

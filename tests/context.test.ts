@@ -39,6 +39,17 @@ test("exec passes extra environment variables", async () => {
   assert.equal(r.stdout, "ok");
 });
 
+// Convention du shell : 128 + le numéro du signal. Un code 0 ferait croire à
+// git (upload-pack) qu'un processus tué a réussi.
+test("exec reports a child killed by a signal as 128 + the signal number", async () => {
+  const r = await createContext().exec(["sh", "-c", "kill -KILL $$"]);
+  assert.equal(r.code, 137);
+});
+
+test("attach reports a child killed by a signal as 128 + the signal number", async () => {
+  assert.equal(await createContext().attach(["sh", "-c", "kill -TERM $$"]), 143);
+});
+
 test("exec runs in the given working directory", async () => {
   const r = await createContext().exec(["pwd"], { cwd: "/" });
   assert.equal(r.stdout, "/\n");
