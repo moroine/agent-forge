@@ -6,6 +6,7 @@ import { FakeIncus } from "./lib/fake-incus.ts";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { assertNoHostGitIn } from "./lib/host-git.ts";
 import { cmdFinish } from "../cli/lib/commands/finish.ts";
 
 const BASE = [
@@ -62,14 +63,46 @@ test("finish --force skips the pre-flight and forces the removal", async () => {
   assert.ok(c.calls.some((call) => call.join(" ").includes("worktree remove --force .trees/cli")));
 });
 
-test("finish keeps the branch and kills the session", async () => {
-  const c = fakeContext({
-    rules: [...BASE, { match: "test -e", code: 0 }, { match: "status --porcelain", stdout: "" }, { match: "user.forge.mode", stdout: "supervised" }],
-  });
+const FINISH_RULES = [
+  ...BASE,
+  { match: "test -e", code: 0 },
+  { match: "status --porcelain", stdout: "" },
+  { match: "user.forge.mode", stdout: "supervised" },
+];
+const CONTAINER_PREFIX = ["incus", "--project", "agent-forge", "exec", "agent-moroine-agent-forge",
+  "--user", "1001", "--group", "1001", "--env", "HOME=/home/aiuser", "--"];
+
+test("finish keeps the branch, stops the agent, removes the worktree, then moves the transcripts aside", async () => {
+  const c = fakeContext({ rules: FINISH_RULES });
   await cmdFinish(c, "moroine/agent-forge", "cli", false);
   assert.ok(!c.calls.some((call) => call.join(" ").includes("branch -D")));
-  assert.ok(c.calls.some((call) => call.join(" ").includes("kill-session -t cli")));
+  assert.ok(!c.calls.some((call) => call.join(" ").includes("tmux")));
+  const pkill = c.calls.findIndex((call) => call.includes("pkill"));
+  const remove = c.calls.findIndex((call) => call.join(" ").includes("worktree remove"));
+  const aside = c.calls.findIndex((call) => call.includes("sh") && call.join(" ").includes(".finished-"));
+  assert.ok(pkill >= 0 && pkill < remove && remove < aside, `order: ${pkill} ${remove} ${aside}`);
+  assert.deepEqual(c.calls[pkill], [
+    ...CONTAINER_PREFIX, "pkill", "-f", "--", "--remote-control agent-moroine-agent-forge-cli( |$)",
+  ]);
+  const move = c.calls[aside];
+  assert.equal(move.at(-2), "/home/aiuser/.claude/projects/-workspace--trees-cli");
+  assert.match(move.at(-1) ?? "", /^\d{8}T\d{6}Z$/);
   assert.ok(c.out_lines.some((l) => l.includes("branch agent/cli retained")));
+  assertNoHostGitIn(c.calls, "/workspace");
+  assert.ok(!c.calls.some((call) => call[0] === "git"));
+});
+
+test("finish succeeds when no agent process was running (pkill exit 1)", async () => {
+  const c = fakeContext({ rules: [{ match: "pkill", code: 1 }, ...FINISH_RULES] });
+  assert.equal(await cmdFinish(c, "moroine/agent-forge", "cli", false), 0);
+});
+
+test("finish only warns when moving the transcripts aside fails", async () => {
+  const c = fakeContext({ rules: [{ match: ".finished-", code: 1, stderr: "mv: denied" }, ...FINISH_RULES] });
+  assert.equal(await cmdFinish(c, "moroine/agent-forge", "cli", false), 0);
+  assert.ok(c.err_lines.some((l) => /^WARNING: moving the transcripts of cli aside failed: mv: denied/.test(l)),
+    `no warning: ${c.err_lines.join(" | ")}`);
+  assert.ok(c.out_lines.some((l) => l.includes("Finished task cli")));
 });
 
 // Fail-fast : sans mustSucceed, `git worktree remove` pouvait échouer et

@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
+import { assertNoHostGitIn } from "./lib/host-git.ts";
 import { cmdList } from "../cli/lib/commands/list.ts";
 
 const LIST = JSON.stringify([
@@ -20,7 +21,7 @@ function ctx() {
       { match: "agent-acme-super-long-repository-name user.forge.mode", stdout: "supervised" },
       { match: "incus --project agent-forge list", stdout: LIST },
       { match: "git worktree list", stdout: "worktree /workspace\nworktree /workspace/.trees/cli\nworktree /workspace/.trees/docs\nworktree /workspace/.trees/api\n" },
-      { match: "list-sessions", stdout: "cli 1\ndocs 0\n" },
+      { match: "ps -u 1001 -o args=", stdout: "claude --permission-mode auto --remote-control agent-moroine-agent-forge-cli\n" },
     ],
   });
 }
@@ -37,12 +38,12 @@ test("a behind container is reported without the two sha", async () => {
   assert.match(c.out_lines[1], /^moroine\/agent-forge\s+autonomous\s+\?\s+Running\s+behind$/);
 });
 
-test("the three session states are distinguished", async () => {
+test("the two task states are distinguished", async () => {
   const c = ctx();
   await cmdList(c);
-  assert.match(c.out_lines[2], /^ {2}cli\s+attached$/);
-  assert.match(c.out_lines[3], /^ {2}docs\s+detached$/);
-  assert.match(c.out_lines[4], /^ {2}api\s+no session$/);
+  assert.match(c.out_lines[2], /^ {2}cli\s+running$/);
+  assert.match(c.out_lines[3], /^ {2}docs\s+stopped$/);
+  assert.match(c.out_lines[4], /^ {2}api\s+stopped$/);
 });
 
 test("a stopped container yields no task rows and is not inspected", async () => {
@@ -126,4 +127,11 @@ test("the EGRESS column comes from the effective NIC", async () => {
   assert.match(c.out_lines[1], /^agent-a\s+-\s+strict\s+Stopped/);
   assert.match(c.out_lines[2], /^agent-b\s+-\s+open\s+Stopped/);
   assert.match(c.out_lines[3], /^agent-c\s+-\s+\?\s+Stopped/);
+});
+
+test("forge list runs no host git", async () => {
+  const c = ctx();
+  await cmdList(c);
+  assertNoHostGitIn(c.calls, "/workspace");
+  assert.ok(!c.calls.some((call) => call[0] === "git"));
 });

@@ -43,3 +43,27 @@ export async function attachTask(ctx: Context, container: string, task: string):
     { env: { HERDR_AGENT: AGENT.herdrLabel } },
   );
 }
+
+// Stops the task's agent. `pkill -f` matches the full command line; the marker
+// is anchored so task "a" never matches "a-b". Exit 1 means nothing was running.
+export async function stopAgent(ctx: Context, container: string, task: string): Promise<void> {
+  await execAsAgentArgv(ctx, container, ["pkill", "-f", "--", `${AGENT.marker(container, task)}( |$)`]);
+}
+
+// UTC YYYYMMDDTHHMMSSZ.
+export function finishedStamp(now: Date): string {
+  return now.toISOString().replace(/[-:]/g, "").replace(/\.\d+Z$/, "Z");
+}
+
+// A reused task name must start a fresh conversation: move the transcripts
+// aside instead of deleting them. Best effort, only warns.
+export async function setTranscriptsAside(
+  ctx: Context, container: string, task: string, now: Date = new Date(),
+): Promise<void> {
+  const r = await execAsAgentArgv(ctx, container, [
+    "sh", "-c", '[ ! -d "$1" ] || mv "$1" "$1.finished-$2"', "sh", transcriptDir(task), finishedStamp(now),
+  ]);
+  if (r.code !== 0) {
+    ctx.err(`WARNING: moving the transcripts of ${task} aside failed: ${r.stderr.trim() || `exit code ${r.code}`}`);
+  }
+}

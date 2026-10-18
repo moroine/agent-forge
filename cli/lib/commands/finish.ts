@@ -7,6 +7,7 @@ import { validateRepo, validateTaskName } from "../validate.ts";
 import { requireContainerForRepo } from "../containers.ts";
 import { execAsAgent } from "../incus.ts";
 import { worktreeAbsPath } from "../worktrees.ts";
+import { setTranscriptsAside, stopAgent } from "../session.ts";
 import { checkWorktree } from "../wip.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
@@ -32,13 +33,16 @@ export async function cmdFinish(
 
   if (!force) await checkWorktree(ctx, container, dir);
 
+  // On arrête l'agent avant de retirer son worktree : il y a son cwd.
+  await stopAgent(ctx, container, taskName);
+
   ctx.out(`Removing worktree .trees/${taskName}...`);
   const flag = force ? "--force " : "";
   await mustSucceed("git worktree remove",
     execAsAgent(ctx, container, `git -C /workspace worktree remove ${flag}.trees/${taskName}`));
 
-  // Au mieux : on démonte la session si elle traîne encore.
-  await execAsAgent(ctx, container, `tmux kill-session -t ${taskName} 2>/dev/null || true`);
+  // Une tâche réutilisée repart d'une conversation neuve.
+  await setTranscriptsAside(ctx, container, taskName);
 
   ctx.out(`Finished task ${taskName} (branch agent/${taskName} retained).`);
   return 0;

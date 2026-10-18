@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import { AGENT } from "../cli/lib/agent.ts";
 import {
-  attachTask, claudeSlug, ensureRunning, hasConversation, transcriptDir,
+  attachTask, claudeSlug, ensureRunning, finishedStamp, hasConversation, transcriptDir,
 } from "../cli/lib/session.ts";
 
 const P = ["incus", "--project", "agent-forge"];
@@ -89,4 +89,8 @@ test("attachTask adds --continue only when a conversation exists", async () => {
   const again = fakeContext({ rules: [{ match: "ls", code: 0 }] });
   await attachTask(again, "agent-x", "cli");
   assert.ok(again.attachCalls[0].argv.at(-1)?.endsWith(" --continue"));
+});
+
+test("finishedStamp is the UTC time without separators or milliseconds", () => {
+  assert.equal(finishedStamp(new Date("2026-10-18T09:05:03.456Z")), "20261018T090503Z");
 });

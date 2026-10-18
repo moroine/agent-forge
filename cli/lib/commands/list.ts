@@ -11,7 +11,7 @@ import {
   buildStatus, containerImageCommit, containerMode, containerRepo,
   latestImageCommit, forgeContainerNames,
 } from "../containers.ts";
-import { sessionStates, taskNames } from "../worktrees.ts";
+import { runningTasks, taskNames } from "../worktrees.ts";
 
 const HEADER = ["REPO", "MODE", "EGRESS", "STATE", "BUILD"];
 
@@ -53,11 +53,9 @@ export async function cmdList(ctx: Context): Promise<number> {
 
     // Un container arrêté ne peut pas être inspecté.
     if (status === "Running") {
-      const sessions = await sessionStates(ctx, name);
+      const running = await runningTasks(ctx, name);
       for (const task of await taskNames(ctx, name)) {
-        const attached = sessions.get(task);
-        const state = attached === undefined ? "no session" : attached ? "attached" : "detached";
-        entry.tasks.push([task, state]);
+        entry.tasks.push([task, running.has(task) ? "running" : "stopped"]);
       }
     }
     entries.push(entry);
