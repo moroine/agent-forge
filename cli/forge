@@ -12,4 +12,7 @@ if ! [ "$major" -ge 24 ] 2>/dev/null; then
   echo "forge requires Node 24+ (found $version)" >&2
   exit 1
 fi
+# Chemin d'invocation stable pour herdr (il le tape dans ses onglets), contrairement
+# au chemin résolu par readlink, qui change à chaque release.
+export FORGE_INVOKED_AS="${BASH_SOURCE[0]}"
 exec node "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/forge.ts" "$@"

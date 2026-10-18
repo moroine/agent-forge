@@ -1,6 +1,8 @@
 // Point d'entrée : argv vers une commande, et une seule place où les erreurs
 // deviennent un message et un code de sortie.
 import { parseArgs } from "node:util";
+import { createInterface } from "node:readline";
+import { herdrEnv } from "./lib/herdr.ts";
 import type { Context } from "./lib/context.ts";
 import { createContext, ForgeError } from "./lib/context.ts";
 import { cmdSetup } from "./lib/commands/setup.ts";
@@ -64,6 +66,16 @@ function dispatch(ctx: Context, positionals: string[], force: boolean, strict: b
   }
 }
 
+// Une ligne, ou la fin de stdin.
+function waitForLine(): Promise<void> {
+  return new Promise((done) => {
+    const rl = createInterface({ input: process.stdin });
+    const finish = () => { rl.close(); done(); };
+    rl.once("line", finish);
+    rl.once("close", finish);
+  });
+}
+
 async function main(): Promise<number> {
   const ctx = createContext();
   try {
@@ -81,6 +93,12 @@ async function main(): Promise<number> {
     // Le préfixe "Error: " est ajouté ici, une seule fois : une ForgeError ne
     // porte que son message.
     ctx.err(`Error: ${e instanceof Error ? e.message : String(e)}`);
+    // Dans la popup herdr, la fenêtre se ferme avec le processus : on laisse
+    // le temps de lire l'erreur.
+    if (herdrEnv()?.popup) {
+      ctx.err("Press Enter to close");
+      await waitForLine();
+    }
     return 1;
   }
 }

@@ -9,6 +9,13 @@ export function forgeHome(): string {
   return process.env.FORGE_HOME ?? homedir();
 }
 
+// La commande que herdr tape dans un onglet : le chemin par lequel l'utilisateur
+// a lancé forge (exporté par le shim), rendu absolu mais pas résolu — un lien
+// symbolique reste stable d'une release à l'autre. `forge` quand il est absent.
+export function forgeCommand(): string {
+  return process.env.FORGE_INVOKED_AS ? resolve(process.env.FORGE_INVOKED_AS) : "forge";
+}
+
 // cli/lib/paths.ts → the repository (or release) root is two levels up. The
 // shim resolves symlinks first, so an installed /usr/local/bin/forge lands on
 // the release directory, where COMMIT lives.
