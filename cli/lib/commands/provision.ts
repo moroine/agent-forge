@@ -13,6 +13,7 @@ import { BASE_IMAGE, latestImageCommit } from "../containers.ts";
 import {
   configSet, execAsAgent, execAsAgentArgv, forgeProject, imageExists, incus, listObjects, waitReady,
 } from "../incus.ts";
+import { remoteRepo } from "../mirror.ts";
 import { PROFILE } from "../objects.ts";
 import { allowlistPath, forgeHome, repoRoot, workspacesDir } from "../paths.ts";
 import { applyStrictSettings, requireStrictRuntime, strictLaunchArgs } from "../strict.ts";
@@ -266,13 +267,4 @@ async function workspaceIsReusable(ctx: Context, workspaceDir: string, ownerRepo
       "move it aside (or remove it) and run the command again.");
   }
   return true;
-}
-
-// Réduit une URL de remote à son `owner/repo`, quelle que soit sa forme :
-// git@github.com:o/r.git, https://github.com/o/r, ssh://git@github.com/o/r.git
-// — y compris via un alias SSH (~/.ssh/config), d'où la comparaison sur le
-// chemin seul et pas sur l'hôte.
-function remoteRepo(url: string): string {
-  const match = url.trim().replace(/\.git$/, "").match(/([^/:]+\/[^/]+)$/);
-  return match ? match[1].toLowerCase() : "";
 }

@@ -34,3 +34,18 @@ function configDir(): string {
   const base = process.env.XDG_CONFIG_HOME || join(forgeHome(), ".config");
   return join(base, "agent-forge");
 }
+
+// Données de forge (miroirs git). Un XDG_DATA_HOME vide compte comme absent.
+function dataDir(): string {
+  const base = process.env.XDG_DATA_HOME || join(forgeHome(), ".local", "share");
+  return join(base, "agent-forge");
+}
+
+// FORGE_MIRRORS ne sert qu'aux tests.
+export function mirrorsDir(): string {
+  return process.env.FORGE_MIRRORS ?? join(dataDir(), "mirrors");
+}
+
+export function mirrorPath(container: string): string {
+  return join(mirrorsDir(), `${container}.git`);
+}

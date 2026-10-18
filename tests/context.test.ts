@@ -33,3 +33,13 @@ test("ForgeError carries only the message, without an Error: prefix", () => {
   assert.equal(e.message, "no container found for x/y");
   assert.ok(e instanceof Error);
 });
+
+test("exec passes extra environment variables", async () => {
+  const r = await createContext().exec(["sh", "-c", "printf %s \"$FORGE_T\""], { env: { FORGE_T: "ok" } });
+  assert.equal(r.stdout, "ok");
+});
+
+test("exec with extra variables still inherits PATH", async () => {
+  const r = await createContext().exec(["sh", "-c", "printf %s \"$FORGE_T\""], { env: { FORGE_T: "x" } });
+  assert.equal(r.code, 0);
+});

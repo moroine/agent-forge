@@ -372,6 +372,11 @@ export class FakeIncus {
       inst.devices[device] = { type, ...Object.fromEntries(pairs.map((kv) => kv.split(/=(.*)/s).slice(0, 2))) };
       return ok();
     }
+    if (rest[0] === "device" && rest[1] === "list") {
+      const inst = this.instances.get(p)!.get(rest[2]);
+      if (!inst) return fail("Instance not found");
+      return ok(Object.keys(inst.devices).map((d) => `${d}\n`).join(""));
+    }
     const [sub, name, key, value] = rest;
     const inst = this.instances.get(p)!.get(name);
     if (!inst) return fail("Instance not found");
