@@ -16,9 +16,11 @@ beforeEach(() => {
   xdg = mkdtempSync(join(tmpdir(), "forge-xdg-"));
   process.env.XDG_CONFIG_HOME = xdg;
   process.env.HERDR_CONFIG_PATH = join(xdg, "herdr.toml");
-  // A real ~/.local/bin/herdr (Linux hosts) must never be found.
+  // A real ~/.local/bin/herdr (Linux hosts) must never be found, nor the
+  // herdr of a session the tests were started from.
   savedForgeHome = process.env.FORGE_HOME;
   process.env.FORGE_HOME = join(xdg, "home");
+  delete process.env.HERDR_BIN_PATH;
 });
 afterEach(() => {
   rmSync(xdg, { recursive: true, force: true });

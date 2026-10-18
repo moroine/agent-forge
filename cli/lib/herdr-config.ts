@@ -69,12 +69,17 @@ function lines(text: string): Line[] {
 }
 
 // Locates the block: [from, to) covers the start-marker line through the
-// end-marker line, terminator included. Null when there is none.
+// end-marker line, terminator included. Null when there is none. A marker may
+// be followed by blanks (an editor's leftovers); a second marker of either
+// kind is refused rather than guessed around.
 function findBlock(text: string): { from: number; to: number } | null {
   const ls = lines(text);
-  const starts = ls.filter((l) => l.text === BLOCK_START);
-  const ends = ls.filter((l) => l.text === BLOCK_END);
+  const starts = ls.filter((l) => l.text.trimEnd() === BLOCK_START);
+  const ends = ls.filter((l) => l.text.trimEnd() === BLOCK_END);
   if (starts.length > 1) throw new Error("more than one agent-forge block: remove the extra ones by hand");
+  if (ends.length > 1) {
+    throw new Error(`more than one "${BLOCK_END}" in the agent-forge block: remove the extra ones by hand`);
+  }
   if (starts.length === 0 && ends.length === 0) return null;
   if (starts.length === 0) throw new Error(`found "${BLOCK_END}" without a start marker in the agent-forge block`);
   if (ends.length === 0 || ends[ends.length - 1].start < starts[0].start) {
@@ -100,14 +105,16 @@ export function spliceBlock(
   return { text: text.slice(0, found.from) + block + text.slice(found.to), outcome: "updated" };
 }
 
-// Keys forge binds that the user also binds outside the block.
+// Keys forge binds that the user also binds outside the block. A TOML key
+// value may be a basic or a literal string, and be followed by a comment.
 export function conflictingKeys(text: string): string[] {
   const found = findBlock(text);
   const outside = found ? text.slice(0, found.from) + text.slice(found.to) : text;
   const keys = new Set<string>();
   for (const l of lines(outside)) {
-    const m = /^\s*key\s*=\s*"([^"]*)"\s*$/.exec(l.text);
-    if (m && KEYS.includes(m[1])) keys.add(m[1]);
+    const m = /^\s*key\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/.exec(l.text);
+    const key = m ? (m[1] ?? m[2]) : undefined;
+    if (key !== undefined && KEYS.includes(key)) keys.add(key);
   }
   return [...keys];
 }
