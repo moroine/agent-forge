@@ -51,17 +51,21 @@ export async function mirrorRepo(ctx: Context, mirror: string): Promise<string |
   return remoteRepo(r.stdout) || null;
 }
 
+// Refuses an existing mirror whose repository (mirrorRepo's answer) is not
+// ownerRepo: two repos whose names give the same container.
+export function requireMirrorOf(mirror: string, ownerRepo: string, found: string | null): void {
+  if (found === ownerRepo.toLowerCase()) return;
+  throw new ForgeError(
+    `${mirror} is a mirror of ${found ?? "an unknown repository"}, not ${ownerRepo}: ` +
+    "two repos share the container name. Move it aside and run the command again.");
+}
+
 export async function ensureMirror(
   ctx: Context, mirror: string, ownerRepo: string, remote: GitRemote = GITHUB,
 ): Promise<"created" | "kept"> {
   validateRepo(ownerRepo);
   if (existsSync(mirror)) {
-    const other = await mirrorRepo(ctx, mirror);
-    if (other !== ownerRepo.toLowerCase()) {
-      throw new ForgeError(
-        `${mirror} is a mirror of ${other ?? "an unknown repository"}, not ${ownerRepo}: ` +
-        "two repos share the container name. Move it aside and run the command again.");
-    }
+    requireMirrorOf(mirror, ownerRepo, await mirrorRepo(ctx, mirror));
     return "kept";
   }
   mkdirSync(dirname(mirror), { recursive: true });
@@ -77,8 +81,9 @@ export async function ensureMirror(
 
 // The URL is on the command line, not read back from the mirror's config, so
 // a mirror whose config was altered cannot redirect the fetch. The caller
-// decides what a failure means.
-export function refreshMirror(
+// decides what a failure means; an invalid repo rejects, like a failed fetch
+// would, instead of throwing before the promise exists.
+export async function refreshMirror(
   ctx: Context, mirror: string, ownerRepo: string, remote: GitRemote = GITHUB,
 ): Promise<ExecResult> {
   validateRepo(ownerRepo);

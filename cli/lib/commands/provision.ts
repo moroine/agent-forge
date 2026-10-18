@@ -15,6 +15,7 @@ import {
 } from "../incus.ts";
 import {
   cloneWorkspace, ensureMirror, HOST_GIT_CWD, MIRROR_MOUNT, mirrorRepo, ORIGIN_DEVICE, pointOriginAtMirror,
+  requireMirrorOf,
 } from "../mirror.ts";
 import { PROFILE } from "../objects.ts";
 import { allowlistPath, forgeHome, mirrorPath, repoRoot, workspacesDir } from "../paths.ts";
@@ -43,18 +44,18 @@ export async function provisionContainer(
   const workspaceDir = join(workspacesDir(), container);
   const mirror = mirrorPath(container);
   // Seul le miroir (possédé par forge) se questionne avec git : le workspace,
-  // lui, est écrit par l'agent, donc l'hôte n'y lance jamais git.
+  // lui, est écrit par l'agent, donc l'hôte n'y lance jamais git. Le refus
+  // d'un miroir étranger passe avant celui du workspace : c'est lui qui nomme
+  // la vraie cause.
   const existing = await mirrorRepo(ctx, mirror);
-  if (existsSync(mirror) && existing !== ownerRepo.toLowerCase()) {
-    throw new ForgeError(
-      `${mirror} is a mirror of ${existing ?? "an unknown repository"}, not ${ownerRepo}: ` +
-      "two repos share the container name. Move it aside and run the command again.");
-  }
+  const mirrorExists = existsSync(mirror);
+  if (mirrorExists) requireMirrorOf(mirror, ownerRepo, existing);
   const reuseWorkspace = workspaceIsReusable(workspaceDir, mirror, ownerRepo, existing);
 
-  // Le miroir se crée avant le lancement : un échec SSH ne laisse pas de container.
-  ctx.out(existing ? `Reusing the host mirror ${mirror}...` : `Fetching ${ownerRepo} into the host mirror...`);
-  const mirrorOutcome = await ensureMirror(ctx, mirror, ownerRepo);
+  // Le miroir se crée avant le lancement : un échec SSH ne laisse pas de
+  // container. Un miroir existant vient d'être vérifié : pas de seconde sonde.
+  ctx.out(mirrorExists ? `Reusing the host mirror ${mirror}...` : `Fetching ${ownerRepo} into the host mirror...`);
+  const mirrorOutcome = mirrorExists ? "kept" : await ensureMirror(ctx, mirror, ownerRepo);
 
   ctx.out(`Creating container ${container}...`);
   const strictArgs = plan ? strictLaunchArgs(plan, egressNames(forgeProject())) : [];
@@ -144,8 +145,7 @@ export async function provisionContainer(
     execAsAgent(ctx, container, "git lfs install --skip-repo"));
 
   ctx.out("Ignoring worktrees in the main clone...");
-  // Première commande du container à toucher /workspace : un montage
-  // illisible se manifeste ici, avec un message lisible.
+  // .trees/ ne doit jamais apparaître dans le status du clone principal.
   await mustSucceed(`worktree exclude in ${container}`, execAsAgent(ctx, container,
     "cd /workspace && { grep -qxF '.trees/' .git/info/exclude || echo '.trees/' >> .git/info/exclude; }"));
 

@@ -168,6 +168,8 @@ test("right after a fresh mirror clone, start does not fetch GitHub again", asyn
     const flat = c.calls.map((x) => x.join(" "));
     assert.ok(flat.some((l) => l.includes("clone --bare")), flat.join("\n"));
     assert.equal(flat.filter((l) => l.includes("fetch") && l.includes("--prune")).length, 0, flat.join("\n"));
+    // The fresh-clone path too: provisioning, then the start that follows.
+    assertNoHostGitIn(c.calls, join(home, "workspaces"));
   } finally {
     rmSync(home, { recursive: true, force: true });
     for (const k of ["FORGE_HOME", "FORGE_REPO_DIR", "FORGE_WORKSPACES", "FORGE_MIRRORS"]) delete process.env[k];

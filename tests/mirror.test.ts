@@ -93,10 +93,32 @@ test("every host git call on the mirror runs from /, whatever forge's own cwd", 
   assert.deepEqual(ctx.execOptions.map((o) => o?.cwd), ["/", "/", "/"]);
 });
 
+test("refreshMirror rejects an invalid repo before git, as a promise", async () => {
+  const ctx = fakeContext();
+  await assert.rejects(() => refreshMirror(ctx, mirror, "o/r;id"), /repo must be/);
+  const pending = (() => { try { return refreshMirror(ctx, mirror, "o/r;id"); } catch { return null; } })();
+  assert.ok(pending instanceof Promise, "refreshMirror threw synchronously");
+  await pending.catch(() => {});
+  assert.deepEqual(ctx.calls, []);
+});
+
 test("mirrorRepo returns null without exec when there is no mirror", async () => {
   const ctx = fakeContext();
   assert.equal(await mirrorRepo(ctx, join(dir, "absent.git")), null);
   assert.deepEqual(ctx.calls, []);
+});
+
+test("mirrorRepo returns null when git cannot read the mirror", async () => {
+  mkdirSync(mirror, { recursive: true });
+  const ctx = fakeContext({ rules: [{ match: "--get remote.origin.url", code: 1 }] });
+  assert.equal(await mirrorRepo(ctx, mirror), null);
+});
+
+test("an unreadable mirror is refused as a mirror of an unknown repository", async () => {
+  mkdirSync(mirror, { recursive: true });
+  const ctx = fakeContext({ rules: [{ match: "--get remote.origin.url", code: 128, stderr: "fatal: not a git repository" }] });
+  await assert.rejects(ensureMirror(ctx, mirror, "o/r"), /is a mirror of an unknown repository, not o\/r/);
+  assert.ok(!ctx.calls.some((c) => c.includes("clone")));
 });
 
 test("cloneWorkspace runs in the container as aiuser", async () => {

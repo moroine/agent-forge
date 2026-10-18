@@ -137,10 +137,10 @@ async function refreshMain(
   //
   // Volontairement NON fatal, contrairement au reste des étapes mutantes : ce
   // rafraîchissement n'alimente que des entrées en lecture (le menu et le
-  // point de départ origin/main). La branche supervised juste au-dessus part
-  // déjà, par conception, des dernières refs connues — un opérateur hors
-  // ligne doit pouvoir en faire autant plutôt que de voir `forge start`
-  // refuser de démarrer. Ce qui n'est pas acceptable, c'est le silence : le
+  // point de départ origin/main). Le rafraîchissement du miroir juste
+  // au-dessus repart déjà, lui aussi, des dernières refs connues — un
+  // opérateur hors ligne doit pouvoir démarrer plutôt que de voir
+  // `forge start` refuser. Ce qui n'est pas acceptable, c'est le silence : le
   // stderr de git est remonté tel quel, avec la conséquence énoncée.
   const fetched = await execAsAgent(ctx, container, "git -C /workspace fetch origin");
   if (fetched.code !== 0) {

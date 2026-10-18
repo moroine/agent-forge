@@ -1,10 +1,25 @@
-import { test } from "node:test";
+import { test, after } from "node:test";
 import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
+import { mirrorPath, workspacesDir } from "../cli/lib/paths.ts";
 import { cmdStop } from "../cli/lib/commands/stop.ts";
 import { cmdDelete } from "../cli/lib/commands/delete.ts";
-import { join } from "node:path";
-import { mirrorPath, workspacesDir } from "../cli/lib/paths.ts";
+
+// Jamais le vrai home : delete regarde si le miroir existe.
+const dir = mkdtempSync(join(tmpdir(), "forge-delete-"));
+const saved = { ws: process.env.FORGE_WORKSPACES, mirrors: process.env.FORGE_MIRRORS };
+process.env.FORGE_WORKSPACES = join(dir, "workspaces");
+process.env.FORGE_MIRRORS = join(dir, "mirrors");
+after(() => {
+  for (const [k, v] of [["FORGE_WORKSPACES", saved.ws], ["FORGE_MIRRORS", saved.mirrors]] as const) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
+  rmSync(dir, { recursive: true, force: true });
+});
 
 const RULES = [
   { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
@@ -99,17 +114,31 @@ test("delete fails loudly when incus delete fails, surfacing its stderr", async 
   );
 });
 
+const STOPPED = [
+  { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
+  { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
+];
+
 test("delete says the workspace and the mirror are kept", async () => {
-  const c = fakeContext({
-    rules: [
-      { match: "agent-moroine-agent-forge user.forge.repo", stdout: "moroine/agent-forge" },
-      { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-moroine-agent-forge", status: "Stopped" }]) },
-    ],
-  });
+  mkdirSync(mirrorPath("agent-moroine-agent-forge"), { recursive: true });
+  try {
+    const c = fakeContext({ rules: STOPPED });
+    await cmdDelete(c, "moroine/agent-forge", false);
+    const line = c.out_lines.find((l) => l.startsWith("Kept "));
+    assert.ok(line, c.out_lines.join("\n"));
+    assert.ok(line.includes(join(workspacesDir(), "agent-moroine-agent-forge")), line);
+    assert.ok(line.includes(mirrorPath("agent-moroine-agent-forge")), line);
+    assert.ok(line.includes("forge start moroine/agent-forge"), line);
+  } finally {
+    rmSync(mirrorPath("agent-moroine-agent-forge"), { recursive: true, force: true });
+  }
+});
+
+// Un container d'avant le miroir n'en a pas : la ligne n'en nomme aucun.
+test("delete of a container without a mirror names only the workspace", async () => {
+  const c = fakeContext({ rules: STOPPED });
   await cmdDelete(c, "moroine/agent-forge", false);
-  const line = c.out_lines.find((l) => l.startsWith("Kept "));
-  assert.ok(line, c.out_lines.join("\n"));
-  assert.ok(line.includes(join(workspacesDir(), "agent-moroine-agent-forge")), line);
-  assert.ok(line.includes(mirrorPath("agent-moroine-agent-forge")), line);
-  assert.ok(line.includes("forge start moroine/agent-forge"), line);
+  assert.deepEqual(c.out_lines.filter((l) => l.startsWith("Kept ")), [
+    `Kept ${join(workspacesDir(), "agent-moroine-agent-forge")}: 'forge start moroine/agent-forge' reuses it.`,
+  ]);
 });

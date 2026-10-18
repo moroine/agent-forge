@@ -281,7 +281,6 @@ test("the worktree exclude is its own step, written even when the hooks step fai
   assert.ok(!calls.some((l) => l.includes("lfs install") && l.includes("info/exclude")));
 });
 
-
 test("the mirror is created on the host before the launch", async () => {
   const { ctx, run } = provision();
   await run();
@@ -306,15 +305,15 @@ test("the workspace is cloned inside the container, after both devices", async (
   assert.ok(clone > Math.max(...adds), calls.join("\n"));
 });
 
-test("no host git touches the workspace, new container or reuse", async () => {
+test("no host git touches the workspaces, new container or reuse", async () => {
   const fresh = provision();
   await fresh.run();
-  assertNoHostGitIn(fresh.ctx.calls, WORKSPACE());
+  assertNoHostGitIn(fresh.ctx.calls, join(home, "workspaces"));
 
   seedWorkspace("README.md");
   const reuse = provision({ rules: [seedMirror("git@github.com:o/r.git")] });
   await reuse.run();
-  assertNoHostGitIn(reuse.ctx.calls, WORKSPACE());
+  assertNoHostGitIn(reuse.ctx.calls, join(home, "workspaces"));
 });
 
 test("a workspace with a matching mirror is reused", async () => {
@@ -324,19 +323,42 @@ test("a workspace with a matching mirror is reused", async () => {
   const calls = flat(ctx);
   assert.ok(!calls.some((l) => l.includes("clone")), calls.join("\n"));
   assert.equal(calls.filter((l) => l.endsWith("remote set-url origin /forge/origin.git")).length, 1);
+  assert.equal(calls.filter((l) => l.includes("--get remote.origin.url")).length, 1, "the mirror is probed once");
 });
 
-test("a non-empty workspace without a mirror stops before the launch", async () => {
+// The refusals come before the mirror is created: a refused workspace leaves
+// no new mirror behind.
+test("a non-empty workspace without a mirror stops before the mirror and the launch", async () => {
   seedWorkspace("README.md");
   const { ctx, run } = provision();
   await assert.rejects(run, /no mirror of o\/r/);
+  assert.ok(!flat(ctx).some((l) => l.includes("clone --bare")), flat(ctx).join("\n"));
   assert.equal(launched(ctx), false);
 });
 
-test("a mirror of another repo stops before the launch", async () => {
+// With a non-empty workspace too, the mirror's own refusal comes first: it is
+// the one that names the real cause.
+test("a mirror of another repo stops before the launch, ahead of the workspace check", async () => {
+  seedWorkspace("README.md");
   const { ctx, run } = provision({ rules: [seedMirror("git@github.com:a/b.git")] });
   await assert.rejects(run, /mirror of a\/b/);
   assert.equal(launched(ctx), false);
+});
+
+test("a failing clone in the container stops before the metadata", async () => {
+  const { fake, run } = provision({ rules: [{ match: "git clone --no-local", code: 128, stderr: "fatal: unreadable\n" }] });
+  await assert.rejects(run, /clone repository failed: fatal: unreadable/);
+  assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], undefined);
+});
+
+test("a failing origin realignment stops before the metadata", async () => {
+  seedWorkspace("README.md");
+  const { fake, run } = provision({ rules: [
+    seedMirror("git@github.com:o/r.git"),
+    { match: "remote set-url origin", code: 2, stderr: "error: No such remote 'origin'\n" },
+  ] });
+  await assert.rejects(run, /realign origin remote failed: error: No such remote/);
+  assert.equal(fake.instances.get("agent-forge")!.get("agent-x")!.config["user.forge.repo"], undefined);
 });
 
 test("a failing mirror clone stops before the launch", async () => {
