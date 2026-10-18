@@ -66,8 +66,26 @@ function waitForLine(): Promise<void> {
   });
 }
 
+// Une seule politique d'acquittement pour la popup herdr : elle se ferme avec
+// le processus, donc un succès la ferme aussitôt — sauf si l'exécution a écrit
+// ce que l'utilisateur doit lire (une ligne WARNING/NOTICE sur stderr, ou un
+// ctx.attention() : hint de récupération, bilan de resume --all). L'état vit
+// dans cet appel de main, rien de global.
+function withAttention(base: Context): { ctx: Context; needed: () => boolean } {
+  let needed = false;
+  const ctx: Context = {
+    ...base,
+    err: (line) => {
+      if (line.startsWith("WARNING") || line.startsWith("NOTICE")) needed = true;
+      base.err(line);
+    },
+    attention: () => { needed = true; },
+  };
+  return { ctx, needed: () => needed };
+}
+
 async function main(): Promise<number> {
-  const ctx = createContext();
+  const { ctx, needed } = withAttention(createContext());
   try {
     const { values, positionals } = parseArgs({
       args: process.argv.slice(2),
@@ -78,7 +96,12 @@ async function main(): Promise<number> {
       ctx.out(USAGE);
       return 0;
     }
-    return await dispatch(ctx, positionals, values.force === true, values.all === true);
+    const code = await dispatch(ctx, positionals, values.force === true, values.all === true);
+    if (herdrEnv()?.popup && needed()) {
+      ctx.err("Press Enter to close");
+      await waitForLine();
+    }
+    return code;
   } catch (e) {
     // Le préfixe "Error: " est ajouté ici, une seule fois : une ForgeError ne
     // porte que son message.

@@ -9,13 +9,30 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 let bin: string;
+let herdr: string;
 const ENTRY = resolve("cli/forge.ts");
+
+// Canned herdr 0.9.5 answers: workspace moroine/agent-forge holds a tab cli
+// whose pane runs the task's attach. Not named `herdr`, so it is never on PATH.
+const FAKE_HERDR = `#!/bin/sh
+case "$1 $2" in
+  "workspace list") echo '{"id":"1","result":{"workspaces":[{"workspace_id":"w1","label":"moroine/agent-forge"}]}}' ;;
+  "tab list") echo '{"id":"1","result":{"tabs":[{"tab_id":"w1:t1","label":"cli","workspace_id":"w1"}]}}' ;;
+  "pane list") echo '{"id":"1","result":{"panes":[{"pane_id":"w1:p1","tab_id":"w1:t1"}]}}' ;;
+  "pane process-info") echo '{"id":"1","result":{"process_info":{"foreground_processes":[{"argv":["forge","attach","agent-moroine-agent-forge","cli"]}]}}}' ;;
+  "tab focus") ;;
+  *) echo "fake herdr: unexpected $*" >&2; exit 1 ;;
+esac
+`;
 
 before(() => {
   bin = mkdtempSync(join(tmpdir(), "forge-e2e-bin-"));
   const stub = resolve("tests/lib/fake-incus-bin.ts");
   writeFileSync(join(bin, "incus"), `#!/bin/sh\nexec node ${stub} "$@"\n`);
   chmodSync(join(bin, "incus"), 0o755);
+  herdr = join(bin, "fake-herdr");
+  writeFileSync(herdr, FAKE_HERDR);
+  chmodSync(herdr, 0o755);
 });
 
 after(() => rmSync(bin, { recursive: true, force: true }));
@@ -53,6 +70,42 @@ test("outside the popup there is no wait", () => {
   const r = forge(["frobnicate"], "\n", { HERDR_ENV: "1", HERDR_BIN_PATH: "/bin/false", HERDR_PANE_ID: "w1:p1" });
   assert.equal(r.status, 1);
   assert.doesNotMatch(r.stderr, /Press Enter/);
+});
+
+// The popup's acknowledgement policy: a success closes it at once, unless it
+// printed something the user must read.
+const popup = (bin: string) => ({ HERDR_ENV: "1", HERDR_BIN_PATH: bin });
+const pane = (bin: string) => ({ ...popup(bin), HERDR_PANE_ID: "w1:p1" });
+
+test("the popup waits after resume --all, whose lines are the result", () => {
+  const r = forge(["resume", "--all"], "\n", popup(herdr));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /no forge tab to resume\./);
+  assert.match(r.stderr, /Press Enter to close/);
+});
+
+test("the popup waits after a success that printed a WARNING", () => {
+  // /bin/false as herdr: finish's tab cleanup fails, which only warns.
+  const r = forge(["finish", "moroine/agent-forge", "cli"], "\n", popup("/bin/false"));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /WARNING: closing the herdr tab of cli failed[\s\S]*Press Enter to close/);
+});
+
+test("focusing a live tab from the popup closes it at once", () => {
+  const r = forge(["resume", "moroine/agent-forge", "cli"], "\n", popup(herdr));
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /Focused moroine\/agent-forge cli in herdr\./);
+  assert.doesNotMatch(r.stderr, /Press Enter/);
+});
+
+test("outside the popup a success never waits", () => {
+  const all = forge(["resume", "--all"], "\n", pane(herdr));
+  assert.equal(all.status, 0, all.stderr);
+  assert.doesNotMatch(all.stderr, /Press Enter/);
+  const warned = forge(["finish", "moroine/agent-forge", "cli"], "\n", pane("/bin/false"));
+  assert.equal(warned.status, 0, warned.stderr);
+  assert.match(warned.stderr, /WARNING/);
+  assert.doesNotMatch(warned.stderr, /Press Enter/);
 });
 
 test("attach with no arguments exits 1 with its usage", () => {

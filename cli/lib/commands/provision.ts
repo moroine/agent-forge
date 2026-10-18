@@ -160,6 +160,8 @@ export async function provisionContainer(
   ctx.err(`  git remote add ${container} <forge-host>:${container}`);
   ctx.err(`  git config remote.${container}.uploadpack "forge upload-pack ${container}"`);
   ctx.err(`  git fetch ${container}`);
+  // Imprimé une seule fois : la popup herdr ne doit pas l'effacer en se fermant.
+  ctx.attention();
   ctx.out(`Container ${container} provisioned.`);
   return { mirror: mirrorOutcome };
 }

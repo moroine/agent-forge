@@ -214,6 +214,12 @@ test("the retrieval hint goes through forge upload-pack, with no ssh:// path", a
   assert.ok(!ctx.err_lines.join("\n").includes("ssh://"));
 });
 
+test("the retrieval hint keeps a herdr popup open until the user has read it", async () => {
+  const { ctx, run } = provision();
+  await run();
+  assert.equal(ctx.attentions, 1);
+});
+
 test("the plugin marketplace is added over HTTPS, never over SSH", async () => {
   const { ctx, run } = provision();
   await run();

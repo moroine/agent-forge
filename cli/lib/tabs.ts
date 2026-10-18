@@ -169,6 +169,8 @@ export async function resumeAll(ctx: Context, h: HerdrEnv): Promise<number> {
     }
   }
   if (printed === 0) ctx.out("no forge tab to resume.");
+  // The lines are the result: the popup must not close over them.
+  ctx.attention();
   return 0;
 }
 
