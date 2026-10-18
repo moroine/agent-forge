@@ -243,7 +243,7 @@ git commit --no-gpg-sign -m "fix(base): l'hôte garde ses clés SSH quand cloud-
 **Interfaces:**
 - Produces:
   - `ansible/lima/forge.yaml`, used by the README (`limactl create --name forge-local ansible/lima/forge.yaml`)
-    and by Task 5 (`limactl create --set '.ssh.localPort = 0'`);
+    and by Task 5 (`limactl create --set '.ssh.localPort = <free port>'`);
   - `ansible/inventory.lima.example.yml`, used by the README.
 
 - [ ] **Step 1: Write the failing test** `tests/test-lima-files.sh`. Use the
@@ -376,7 +376,9 @@ Behaviour to add, following the spec's "`vm-test.sh --lima`":
   `$WORK/admin` (mode 600), instead of generating one.
 - **Machine:**
   - `VM="forge-host-test-<6 hex>"`, as today;
-  - `limactl create --tty=false --name "$VM" --set '.ssh.localPort = 0' "$REPO/ansible/lima/forge.yaml"`,
+  - `limactl create --tty=false --name "$VM" --set ".ssh.localPort = $free_port" "$REPO/ansible/lima/forge.yaml"`,
+    with `free_port` picked by `python3` (a socket bound to port 0). Lima's
+    own `0` reassigns the port at every start (ledger ruling, Task 5);
     then `limactl start --tty=false "$VM"`;
   - `PORT` comes from `limactl list "$VM" --format '{{.SSHLocalPort}}'`, and
     `ADMIN` from `limactl list "$VM" --format '{{.Config.User.Name}}'`. Check

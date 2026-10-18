@@ -280,9 +280,13 @@ LXD/Incus host) and `--host`. Run on a Mac or on an Ubuntu machine with KVM.
    - the usual Ansible checks apply.
 2. **VM.** A throwaway VM, `forge-host-test-<random>`, from
    `ansible/lima/forge.yaml`:
-   - with an automatic SSH port (`--set '.ssh.localPort = 0'`), so that it
-     never collides with the developer's own `forge-local`;
-   - its port and user are read back from `limactl list --json`.
+   - with a free SSH port that the script picks and fixes
+     (`--set '.ssh.localPort = <port>'`), so that it never collides with the
+     developer's own `forge-local`. Lima's own `0` would pick a new port at
+     every start, losing the VM after the restart, and a `known_hosts` keyed
+     by port would then accept a changed host key silently (found while
+     implementing);
+   - its user is read back from `limactl list`.
 3. **Inventory**, generated:
    - the Lima admin and key, `ansible_port` set to the Lima port;
    - forge user `forgetest`;
