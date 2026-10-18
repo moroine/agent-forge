@@ -103,6 +103,20 @@ test("the host mirror is refreshed, then the container fetches from it", async (
   assert.ok(host >= 0 && host < inside && inside < add, flat.join("\n"));
 });
 
+test("the mirror is refreshed from the stored repo, not from the case typed", async () => {
+  const c = fakeContext({ rules: [
+    { match: "config device list", stdout: "origin\nworkspace\n" },
+    { match: "agent-o-r user.forge.repo", stdout: "o/r" },
+    { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-o-r", status: "Running" }]) },
+    { match: "incus --project agent-forge info", code: 0 },
+    { match: "test -e /workspace/.trees/", code: 1 },
+    { match: "show-ref", code: 1 },
+  ] });
+  await cmdStart(c, "O/R", "fresh");
+  const refresh = c.calls.find((x) => x[0] === "git" && x.includes("fetch")) ?? [];
+  assert.ok(refresh.includes("git@github.com:o/r.git"), refresh.join(" "));
+});
+
 test("a failing mirror refresh only warns, and the container still fetches", async () => {
   const c = fakeContext({
     rules: rules([{ match: "fetch --prune", code: 128, stderr: "Error connecting to agent" }]),
