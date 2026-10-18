@@ -39,7 +39,15 @@ test("exec passes extra environment variables", async () => {
   assert.equal(r.stdout, "ok");
 });
 
-test("exec with extra variables still inherits PATH", async () => {
-  const r = await createContext().exec(["sh", "-c", "printf %s \"$FORGE_T\""], { env: { FORGE_T: "x" } });
-  assert.equal(r.code, 0);
+test("exec merges extra variables into the inherited environment", async () => {
+  const before = process.env.FORGE_INHERITED;
+  process.env.FORGE_INHERITED = "yes";
+  try {
+    const r = await createContext().exec(
+      ["sh", "-c", "printf %s \"$FORGE_INHERITED/$FORGE_T\""], { env: { FORGE_T: "ok" } });
+    assert.equal(r.stdout, "yes/ok");
+  } finally {
+    if (before === undefined) delete process.env.FORGE_INHERITED;
+    else process.env.FORGE_INHERITED = before;
+  }
 });
