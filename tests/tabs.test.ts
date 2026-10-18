@@ -201,6 +201,46 @@ test("resumeAll reports a container that does not start and goes on", async () =
   assert.ok(c.out_lines.includes("o/r cli: resumed"));
 });
 
+// One agent per task at most, however many tabs carry its label.
+const oneRepo = (...extra: ExecRule[]): ExecRule[] => [
+  { match: "incus --project agent-forge list", stdout: JSON.stringify([{ name: "agent-r", status: "Running" }]) },
+  { match: "agent-r user.forge.repo", stdout: "o/r" },
+  worktreesOf("agent-r", "cli"), psOf("agent-r", ""),
+  ...extra,
+];
+const runsOf = (c: { calls: string[][] }) => herdrCalls(c).filter((l) => l.startsWith("pane run"));
+
+test("resumeAll launches one agent for two bare tabs with the same task label", async () => {
+  const c = fakeContext({ rules: oneRepo(
+    ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"], ["w1:t2", "cli", "w1"]),
+    panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t2"]), fg("w1:p1", ["-zsh"]), fg("w1:p2", ["bash"]),
+  ) });
+  await resumeAll(c, h);
+  assert.deepEqual(c.out_lines, ["o/r cli: resumed", "o/r cli: skipped (duplicate tab)"]);
+  assert.deepEqual(runsOf(c), [`pane run w1:p1 ${attachCommand("agent-r", "cli")}`]);
+});
+
+test("resumeAll launches one agent when two workspaces differ only by case", async () => {
+  const c = fakeContext({ rules: oneRepo(
+    ws(["w1", "o/r"], ["w2", "O/R"]), tabs(["w1:t1", "cli", "w1"], ["w2:t1", "cli", "w2"]),
+    panes(["w1:p1", "w1:t1"], ["w2:p1", "w2:t1"]), fg("w1:p1", ["-zsh"]), fg("w2:p1", ["-zsh"]),
+  ) });
+  await resumeAll(c, h);
+  assert.equal(runsOf(c).length, 1, runsOf(c).join(" | "));
+  assert.deepEqual(c.out_lines, ["o/r cli: resumed", "o/r cli: skipped (duplicate tab)"]);
+});
+
+test("resumeAll never types into a second tab of a task already live", async () => {
+  const c = fakeContext({ rules: oneRepo(
+    ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"], ["w1:t2", "cli", "w1"]),
+    panes(["w1:p1", "w1:t1"], ["w1:p2", "w1:t2"]),
+    fg("w1:p1", ["forge", "attach", "agent-r", "cli"]), fg("w1:p2", ["-zsh"]),
+  ) });
+  await resumeAll(c, h);
+  assert.deepEqual(c.out_lines, ["o/r cli: already running", "o/r cli: skipped (duplicate tab)"]);
+  assert.deepEqual(runsOf(c), []);
+});
+
 test("closeBareTab closes a bare tab only", async () => {
   const bare = fakeContext({ rules: [ws(["w1", "o/r"]), tabs(["w1:t1", "cli", "w1"]), panes(["w1:p1", "w1:t1"]), fg("w1:p1", ["-zsh"])] });
   await closeBareTab(bare, h, T);
