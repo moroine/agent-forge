@@ -1,6 +1,7 @@
 // forge setup (spec "forge setup"): converges everything forge owns inside
 // Incus. Idempotent: run it once per host, and again after changing the
-// config. Every mode runs it (VM, local Linux, Lima).
+// config. Every mode runs it (a VM provisioned by Ansible, remote or Lima); a
+// bare-metal run outside Ansible warns that no VM protects this machine.
 import { networkInterfaces, type NetworkInterfaceInfo } from "node:os";
 import type { Context } from "../context.ts";
 import { loadConfig } from "../config.ts";
@@ -9,7 +10,8 @@ import { loadAllowlist } from "../allowlist.ts";
 import { ForgeError } from "../context.ts";
 import { ensureHerdrConfig } from "../herdr-config.ts";
 import {
-  checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, gateOverrideWarning, strictGateOverridden, strictModeSupported, type ProcPaths,
+  checkHost, checkIpForward, checkStoragePool, detectVirt, exposedHostAddresses, gateOverrideWarning,
+  runsOnBareMetalOutsideAnsible, strictGateOverridden, strictModeSupported, type ProcPaths,
 } from "../host.ts";
 import { forgeProject, listInstances, serverInfo } from "../incus.ts";
 import { proxyPlan } from "../ipv4.ts";
@@ -17,7 +19,7 @@ import {
   ACL, BRIDGE, PROFILE, PROXY_PROFILE, desiredAcl, desiredBridge, desiredProfile, desiredProject,
   desiredProxyAcl, desiredProxyProfile, desiredStrictAcl, effectiveEgress, egressNames, proxyInstance, rawLxcAllowed,
 } from "../objects.ts";
-import { allowlistPath, configPath } from "../paths.ts";
+import { allowlistPath, configPath, repoRoot } from "../paths.ts";
 import { convergeProxy } from "../proxy.ts";
 
 export type SetupOptions = {
@@ -29,6 +31,8 @@ export type SetupOptions = {
   aptAttempts?: number;
   aptDelayMs?: number;
   waitDelayMs?: number;
+  virt?: () => string | null;
+  releaseRoot?: string;
 };
 
 export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<number> {
@@ -124,6 +128,15 @@ export async function cmdSetup(ctx: Context, opts: SetupOptions = {}): Promise<n
     ctx.err(`WARNING: host address ${address} is outside the ranges ${ACL} rejects: containers can reach host ` +
       `services listening on it, unless a host firewall drops traffic from ${BRIDGE}.`);
   }
+
+  // 6. No VM between the containers and this machine (spec sub-project 5,
+  // "forge setup on bare metal"): only the Lima VM is documented locally.
+  if (runsOnBareMetalOutsideAnsible(opts.releaseRoot ?? repoRoot(), (opts.virt ?? detectVirt)())) {
+    ctx.err("WARNING: forge runs directly on this machine, not in a VM: an agent that escapes its container " +
+      "lands here, with this machine's keys and sessions. The supported local mode is a Lima VM (see the README).");
+  }
+
+  // Last: forge's herdr bindings.
   await ensureHerdrConfig(ctx);
   return 0;
 }

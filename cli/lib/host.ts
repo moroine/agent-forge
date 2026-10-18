@@ -2,6 +2,7 @@
 // host OS. forge never changes the host: each check only reads, and the first
 // failure stops forge with the command that fixes it, for both kinds of host
 // (an agent-forge VM provisioned by Ansible, or local Linux mode).
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import type { NetworkInterfaceInfo } from "node:os";
 import type { Context } from "./context.ts";
@@ -151,4 +152,23 @@ export async function requireStrictIncus(ctx: Context): Promise<string> {
       "from Zabbly (lts-7.0 or the feature channel).");
   }
   return version;
+}
+
+// Where an Ansible host keeps forge's releases (sub-project 1, role
+// forge_users): forge run from anywhere else was not installed by the playbook.
+const ANSIBLE_RELEASES = "/opt/agent-forge/releases/";
+
+// True when nothing stands between the containers and this machine: forge was
+// not installed by the playbook (a hardened, dedicated host) and the machine
+// is not a VM. An unknown virtualization (null) counts as bare metal.
+export function runsOnBareMetalOutsideAnsible(releaseRoot: string, virt: string | null): boolean {
+  return !releaseRoot.startsWith(ANSIBLE_RELEASES) && (virt === null || virt === "none");
+}
+
+// systemd-detect-virt --vm prints the hypervisor, or "none" (exit 1) on bare
+// metal; null when it cannot run (not installed).
+export function detectVirt(): string | null {
+  const r = spawnSync("systemd-detect-virt", ["--vm"], { encoding: "utf8" });
+  if (r.error) return null;
+  return r.stdout.trim() || null;
 }

@@ -35,7 +35,7 @@ function writeConfig(config: unknown) {
 }
 
 const opts = (over: Partial<SetupOptions> = {}): SetupOptions =>
-  ({ proc: fakeProc(), ids: { uid: 501, gid: 20 }, interfaces: () => ({}), aptDelayMs: 0, waitDelayMs: 0, ...over });
+  ({ proc: fakeProc(), ids: { uid: 501, gid: 20 }, interfaces: () => ({}), virt: () => "kvm", aptDelayMs: 0, waitDelayMs: 0, ...over });
 // Every mutating call: object create/edit, instance lifecycle, file push, config changes, and every exec
 // except the readiness and squid probes. `file pull`, `list` and `query` are probes.
 const MUTATING = ["create", "edit", "launch", "delete", "start", "restart", "push"];
@@ -304,4 +304,20 @@ test("a host address outside the rejected ranges is warned about", async () => {
   const c = fakeContext({ incus: new FakeIncus(), rules: [NO_HERDR] });
   await cmdSetup(c, opts({ interfaces: () => ({ eth0 }) }));
   assert.ok(c.err_lines.some((l) => l.startsWith("WARNING") && l.includes("203.0.113.7")), c.err_lines.join("\n"));
+});
+
+const BARE_METAL_WARNING =
+  "WARNING: forge runs directly on this machine, not in a VM: an agent that escapes its container lands here, " +
+  "with this machine's keys and sessions. The supported local mode is a Lima VM (see the README).";
+
+test("bare metal outside Ansible is warned about", async () => {
+  const c = fakeContext({ incus: new FakeIncus(), rules: [NO_HERDR] });
+  await cmdSetup(c, opts({ virt: () => "none", releaseRoot: "/home/alice/agent-forge" }));
+  assert.ok(c.err_lines.includes(BARE_METAL_WARNING), c.err_lines.join("\n"));
+});
+
+test("an Ansible release on bare metal is not warned about", async () => {
+  const c = fakeContext({ incus: new FakeIncus(), rules: [NO_HERDR] });
+  await cmdSetup(c, opts({ virt: () => "none", releaseRoot: "/opt/agent-forge/releases/abc" }));
+  assert.ok(!c.err_lines.some((l) => l.includes("not in a VM")), c.err_lines.join("\n"));
 });

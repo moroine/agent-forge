@@ -4,7 +4,10 @@ import type { NetworkInterfaceInfo } from "node:os";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { fakeProc } from "./lib/fake-host.ts";
-import { checkHost, checkIpForward, strictModeSupported, strictGateOverridden, requireStrictIncus, checkStoragePool, exposedHostAddresses, readProc } from "../cli/lib/host.ts";
+import {
+  checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, readProc, requireStrictIncus,
+  runsOnBareMetalOutsideAnsible, strictGateOverridden, strictModeSupported,
+} from "../cli/lib/host.ts";
 
 const USER = 1000;
 const ctx = (fake = new FakeIncus()) => fakeContext({ incus: fake });
@@ -161,4 +164,16 @@ test("requireStrictIncus still refuses 7.0.1 when the override is set for the de
   override();
   const fake = new FakeIncus(); fake.serverVersion = "7.0.1";
   await assert.rejects(requireStrictIncus(ctx(fake)), /7\.0\.2/);
+});
+
+// No VM between the containers and this machine, and no Ansible host either:
+// the undocumented "Linux directly on the dev machine" case.
+test("bare metal from a checkout is flagged", () => {
+  assert.equal(runsOnBareMetalOutsideAnsible("/home/alice/agent-forge", "none"), true);
+  assert.equal(runsOnBareMetalOutsideAnsible("/home/alice/agent-forge", null), true);
+});
+
+test("a VM or an Ansible release is not", () => {
+  assert.equal(runsOnBareMetalOutsideAnsible("/home/alice/agent-forge", "kvm"), false);
+  assert.equal(runsOnBareMetalOutsideAnsible("/opt/agent-forge/releases/abc123", "none"), false);
 });
