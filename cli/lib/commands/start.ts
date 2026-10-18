@@ -95,7 +95,11 @@ async function startResolveRepo(ctx: Context, repo?: string): Promise<string> {
   if (repo) return repo;
   const repos = await forgeRepos(ctx);
   if (repos.length === 0) {
-    throw new ForgeError("no forge container yet. Name the repo: forge start <owner/repo> <task>.");
+    // Le tout premier prefix+f n'a pas de ligne de commande où taper le repo :
+    // on le demande. Sans TTY, le message d'avant.
+    const typed = await ctx.prompt.ask("owner/repo");
+    if (!typed) throw new ForgeError("no forge container yet. Name the repo: forge start <owner/repo> <task>.");
+    return typed;
   }
   const idx = await ctx.prompt.pick("Repo", [...repos, "other repo…"]);
   if (idx === null) throw new ForgeError(USAGE);
