@@ -25,6 +25,26 @@ test("resume attaches the task's agent", async () => {
   assert.match(attach.at(-1) ?? "", /^exec claude /);
 });
 
+test("resume outside herdr refuses while the task's agent already runs", async () => {
+  const c = fakeContext({ rules: [
+    { match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-moroine-agent-forge-cli\n" },
+    ...BASE, { match: "test -e", code: 0 },
+  ] });
+  await assert.rejects(() => cmdResume(c, "moroine/agent-forge", "cli"),
+    /the agent for cli already runs in agent-moroine-agent-forge .*'forge stop moroine\/agent-forge'\./);
+  assert.equal(c.attachCalls.length, 0);
+});
+
+test("resume outside herdr fails closed when the agent probe fails", async () => {
+  const c = fakeContext({ rules: [
+    { match: "ps -u 1001 -o args=", code: 1, stderr: "Error: Instance is not running" },
+    ...BASE, { match: "test -e", code: 0 },
+  ] });
+  await assert.rejects(() => cmdResume(c, "moroine/agent-forge", "cli"),
+    /cannot check whether the agent for cli already runs in agent-moroine-agent-forge: ps failed: Error: Instance is not running/);
+  assert.equal(c.attachCalls.length, 0);
+});
+
 test("resume never creates a worktree", async () => {
   const c = fakeContext({ rules: [...BASE, { match: "test -e", code: 0 }] });
   await cmdResume(c, "moroine/agent-forge", "cli");

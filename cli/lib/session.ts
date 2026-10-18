@@ -1,11 +1,11 @@
 // Attach core shared by `forge attach`, `forge start` and `forge resume`:
 // make sure the container runs, then run the task's agent in this terminal.
 import type { Context } from "./context.ts";
-import { mustSucceed } from "./context.ts";
+import { ForgeError, mustSucceed } from "./context.ts";
 import { AGENT } from "./agent.ts";
 import { isRunning } from "./containers.ts";
 import { attachArgv, execAsAgentArgv, instanceStatus, startInstance } from "./incus.ts";
-import { worktreeAbsPath } from "./worktrees.ts";
+import { probeRunningTasks, worktreeAbsPath } from "./worktrees.ts";
 
 // Claude Code names a project's transcript folder after its path, every
 // character outside [A-Za-z0-9] replaced by "-".
@@ -36,7 +36,23 @@ export async function ensureRunning(ctx: Context, container: string): Promise<vo
   await mustSucceed("incus start", Promise.resolve(started));
 }
 
-export async function attachTask(ctx: Context, container: string, task: string): Promise<number> {
+// Never two agents in one worktree (spec anti-goal). Every attach path ends
+// here (forge attach, start and resume outside herdr), so the guard sits here,
+// and fails closed: a probe that cannot answer refuses too. `ownerRepo` is the
+// stored `user.forge.repo`, when the caller has it.
+export async function attachTask(ctx: Context, container: string, task: string, ownerRepo?: string): Promise<number> {
+  const probe = await probeRunningTasks(ctx, container);
+  if (!probe.ok) {
+    throw new ForgeError(`cannot check whether the agent for ${task} already runs in ${container}: ${probe.error}`);
+  }
+  if (probe.tasks.has(task)) {
+    const way = ownerRepo
+      ? `stop it first with 'forge stop ${ownerRepo}'`
+      : "stop the container first with 'forge stop'";
+    throw new ForgeError(
+      `the agent for ${task} already runs in ${container} (in a herdr tab, or another terminal): attach to it there, or ${way}.`,
+    );
+  }
   const resume = await hasConversation(ctx, container, task);
   return ctx.attach(
     attachArgv(container, task, process.env.TERM ?? "xterm-256color", AGENT.command(container, task, resume)),

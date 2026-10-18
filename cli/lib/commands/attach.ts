@@ -14,7 +14,8 @@ export async function cmdAttach(ctx: Context, container?: string, task?: string)
   validateContainerName(container);
   validateTaskName(task);
 
-  if (!(await containerRepo(ctx, container))) {
+  const ownerRepo = await containerRepo(ctx, container);
+  if (!ownerRepo) {
     throw new ForgeError(`${container} is not a forge container`);
   }
   await ensureRunning(ctx, container);
@@ -23,5 +24,5 @@ export async function cmdAttach(ctx: Context, container?: string, task?: string)
   if (present.code !== 0) {
     throw new ForgeError(`no worktree .trees/${task} in ${container}. Start it with 'forge start'.`);
   }
-  return attachTask(ctx, container, task);
+  return attachTask(ctx, container, task, ownerRepo);
 }

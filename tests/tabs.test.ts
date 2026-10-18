@@ -231,6 +231,19 @@ test("closeBareTab on a split tab closes it only when every pane is a bare shell
   assert.equal(herdrCalls(shells).at(-1), "tab close w1:t1");
 });
 
+test("runTask outside herdr refuses a second agent and attaches nothing", async () => {
+  const c = fakeContext({ rules: [agent(true)] });
+  await assert.rejects(runTask(c, T),
+    /the agent for cli already runs in agent-x \(in a herdr tab, or another terminal\): attach to it there, or stop it first with 'forge stop o\/r'\./);
+  assert.equal(c.attachCalls.length, 0);
+});
+
+test("runTask outside herdr fails closed when the probe fails", async () => {
+  const c = fakeContext({ rules: [{ match: "ps -u 1001 -o args=", code: 1, stderr: "boom" }] });
+  await assert.rejects(runTask(c, T), /cannot check whether the agent for cli already runs in agent-x: ps failed: boom/);
+  assert.equal(c.attachCalls.length, 0);
+});
+
 test("runTask outside herdr makes no herdr call", async () => {
   const c = fakeContext();
   assert.equal(await runTask(c, T), 0);

@@ -37,6 +37,15 @@ test("an existing worktree is attached, not refused", async () => {
   assert.ok(c.attachCalls.length > 0);
 });
 
+test("an existing worktree whose agent already runs is refused outside herdr", async () => {
+  const c = fakeContext({ rules: rules([
+    { match: "test -e /workspace/.trees/cli", code: 0 },
+    { match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-moroine-agent-forge-cli\n" },
+  ]) });
+  await assert.rejects(() => cmdStart(c, "moroine/agent-forge", "cli"), /the agent for cli already runs in agent-moroine-agent-forge/);
+  assert.equal(c.attachCalls.length, 0);
+});
+
 test("the task's agent is attached in the foreground outside herdr", async () => {
   const c = fakeContext({ rules: rules([{ match: ".jsonl", code: 1 }]) });
   await cmdStart(c, "moroine/agent-forge", "fresh");

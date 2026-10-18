@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { fakeContext } from "./lib/fake-context.ts";
 import {
   parseWorktreeDirs, parseAgentBranches, parseRunningTasks,
-  taskNames, branchExists, runningTasks, worktreeAbsPath,
+  taskNames, branchExists, probeRunningTasks, runningTasks, worktreeAbsPath,
 } from "../cli/lib/worktrees.ts";
 
 test("parseWorktreeDirs drops the main clone and keeps the features", () => {
@@ -82,6 +82,19 @@ test("runningTasks probes the agent's processes and survives ps failing", async 
   assert.deepEqual([...await runningTasks(ok, "agent-x")], ["cli"]);
   const bad = fakeContext({ rules: [{ match: "ps -u 1001", code: 1, stderr: "boom" }] });
   assert.equal((await runningTasks(bad, "agent-x")).size, 0);
+});
+
+test("probeRunningTasks reports a failing ps instead of an empty set", async () => {
+  const ok = fakeContext({
+    rules: [{ match: "ps -u 1001 -o args=", stdout: "claude --remote-control agent-x-cli\n" }],
+  });
+  const found = await probeRunningTasks(ok, "agent-x");
+  assert.ok(found.ok);
+  assert.deepEqual([...found.tasks], ["cli"]);
+  const bad = fakeContext({ rules: [{ match: "ps -u 1001", code: 1, stderr: "boom\n" }] });
+  assert.deepEqual(await probeRunningTasks(bad, "agent-x"), { ok: false, error: "ps failed: boom" });
+  const silent = fakeContext({ rules: [{ match: "ps -u 1001", code: 2 }] });
+  assert.deepEqual(await probeRunningTasks(silent, "agent-x"), { ok: false, error: "ps failed: exit code 2" });
 });
 
 test("worktreeAbsPath is the session's cwd", () => {

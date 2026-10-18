@@ -171,5 +171,5 @@ export async function runTask(ctx: Context, t: TaskRef): Promise<number> {
   const h = herdrEnv();
   if (h) return openTask(ctx, h, t);
   ctx.err("outside herdr: the agent stops when this terminal closes");
-  return attachTask(ctx, t.container, t.task);
+  return attachTask(ctx, t.container, t.task, t.ownerRepo);
 }
