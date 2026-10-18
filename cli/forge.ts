@@ -25,7 +25,8 @@ Commands:
   stop [<owner/repo>] [--force]     Stop a container (blocked on dirty/unpushed WIP unless --force)
   delete [<owner/repo>] [--force]   Delete a container (blocked on dirty/unpushed WIP unless --force)
   list                              Show all containers: repo, mode, egress, state, build
-  egress [<owner/repo>] [strict|open]   Show or switch a stopped container's egress
+  egress [<owner/repo>] [strict|open]
+                                    Show or switch a stopped container's egress
   egress log [<owner/repo>]         Show the proxy's recent requests (old lines may name the
                                     wrong container: addresses are reused)
   image build                       Build the agent-base image (Ansible, through Incus)

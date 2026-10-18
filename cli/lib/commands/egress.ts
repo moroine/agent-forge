@@ -13,11 +13,11 @@ import { allowlistPath } from "../paths.ts";
 import { requireContainerForRepo } from "../containers.ts";
 import {
   configSet, configSetMany, configUnset, deviceOverride, deviceRemove, deviceSet, execArgv, forgeProject,
-  listInstances,
+  listInstances, type Instance,
 } from "../incus.ts";
 import { PROXY_INSTANCE, effectiveEgress, egressNames, type EgressMode } from "../objects.ts";
 import { SQUID_ACCESS_LOG } from "../proxy.ts";
-import { ENV_KEYS, proxyEnv, requireStrictRuntime } from "../strict.ts";
+import { ENV_KEYS, currentPlan, proxyEnv, requireStrictRuntime } from "../strict.ts";
 import { columnWidths, formatRow } from "../table.ts";
 import { resolveRepo } from "./resolve.ts";
 
@@ -46,7 +46,7 @@ export function parseSquidLine(line: string): LogEntry | null {
   return {
     time: new Date(Number(f[0]) * 1000).toISOString().replace(/\.\d+Z$/, "Z"),
     client,
-    result: action.startsWith("TCP_DENIED") || code === "403" ? "denied" : "allowed",
+    result: action.startsWith("TCP_DENIED") ? "denied" : "allowed",
     method,
     host,
   };
@@ -81,6 +81,16 @@ async function cmdLog(ctx: Context, repo: string | undefined): Promise<number> {
   return 0;
 }
 
+function switchComplete(instance: Instance, mode: EgressMode): boolean {
+  const marker = instance.config[MARKER];
+  if (mode === "strict") {
+    const env = proxyEnv(currentPlan());
+    return marker === "strict" && Object.entries(env).every(([k, v]) => instance.config[`environment.${k}`] === v);
+  }
+  return (marker === "open" || marker === undefined) && !ENV_KEYS.some((k) => k in instance.config) &&
+    instance.devices.eth0 === undefined;
+}
+
 export async function cmdEgress(ctx: Context, a?: string, b?: string): Promise<number> {
   if (a === "log") return cmdLog(ctx, b);
   if (b !== undefined && b !== "strict" && b !== "open") throw new ForgeError(USAGE);
@@ -107,7 +117,9 @@ export async function cmdEgress(ctx: Context, a?: string, b?: string): Promise<n
       `${container}: its eth0 device does not match open or strict (changed by hand?). ` +
       `Refusing to overwrite it: inspect it with 'incus --project ${forgeProject()} config device show ${container}'.`);
   }
-  if (current === b) {
+  // "Already" only when the switch is complete: an interrupted one leaves the
+  // NIC in the new mode but the marker or the environment behind.
+  if (current === b && switchComplete(instance, b)) {
     ctx.out(`${repo}: already ${b}`);
     return 0;
   }
