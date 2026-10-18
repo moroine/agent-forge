@@ -33,6 +33,17 @@ test("an empty list is valid", () => assert.deepEqual(parseAllowlist("f", "# not
 test("the default list holds Anthropic's four domains, active, and the rest commented", () =>
   assert.deepEqual(parseAllowlist("f", DEFAULT_ALLOWLIST), ["api.anthropic.com", "platform.claude.com", "claude.ai", "downloads.claude.ai"]));
 
+test("every commented entry of the default list is valid once uncommented, Docker Hub's blob storage host included", () => {
+  const uncommented = DEFAULT_ALLOWLIST.replace(/^#([a-z0-9.-]+\.[a-z]+)$/gm, "$1");
+  const entries = parseAllowlist("f", uncommented);
+  assert.ok(entries.includes("docker-images-prod.s3.dualstack.us-east-1.amazonaws.com"));
+  assert.ok(["registry-1.docker.io", "auth.docker.io", "production.cloudflare.docker.com"].every((e) => entries.includes(e)));
+  // 4 Anthropic, 4 GitHub, 1 npm, 2 PyPI, 4 Docker Hub, 2 telemetry.
+  assert.equal(entries.length, 17);
+  // The storage host comes with the reason it is needed, in the Docker Hub group.
+  assert.match(DEFAULT_ALLOWLIST, /# Docker Hub[^]*storage host[^]*forge egress log[^]*\n#docker-images-prod\.s3\.dualstack\.us-east-1\.amazonaws\.com\n/);
+});
+
 test("a missing file is created with the default list; an existing one, even empty, is never rewritten", () => {
   const p = join(mkdtempSync(join(tmpdir(), "allow-")), "sub", "egress-allowlist");
   const first = loadAllowlist(p);
