@@ -243,14 +243,23 @@ test("mirror: mounted read-only and locked", { skip: !ENABLED }, (t) => {
   hostGit(["init", "-q", "--bare", bare]);
   must("add the origin device", incus(PROJECT, ["config", "device", "add", c1, ORIGIN_DEVICE, "disk",
     `source=${bare}`, `path=${MIRROR_MOUNT}`, "readonly=true"]));
-  const before = readdirSync(bare).sort();
-  // Positive control: the mount is there and readable.
-  must("the mount is readable", asAgent(PROJECT, c1, `ls ${MIRROR_MOUNT}/HEAD`));
-  const touch = asAgent(PROJECT, c1, `touch ${MIRROR_MOUNT}/x`);
-  assert.notEqual(touch.status, 0, raw("touch in the mirror succeeded", touch));
-  const remount = incus(PROJECT, ["exec", c1, "--", "mount", "-o", "remount,rw", MIRROR_MOUNT]);
-  assert.notEqual(remount.status, 0, raw("remount rw succeeded", remount));
-  assert.deepEqual(readdirSync(bare).sort(), before, "the host directory changed");
+  try {
+    const before = readdirSync(bare).sort();
+    // Positive control: the mount is there and readable.
+    must("the mount is readable", asAgent(PROJECT, c1, `ls ${MIRROR_MOUNT}/HEAD`));
+    // Direct evidence: the kernel mounted it read-only, so the refusals below
+    // cannot come from something else (a permission, a missing directory).
+    const options = must("mount options", incus(PROJECT, ["exec", c1, "--", "findmnt", "-n", "-o", "OPTIONS", MIRROR_MOUNT]));
+    assert.match(options.stdout.trim(), /(^|,)ro(,|$)/, raw(`${MIRROR_MOUNT} is not mounted read-only`, options));
+    const touch = asAgent(PROJECT, c1, `touch ${MIRROR_MOUNT}/x`);
+    assert.notEqual(touch.status, 0, raw("touch in the mirror succeeded", touch));
+    const remount = incus(PROJECT, ["exec", c1, "--", "mount", "-o", "remount,rw", MIRROR_MOUNT]);
+    assert.notEqual(remount.status, 0, raw("remount rw succeeded", remount));
+    assert.deepEqual(readdirSync(bare).sort(), before, "the host directory changed");
+  } finally {
+    // c1 is shared with the other tests: it leaves without the device.
+    incus(PROJECT, ["config", "device", "remove", c1, ORIGIN_DEVICE]);
+  }
 });
 
 // Sub-project 4's row of the restricted-project table: the mirror lives in
@@ -307,6 +316,15 @@ test("hostile workspace: refresh and retrieval run nothing the agent planted", {
   const id = Math.random().toString(36).slice(2, 8);
   const c = `${PREFIX}${id}-g`;
   launch(PROJECT, c);
+  // forge's own functions run in this process: their environment is set
+  // here, and put back when the test ends.
+  const saved = { project: process.env.FORGE_INCUS_PROJECT, mirrors: process.env.FORGE_MIRRORS };
+  t.after(() => {
+    for (const [k, v] of [["FORGE_INCUS_PROJECT", saved.project], ["FORGE_MIRRORS", saved.mirrors]] as const) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+  });
   process.env.FORGE_INCUS_PROJECT = PROJECT;
   process.env.FORGE_MIRRORS = join(workspaces, "mirrors");
   const ctx = createContext();
@@ -354,6 +372,9 @@ test("hostile workspace: refresh and retrieval run nothing the agent planted", {
   // The host's refresh fails (no GitHub key here); only its effects count.
   const refreshed = await refreshMirror(ctx, mirror, SENTINEL);
   assert.notEqual(refreshed.code, 0, "the refresh was expected to fail without a GitHub key");
+  // The container's own fetch, as forge start runs it. Its result is not the
+  // point: the planted hooks run there, in the container, and may fail it
+  // (their marker path does not exist inside); only the host marker counts.
   asAgent(PROJECT, c, "git -C /workspace fetch origin");
 
   // Retrieval through the real forge, from a clean client.
