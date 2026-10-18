@@ -92,25 +92,29 @@ export function parseAllowlist(path: string, text: string): string[] {
   return entries.map((e) => e.value);
 }
 
-// Reads the allowlist, writing the default one first when the file does not
-// exist. An existing file, even empty, is never rewritten.
-export function loadAllowlist(path: string): { entries: string[]; created: boolean } {
+// Reads and validates the allowlist without ever creating it: null when the
+// file does not exist (display-only callers such as `forge egress`).
+export function readAllowlist(path: string): string[] | null {
   let text: string;
-  let created = false;
   try {
     text = readFileSync(path, "utf8");
   } catch (e) {
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw new ForgeError(`${path}: cannot read it: ${(e as Error).message}`);
-    }
-    try {
-      mkdirSync(dirname(path), { recursive: true });
-      writeFileSync(path, DEFAULT_ALLOWLIST);
-    } catch (w) {
-      throw new ForgeError(`${path}: cannot create it: ${(w as Error).message}`);
-    }
-    text = DEFAULT_ALLOWLIST;
-    created = true;
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw new ForgeError(`${path}: cannot read it: ${(e as Error).message}`);
   }
-  return { entries: parseAllowlist(path, text), created };
+  return parseAllowlist(path, text);
+}
+
+// Reads the allowlist, writing the default one first when the file does not
+// exist. An existing file, even empty, is never rewritten.
+export function loadAllowlist(path: string): { entries: string[]; created: boolean } {
+  const entries = readAllowlist(path);
+  if (entries !== null) return { entries, created: false };
+  try {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, DEFAULT_ALLOWLIST);
+  } catch (w) {
+    throw new ForgeError(`${path}: cannot create it: ${(w as Error).message}`);
+  }
+  return { entries: parseAllowlist(path, DEFAULT_ALLOWLIST), created: true };
 }

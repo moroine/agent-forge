@@ -65,6 +65,28 @@ export async function listInstances(ctx: Context): Promise<Instance[]> {
   }
 }
 
+export type Lease = { hostname: string; address: string };
+
+// Sonde : les baux DHCP d'un réseau, ceux des instances arrêtées compris
+// (`incus list` ne leur montre plus d'adresse). Le bridge vit dans `default`,
+// atteint par --project comme les autres commandes réseau ; Incus ne rend alors
+// que les baux des instances du projet. Un échec vaut « aucun bail ».
+export async function listLeases(ctx: Context, network: string): Promise<Lease[]> {
+  const r = await ctx.exec(incus("network", "list-leases", network, "-f", "json"));
+  if (r.code !== 0) return [];
+  try {
+    const parsed: unknown = JSON.parse(r.stdout);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((l): l is Lease =>
+        typeof l === "object" && l !== null &&
+        typeof (l as Lease).hostname === "string" && typeof (l as Lease).address === "string")
+      .map((l) => ({ hostname: l.hostname, address: l.address }));
+  } catch {
+    return [];
+  }
+}
+
 export async function instanceStatus(ctx: Context, name: string): Promise<string | null> {
   const found = (await listInstances(ctx)).find((i) => i.name === name);
   return found ? found.status : null;

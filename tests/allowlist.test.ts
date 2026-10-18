@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { DEFAULT_ALLOWLIST, loadAllowlist, parseAllowlist } from "../cli/lib/allowlist.ts";
+import { dirname, join } from "node:path";
+import { DEFAULT_ALLOWLIST, loadAllowlist, parseAllowlist, readAllowlist } from "../cli/lib/allowlist.ts";
 import { ForgeError } from "../cli/lib/context.ts";
 
 test("comments, inline comments and blank lines are ignored", () =>
@@ -47,4 +47,17 @@ test("a missing file is created with the default list; an existing one, even emp
 test("an unreadable path is a ForgeError naming the file", () => {
   const dir = mkdtempSync(join(tmpdir(), "allow-"));
   assert.throws(() => loadAllowlist(dir), (e: Error) => e instanceof ForgeError && e.message.startsWith(`${dir}: `));
+  assert.throws(() => readAllowlist(dir), (e: Error) => e instanceof ForgeError && e.message.startsWith(`${dir}: `));
+});
+
+test("readAllowlist never creates the file: null when it is missing, the validated entries otherwise", () => {
+  const p = join(mkdtempSync(join(tmpdir(), "allow-")), "sub", "egress-allowlist");
+  assert.equal(readAllowlist(p), null);
+  assert.equal(existsSync(p), false);
+  assert.equal(existsSync(dirname(p)), false);
+  mkdirSync(dirname(p));
+  writeFileSync(p, "a.example.com\n");
+  assert.deepEqual(readAllowlist(p), ["a.example.com"]);
+  writeFileSync(p, "Bad.example.com\n");
+  assert.throws(() => readAllowlist(p), /lowercase/);
 });

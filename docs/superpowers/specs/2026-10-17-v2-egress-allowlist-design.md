@@ -449,7 +449,10 @@ serves open containers, where the paragraph does not apply.
 ### `forge egress [<owner/repo>] [strict|open]`
 
 - Without a mode: prints the container's effective egress (see "`forge list`")
-  and, when strict, the allowlist file's path and entry count.
+  and, when strict, the allowlist file's path and entry count (display only:
+  a missing file is reported, `not created yet: run forge setup`, never
+  created). A marker that disagrees with the effective NIC, or a switch left
+  half-done, is reported with the command that finishes it.
 - With a mode: refuses on a running container ("stop it first: forge stop
   <owner/repo>", WIP checks are `forge stop`'s business). On a stopped container
   it changes Incus configuration only, then prints what changed and that the
@@ -470,10 +473,13 @@ serves open containers, where the paragraph does not apply.
 
 - Reads the last 200 lines of the proxy's `access.log`
   (`incus exec forge-proxy -- tail -n 200 …`).
-- Prints one line per request: time, container, result (`allowed` / `denied`),
-  method, host[:port]. The container name comes from the current address of
-  each instance (`incus list -f json`); an address no current instance holds is
-  shown as is.
+- Prints one line per request: time, container, result (`denied` for squid's
+  `TCP_DENIED…`, `error` for `NONE…`, the requests squid could not serve,
+  `allowed` otherwise), method, host[:port], with every control character
+  stripped (the fields come from the agents' requests). The container name
+  comes from the DHCP leases of the bridge (`incus network list-leases`, which
+  still name a stopped instance), overridden by the current address of each
+  instance (`incus list -f json`); an address nobody holds is shown as is.
 - With `<owner/repo>`: only that container's lines.
 - Addresses are reused by DHCP over time, so old lines can name the wrong
   container; the command says so in its usage text.
