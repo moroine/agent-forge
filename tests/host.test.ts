@@ -4,7 +4,7 @@ import type { NetworkInterfaceInfo } from "node:os";
 import { fakeContext } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { fakeProc } from "./lib/fake-host.ts";
-import { checkHost, checkIpForward, checkStoragePool, exposedHostAddresses, readProc } from "../cli/lib/host.ts";
+import { checkHost, checkIpForward, strictModeSupported, requireStrictIncus, checkStoragePool, exposedHostAddresses, readProc } from "../cli/lib/host.ts";
 
 const USER = 1000;
 const ctx = (fake = new FakeIncus()) => fakeContext({ incus: fake });
@@ -95,4 +95,22 @@ test("host addresses the ACL covers raise nothing", () => {
 
 test("a public host address is reported", () => {
   assert.deepEqual(exposedHostAddresses({ eth0: [v4("203.0.113.7"), v4("192.168.1.2")] }, "10.77.0.1/24"), ["203.0.113.7"]);
+});
+
+for (const v of ["7.0.2", "7.0.3", "7.0.10", "7.5.0", "7.5.1", "7.6", "8.0.0"]) test(`${v} allows strict mode`, () => assert.ok(strictModeSupported(v)));
+for (const v of ["7.0.1", "7.0.0", "7.1.0", "7.4.0", "6.0.7", "6.0.5-8", "", "garbage", "7"]) test(`${JSON.stringify(v)} refuses strict mode`, () => assert.ok(!strictModeSupported(v)));
+
+test("the refusal names the version found and the fix", async () => {
+  const fake = new FakeIncus(); fake.serverVersion = "7.0.1";
+  await assert.rejects(requireStrictIncus(ctx(fake)), (e: Error) =>
+    /7\.0\.1/.test(e.message) && /7\.0\.2/.test(e.message) && /7\.5\.0/.test(e.message) && /ansible\/site\.yml/.test(e.message));
+});
+
+test("requireStrictIncus returns the version when it is supported", async () => {
+  assert.equal(await requireStrictIncus(ctx()), "7.0.2");
+});
+
+test("requireStrictIncus fails when Incus cannot be reached", async () => {
+  const c = fakeContext({ rules: [{ match: "query /1.0", code: 1, stderr: "nope" }] });
+  await assert.rejects(requireStrictIncus(c), /cannot reach Incus/);
 });

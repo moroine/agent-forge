@@ -107,3 +107,32 @@ export function exposedHostAddresses(interfaces: NodeJS.Dict<NetworkInterfaceInf
   }
   return exposed;
 }
+
+// Strict mode needs the Incus releases where a failed NIC filter update can no
+// longer leave the NIC unfiltered: 7.0.2+ on the 7.0 LTS line, or 7.5.0+.
+export function strictModeSupported(version: string): boolean {
+  const m = /^(\d+)\.(\d+)(?:\.(\d+))?$/.exec(version);
+  if (!m) return false;
+  const [major, minor, patch] = [Number(m[1]), Number(m[2]), Number(m[3] ?? 0)];
+  if (major > 7) return true;
+  if (major < 7) return false;
+  return minor >= 5 || (minor === 0 && patch >= 2);
+}
+
+export async function requireStrictIncus(ctx: Context): Promise<string> {
+  const server = await serverInfo(ctx);
+  if (!server.ok) {
+    throw new ForgeError(
+      `cannot reach Incus (${server.error}). Check that Incus is installed and initialized, and that you are ` +
+      "in the incus-admin group (log in again after being added to it).");
+  }
+  const version = server.info.environment?.server_version ?? "unknown";
+  if (!strictModeSupported(version)) {
+    throw new ForgeError(
+      "strict mode needs Incus 7.0.2 or later on the 7.0 LTS line, or 7.5.0 or later " +
+      `(this host runs ${version}): earlier releases can leave a NIC unfiltered when a filter update fails. ` +
+      "On an agent-forge VM, re-run the host playbook (ansible/site.yml); in local Linux mode, install Incus " +
+      "from Zabbly (lts-7.0 or the feature channel).");
+  }
+  return version;
+}
