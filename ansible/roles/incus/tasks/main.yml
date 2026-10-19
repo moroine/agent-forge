@@ -12,10 +12,15 @@
     base_apt_repo_components: [main]
     base_apt_repo_architectures: ["{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'amd64' }}"]
 
-- name: Install Incus (containers only) and the btrfs tools
+# latest, not present: re-running the playbook is how a host gets a newer
+# Incus of its channel (forge's strict-mode version gate says so). It stays
+# within the configured repository, as unattended-upgrades already does daily.
+- name: Install Incus (containers only) and the btrfs tools, at the channel's latest release
   ansible.builtin.apt:
     name: "{{ incus_packages }}"
-    state: present
+    state: latest
+    update_cache: true
+    cache_valid_time: 3600
     # Recommends would pull iptables next to nftables.
     install_recommends: false
 

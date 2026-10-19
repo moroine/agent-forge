@@ -104,3 +104,24 @@
       ansible.builtin.file:
         path: "{{ unit_tmp.path }}"
         state: absent
+
+# forge's strict-mode version gate tells the user to re-run the host playbook
+# to get a newer Incus: the install task must upgrade within the configured
+# channel, on a fresh apt cache, not only install once.
+- name: Incus install task
+  hosts: render
+  gather_facts: false
+  vars:
+    unit_incus_tasks: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/incus/tasks/main.yml') | from_yaml }}"
+    unit_incus_install: >-
+      {{ (unit_incus_tasks | selectattr('name', 'match', 'Install Incus') | first)['ansible.builtin.apt'] }}
+  tasks:
+    - name: Check it upgrades Incus within the channel, on a fresh cache
+      ansible.builtin.assert:
+        that:
+          - unit_incus_install.state == 'latest'
+          - unit_incus_install.update_cache
+          - unit_incus_install.cache_valid_time is defined
+        fail_msg: >-
+          The incus role must install Incus with state latest and update_cache
+          (got {{ unit_incus_install }}).

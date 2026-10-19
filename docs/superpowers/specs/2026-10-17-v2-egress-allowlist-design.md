@@ -132,7 +132,10 @@ integration tests confirm them on a real host.
   6.0 LTS line) delete and recreate the chains in separate calls (a brief
   unfiltered gap) and leave the NIC unfiltered when an update fails
   (lxc/incus#4008). Sub-project 1's `incus` role installs the latest `lts-7.0`
-  package, so a fresh VM gets 7.0.2 or later.
+  package, so a fresh VM gets 7.0.2 or later once Zabbly ships it. The role
+  first used `state: present`, which never upgrades: re-running the playbook,
+  the fix the gate names, left an existing VM on 7.0.1 (seen on 2026-10-18).
+  It now uses `state: latest`, within the configured channel.
 
 ### The version gate
 
