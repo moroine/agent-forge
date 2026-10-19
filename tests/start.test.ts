@@ -292,7 +292,7 @@ test("start --strict on a new repo provisions it strict", async () => {
     const c = fakeContext({ incus: fake, rules: [
       { match: "git config --global --includes user.name", stdout: "Ada\n" },
       { match: "git config --global --includes user.email", stdout: "a@b.c\n" },
-      { match: "forge-hook-probe", code: 2 },
+      { match: "forge-hook-probe-deny", code: 2 },
       { match: "test -e /workspace/.trees/", code: 1 },
       { match: "show-ref", code: 1 },
     ] });
