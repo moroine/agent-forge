@@ -108,9 +108,13 @@ test("ensureRunning does nothing for a running container", async () => {
 });
 
 // A concurrent `incus start` can fail while the container is in fact running.
+// The first two answers go to the egress check every ensureRunning begins
+// with: no user.forge.egress, then the instance list.
 function sequenceContext(answers: { code: number; stdout: string; stderr: string }[]) {
+  const egress = [{ code: 0, stdout: "\n", stderr: "" }, { code: 0, stdout: list("Stopped"), stderr: "" }];
+  const all = [...egress, ...answers];
   let n = 0;
-  return { ...fakeContext(), exec: async () => answers[Math.min(n++, answers.length - 1)] };
+  return { ...fakeContext(), exec: async () => all[Math.min(n++, all.length - 1)] };
 }
 
 test("ensureRunning tolerates a failed start when the container ends up Running", async () => {

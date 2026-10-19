@@ -8,14 +8,14 @@ import { join } from "node:path";
 import type { Context, ExecResult } from "../context.ts";
 import { ForgeError, mustSucceed } from "../context.ts";
 import { sanitizeContainerName, validateGitRef, validateRepo, validateTaskName } from "../validate.ts";
-import { checkNameCollision, containerRepo, forgeRepos, isRunning } from "../containers.ts";
+import { checkNameCollision, containerRepo, forgeRepos } from "../containers.ts";
 import { hasOriginDevice, refreshMirror } from "../mirror.ts";
 import { mirrorPath, workspacesDir } from "../paths.ts";
-import { claudeSlug } from "../session.ts";
+import { claudeSlug, ensureRunning } from "../session.ts";
 import { runTask } from "../tabs.ts";
-import { execAsAgent, instanceExists, startInstance } from "../incus.ts";
+import { execAsAgent, instanceExists } from "../incus.ts";
 import { agentBranches, branchExists, taskNames, worktreeAbsPath, worktreeExists } from "../worktrees.ts";
-import { egressAfterStart, egressBeforeStart, egressMode } from "../strict.ts";
+import { egressMode } from "../strict.ts";
 import { provisionContainer } from "./provision.ts";
 
 const USAGE = "Usage: forge start [--strict] <owner/repo> [<task>]";
@@ -52,12 +52,10 @@ export async function cmdStart(
     throw new ForgeError(`${container} is not a strict container. Switch it with: forge egress ${ownerRepo} strict`);
   }
 
-  // Avant le démarrage, même d'un container qui tourne déjà : la porte de
-  // version et le proxy.
-  const egress = await egressBeforeStart(ctx, container);
-
+  // ensureRunning commence par le contrôle egress, même sur un container qui
+  // tourne déjà : la porte de version et le proxy passent avant tout démarrage.
   ctx.out(`Starting container ${container}...`);
-  if (!(await isRunning(ctx, container))) await mustSucceed("incus start", startInstance(ctx, container));
+  await ensureRunning(ctx, container);
 
   // Un container provisionné avant le miroir n'a pas de device `origin` : son
   // /workspace pointe encore vers GitHub, sans credential pour l'atteindre.
@@ -84,8 +82,8 @@ export async function cmdStart(
 
   await addWorktree(ctx, container, taskName, ref);
 
-  await egressAfterStart(ctx, container, egress);
-
+  // Les réglages stricts suivent le mode à l'attache (attachTask), dans ce
+  // terminal comme dans un onglet herdr.
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
   return runTask(ctx, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
 }

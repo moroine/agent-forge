@@ -9,7 +9,6 @@ import { containerRepo, requireContainerForRepo } from "../containers.ts";
 import { herdrEnv } from "../herdr.ts";
 import { resumeAll, runTask } from "../tabs.ts";
 import { worktreeExists } from "../worktrees.ts";
-import { egressAfterStart, egressBeforeStart } from "../strict.ts";
 import { resolveRepo, resolveTask } from "./resolve.ts";
 
 const USAGE = "Usage: forge resume <owner/repo> <task>\n       forge resume --all";
@@ -27,9 +26,8 @@ export async function cmdResume(
   validateRepo(ownerRepo);
   const container = await requireContainerForRepo(ctx, ownerRepo);
 
-  // Avant le démarrage, même d'un container qui tourne déjà.
-  const egress = await egressBeforeStart(ctx, container);
-
+  // ensureRunning commence par le contrôle egress, même sur un container qui
+  // tourne déjà.
   ctx.out(`Starting container ${container}...`);
   await ensureRunning(ctx, container);
 
@@ -42,8 +40,7 @@ export async function cmdResume(
     );
   }
 
-  await egressAfterStart(ctx, container, egress);
-
+  // Les réglages stricts suivent le mode à l'attache (attachTask).
   ctx.out(`Attaching to ${container} session '${taskName}' as aiuser...`);
   return runTask(ctx, { container, ownerRepo: await containerRepo(ctx, container), task: taskName });
 }

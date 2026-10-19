@@ -5,6 +5,7 @@ import { ForgeError, mustSucceed } from "./context.ts";
 import { AGENT } from "./agent.ts";
 import { isRunning } from "./containers.ts";
 import { attachArgv, execAsAgentArgv, instanceStatus, startInstance } from "./incus.ts";
+import { egressAfterStart, egressBeforeStart, egressMode } from "./strict.ts";
 import { probeRunningTasks, worktreeAbsPath } from "./worktrees.ts";
 
 // Claude Code names a project's transcript folder after its path, every
@@ -27,7 +28,13 @@ export async function hasConversation(ctx: Context, container: string, task: str
   return r.code === 0;
 }
 
+// Every path that starts a container goes through here (forge attach, start,
+// resume, resume --all, finish). The egress check comes first, even on a
+// running container (sub-project 3's contract): a too-old Incus or a
+// marker/NIC disagreement is refused before any `incus start`, and a strict
+// container gets its proxy started.
 export async function ensureRunning(ctx: Context, container: string): Promise<void> {
+  await egressBeforeStart(ctx, container);
   if (await isRunning(ctx, container)) return;
   const started = await startInstance(ctx, container);
   if (started.code === 0) return;
@@ -41,7 +48,13 @@ export async function ensureRunning(ctx: Context, container: string): Promise<vo
 // here (forge attach, start and resume outside herdr), so the guard sits here,
 // and fails closed: a probe that cannot answer refuses too. `ownerRepo` is the
 // stored `user.forge.repo`, when the caller has it.
+//
+// First, the strict settings follow the container's mode (sub-project 3's
+// contract): applied for strict, removed for open. The mode is read, never
+// changed, and the same idempotent step runs on every path to the agent —
+// herdr tabs and resume --all included, which never go through start/resume.
 export async function attachTask(ctx: Context, container: string, task: string, ownerRepo?: string): Promise<number> {
+  await egressAfterStart(ctx, container, await egressMode(ctx, container));
   const probe = await probeRunningTasks(ctx, container);
   if (!probe.ok) {
     throw new ForgeError(`cannot check whether the agent for ${task} already runs in ${container}: ${probe.error}`);
