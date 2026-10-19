@@ -175,7 +175,7 @@ test("with no forge container yet, start asks owner/repo and provisions it", asy
       rules: [
         { match: "git config --global --includes user.name", stdout: "Ada\n" },
         { match: "git config --global --includes user.email", stdout: "ada@example.com\n" },
-        { match: "forge-hook-probe", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" },
+        { match: "forge-hook-probe-deny", code: 2, stderr: "BLOCKED: sudo non autorisé.\n" },
       ],
       answers: ["o/r", "fresh"],
     });
