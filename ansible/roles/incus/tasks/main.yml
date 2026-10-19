@@ -15,7 +15,7 @@
 # latest, not present: re-running the playbook is how a host gets a newer
 # Incus of its channel (forge's strict-mode version gate says so). It stays
 # within the configured repository, as unattended-upgrades already does daily.
-- name: Install Incus (containers only) and the btrfs tools, at the channel's latest release
+- name: Install Incus (containers only) and the btrfs tools, at the channel's latest release  # noqa: package-latest
   ansible.builtin.apt:
     name: "{{ incus_packages }}"
     state: latest
