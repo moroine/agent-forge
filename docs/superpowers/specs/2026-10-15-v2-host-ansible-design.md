@@ -192,7 +192,8 @@ The main play runs the roles in this order: `base`, `hardening`, `firewall`,
   for the three repositories the playbook adds: Zabbly, NodeSource and Claude
   Code, matched by host name (`site=`), because NodeSource's `Release` file has
   no usable Origin (`. nodistro`). The playbook itself installs with
-  `state: present` and never upgrades anything. There is **no automatic
+  `state: present` and never upgrades anything, except Incus (see the `incus`
+  role). There is **no automatic
   reboot**: it would kill the herdr server and every running agent. Pending
   reboots show in `/var/run/reboot-required`.
 - **Third-party apt repositories** (here and in later roles) use deb822 sources.
@@ -357,6 +358,13 @@ stopped and disabled.
 
   Ubuntu's universe also ships Incus 6.0.5. Zabbly's `1:` epoch wins, and the
   verification asserts a 7.0.x version.
+- **Upgrades:** unlike the other roles, the packages are installed with
+  `state: latest` on an apt cache at most an hour old. Re-running the playbook
+  is how a host gets a newer Incus at once (sub-project 3's strict mode
+  requires 7.0.2 or later and says so); it stays within the configured
+  repository (`incus_zabbly_uri`, `lts-7.0` by default), as unattended-upgrades
+  already does daily. An upgrade restarts the daemon; running containers keep
+  running.
 - **Initialization**, only when `incus storage show default` fails, through
   `incus admin init --preseed`:
   - storage pool `default`, driver `btrfs`:
