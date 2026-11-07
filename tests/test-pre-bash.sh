@@ -192,6 +192,30 @@ expect_block_as autonomous 'gh pr merge 42'
 expect_allow_as supervised 'git status'
 expect_allow_as supervised 'git commit -m "feat: x"'
 
+# --- contributor mode (dev VM): the relay is the only way to GitHub ---
+expect_block_as contributor 'git push origin agent/test-project'
+expect_block_as contributor 'git push -u origin agent/test-project'
+expect_block_as contributor 'gh pr create --base main --title "x" --body "y"'
+expect_block_as contributor 'gh pr view 42'
+expect_allow_as contributor 'git status'
+expect_allow_as contributor 'git commit -m "feat: x"'
+expect_allow_as contributor 'git merge origin/main'
+expect_block_as contributor 'git rebase origin/main'
+
+# --- outside a container, the audit log goes to the user's ~/.claude ---
+# Only holds on a machine without /workspace (the Mac, CI).
+if [ ! -d /workspace ]; then
+  AUDIT_HOME=$(mktemp -d)
+  HOME="$AUDIT_HOME" FORGE_MODE_FILE="$MODE_FILE.none" run_hook 'git status' || true
+  if [ -s "$AUDIT_HOME/.claude/bash-audit.log" ]; then
+    PASS=$((PASS + 1))
+  else
+    FAIL=$((FAIL + 1))
+    echo "FAIL: no audit log under \$HOME/.claude"
+  fi
+  rm -r "$AUDIT_HOME"
+fi
+
 # --- missing marker file defaults to autonomous (existing containers,
 # provisioned before this feature, keep working unmodified) ---
 rc=0

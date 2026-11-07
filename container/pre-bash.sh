@@ -19,8 +19,16 @@ if ! COMMAND=$(printf '%s' "$INPUT" | "$JQ" -r '.tool_input.command // empty' 2>
   exit 2
 fi
 
-# Journal d'audit persistant dans le workspace (survit à la suppression du container côté host)
-AUDIT_LOG="/workspace/.claude/bash-audit.log"
+# Journal d'audit. Container : persistant dans /workspace (survit à la
+# suppression du container côté host). Hôte sans /workspace (VM de dev) :
+# ~/.claude. FORGE_AUDIT_LOG est overridable (tests).
+if [ -n "$FORGE_AUDIT_LOG" ]; then
+  AUDIT_LOG="$FORGE_AUDIT_LOG"
+elif [ -d /workspace ]; then
+  AUDIT_LOG="/workspace/.claude/bash-audit.log"
+else
+  AUDIT_LOG="$HOME/.claude/bash-audit.log"
+fi
 mkdir -p "$(dirname "$AUDIT_LOG")" 2>/dev/null
 printf '%s\t%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$COMMAND" >> "$AUDIT_LOG" 2>/dev/null
 
@@ -30,11 +38,18 @@ block() {
   exit 2
 }
 
-# Mode du container : "autonomous" (défaut) ou "supervised". Le fichier
-# marqueur est écrit une fois par forge start ; FORGE_MODE_FILE est
-# overridable pour les tests (le hook tourne en dur sur le chemin container
-# en usage réel).
-FORGE_MODE_FILE="${FORGE_MODE_FILE:-/home/aiuser/.claude/forge-mode}"
+# Mode : "autonomous" (défaut), "supervised" (container forge) ou
+# "contributor" (VM de dev : le relais est le seul chemin vers GitHub). Le
+# fichier marqueur est écrit une fois (forge start, ou le rôle Ansible de la
+# VM de dev) ; FORGE_MODE_FILE est overridable pour les tests. Sans override :
+# le chemin container s'il existe, sinon ~/.claude/forge-mode.
+if [ -z "$FORGE_MODE_FILE" ]; then
+  if [ -f /home/aiuser/.claude/forge-mode ]; then
+    FORGE_MODE_FILE="/home/aiuser/.claude/forge-mode"
+  else
+    FORGE_MODE_FILE="$HOME/.claude/forge-mode"
+  fi
+fi
 FORGE_MODE=$(cat "$FORGE_MODE_FILE" 2>/dev/null || echo autonomous)
 
 # Politique git push : default-deny.
@@ -53,6 +68,10 @@ if echo "$COMMAND" | grep -qE "$GIT_PUSH_RE"; then
   # politiques par forme ci-dessous (qui ne s'appliquent qu'en autonomous).
   if [ "$FORGE_MODE" = "supervised" ]; then
     block "git push non autorisé : container supervisé, aucune credential GitHub n'existe."
+  fi
+  # VM de dev : aucune credential non plus, le relais publie à la place.
+  if [ "$FORGE_MODE" = "contributor" ]; then
+    block "git push non autorisé : sur la VM de dev, le relais est le seul chemin vers GitHub."
   fi
   # Force push interdit (préserve l'historique de la branche agent)
   if echo "$COMMAND" | grep -qE 'git[[:space:]]+push[^;&|]*[[:space:]](-[A-Za-z]*f[A-Za-z]*|--force(-with-lease)?(=[^[:space:]]+)?)([[:space:]]|$)'; then
@@ -82,6 +101,10 @@ fi
 # règles par sous-commande ci-dessous (qui ne s'appliquent qu'en autonomous).
 if [ "$FORGE_MODE" = "supervised" ] && echo "$COMMAND" | grep -qE '(^|[[:space:];&|])gh([[:space:]]|$)'; then
   block "gh non autorisé : container supervisé, gh n'est jamais authentifié."
+fi
+# VM de dev : même règle, le relais est le seul chemin vers GitHub.
+if [ "$FORGE_MODE" = "contributor" ] && echo "$COMMAND" | grep -qE '(^|[[:space:];&|])gh([[:space:]]|$)'; then
+  block "gh non autorisé : sur la VM de dev, le relais est le seul chemin vers GitHub."
 fi
 
 # gh (mode autonomous) : l'agent crée et met à jour des PRs, ne merge jamais,
