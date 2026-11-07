@@ -19,6 +19,7 @@ import { cmdAttach } from "./lib/commands/attach.ts";
 import { cmdTaskBase } from "./lib/commands/task-base.ts";
 import { cmdUploadPack } from "./lib/commands/upload-pack.ts";
 import { cmdCompletion } from "./lib/commands/completion.ts";
+import { cmdCloud } from "./lib/commands/cloud.ts";
 import { cmdInstall } from "./lib/commands/install.ts";
 import { cmdOpen } from "./lib/commands/open.ts";
 import { cmdFetch } from "./lib/commands/fetch.ts";
@@ -56,6 +57,10 @@ On your laptop:
                                     Install or update a forge host: the local Lima VM by default, a new
                                     remote VM with --remote, an installed host with --host
   open [--host <name>]              Open herdr on a forge host
+  cloud create [--host <name>]      Create the dev VM on AWS and install it (or resume that install)
+  cloud start|stop|rebuild [--host <name>]
+                                    Start the dev VM and open herdr, stop it (disks kept), or replace
+                                    it with a new one (its disk is lost)
   fetch [--host <name>]             Fetch the agents' branches into this clone and list the tasks
   ship <task> [--host <name>]       Re-sign a task's new commits, push agent/<task> and open its PR
                                     (a stacked task ships with the tasks under it, bottom first)
@@ -87,6 +92,7 @@ function dispatch(
     case "image": return cmdImage(ctx, a, b);
     case "completion": return cmdCompletion(ctx, a, b);
     case "install": return cmdInstall(ctx, laptop);
+    case "cloud": return cmdCloud(ctx, a, { host: laptop.host });
     case "open": return cmdOpen(ctx, { host: laptop.host });
     case "fetch": return cmdFetch(ctx, { host: laptop.host });
     case "ship": return cmdShip(ctx, a, { host: laptop.host });
@@ -138,9 +144,9 @@ async function main(): Promise<number> {
     if (values.remote !== undefined && cmd !== "install") {
       throw new ForgeError("--remote only goes with install: forge install --remote <address>");
     }
-    if (values.host !== undefined && !["install", "open", "fetch", "ship"].includes(cmd)) {
-      throw new ForgeError("--host only goes with install, open, fetch and ship: forge install --host <name>, " +
-        "forge open --host <name>, forge fetch --host <name>, forge ship <task> --host <name>");
+    if (values.host !== undefined && !["install", "open", "fetch", "ship", "cloud"].includes(cmd)) {
+      throw new ForgeError("--host only goes with install, open, fetch, ship and cloud: forge install --host <name>, " +
+        "forge open --host <name>, forge fetch --host <name>, forge ship <task> --host <name>, forge cloud start --host <name>");
     }
     const laptop = { remote: values.remote, host: values.host };
     const code = await dispatch(ctx, positionals, values.force === true, values.strict === true, values.all === true, laptop);

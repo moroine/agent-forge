@@ -21,6 +21,7 @@ test("/opt/agent-forge present means host, absent means laptop", () => {
 
 test("commandSide: laptop commands, host commands, completion", () => {
   for (const c of LAPTOP_COMMANDS) assert.equal(commandSide(c), "laptop");
+  assert.equal(commandSide("cloud"), "laptop");
   assert.equal(commandSide("list"), "host");
   assert.equal(commandSide("start"), "host");
   const here = currentSide();
