@@ -157,3 +157,8 @@ test("validHostName", () => {
   assert.ok(!validHostName("forge-"));
   assert.ok(!validHostName("forge-Acme"));
 });
+
+test("a cloud host is accepted", () => {
+  writeState(JSON.stringify([host("forge-dev", { kind: "cloud" })]));
+  assert.equal(loadHosts()[0].kind, "cloud");
+});

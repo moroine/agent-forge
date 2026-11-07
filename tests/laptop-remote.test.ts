@@ -31,3 +31,12 @@ test("remoteAttach asks for a tty only when told to", async () => {
   await remoteAttach(ctx, host, ["claude", "auth", "login"], true);
   assert.deepEqual(ctx.attachCalls[1].argv, ["ssh", "-o", "ForwardAgent=no", "-t", "forge-acme", "--", "'claude' 'auth' 'login'"]);
 });
+
+test("remoteExec feeds input on stdin, never in argv", async () => {
+  const ctx = fakeContext({ rules: [{ match: "ssh" }] });
+  await remoteExec(ctx, host, ["cat"], "secret\n");
+  assert.deepEqual(ctx.execOptions[0], { input: "secret\n" });
+  assert.ok(!ctx.calls[0].some((a) => a.includes("secret")));
+  await remoteExec(ctx, host, ["cat"]);
+  assert.equal(ctx.execOptions[1], undefined);
+});

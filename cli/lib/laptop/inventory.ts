@@ -14,7 +14,9 @@ const q = (s: string): string => JSON.stringify(s);
 
 export function renderInventory(
   h: LaptopHost,
-  o: { forgeKey: string; adminKeyFile: string; knownHosts: string },
+  o: { forgeKey: string; adminKeyFile: string; knownHosts: string;
+    contributor?: { upstream: string; fork: string; gitName: string; gitEmail: string };
+  },
 ): string {
   // Two splits: Ansible splits ansible_ssh_common_args with shlex, then ssh
   // splits each -o value again, like a config line. A path or a socket is
@@ -42,6 +44,14 @@ export function renderInventory(
     `      ansible_ssh_common_args: ${q(args.join(" "))}`,
     "  vars:",
     `    forge_exposure: ${q(h.exposure)}`,
+    ...(o.contributor
+      ? [
+        `    forge_contributor_upstream: ${q(o.contributor.upstream)}`,
+        `    forge_contributor_fork: ${q(o.contributor.fork)}`,
+        `    forge_contributor_git_name: ${q(o.contributor.gitName)}`,
+        `    forge_contributor_git_email: ${q(o.contributor.gitEmail)}`,
+      ]
+      : []),
     "    forge_users:",
     `      - name: ${q(h.user)}`,
     "        ssh_keys:",

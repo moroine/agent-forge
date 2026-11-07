@@ -13,8 +13,10 @@ const remoteCommand = (argv: string[]): string => argv.map(shellQuote).join(" ")
 const NO_AGENT = ["-o", "ForwardAgent=no"];
 
 // Never prompts (BatchMode): a missing key fails instead of hanging.
-export function remoteExec(ctx: Context, host: LaptopHost, argv: string[]): Promise<ExecResult> {
-  return ctx.exec(["ssh", "-o", "BatchMode=yes", ...NO_AGENT, host.name, "--", remoteCommand(argv)]);
+export function remoteExec(ctx: Context, host: LaptopHost, argv: string[], input?: string): Promise<ExecResult> {
+  const cmd = ["ssh", "-o", "BatchMode=yes", ...NO_AGENT, host.name, "--", remoteCommand(argv)];
+  // Stdin, never argv: a secret must not show in a process list.
+  return input === undefined ? ctx.exec(cmd) : ctx.exec(cmd, { input });
 }
 
 // Inherits the terminal; `tty` for a command that asks the user something.

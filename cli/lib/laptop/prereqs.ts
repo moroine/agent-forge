@@ -5,8 +5,9 @@ import { ForgeError, type Context } from "../context.ts";
 
 const LIMA_FLOOR = "2.1.2";
 const ANSIBLE_FLOOR = "2.20";
+const TOFU_FLOOR = "1.10.0";
 
-type Tool = "lima" | "ansible" | "herdr" | "git" | "ssh";
+type Tool = "lima" | "ansible" | "herdr" | "git" | "ssh" | "tofu" | "aws";
 type Problem = { tool: Tool; text: string };
 
 // Comparaison numérique composante par composante (2.10.0 > 2.9.9).
@@ -23,7 +24,7 @@ function atLeast(found: string, floor: string): boolean {
 
 export async function checkPrerequisites(
   ctx: Context,
-  kind: "lima" | "remote",
+  kind: "lima" | "remote" | "cloud",
   platform: NodeJS.Platform = process.platform,
 ): Promise<void> {
   const problems: Problem[] = [];
@@ -44,6 +45,10 @@ export async function checkPrerequisites(
   };
 
   if (kind === "lima") await versioned("lima", ["limactl", "--version"], /limactl version (\d+(?:\.\d+)*)/, LIMA_FLOOR, "limactl");
+  if (kind === "cloud") {
+    await versioned("tofu", ["tofu", "version"], /OpenTofu v(\d+(?:\.\d+)*)/, TOFU_FLOOR, "OpenTofu (tofu)");
+    await versioned("aws", ["aws", "--version"], /aws-cli\/(\d+(?:\.\d+)*)/, "2", "AWS CLI v2 (aws)");
+  }
   await versioned("ansible", ["ansible-playbook", "--version"], /\[core (\d+(?:\.\d+)*)/, ANSIBLE_FLOOR, "ansible-playbook (ansible-core)");
   await present("ansible", ["ansible-galaxy", "--version"], "ansible-galaxy");
   await present("herdr", ["herdr", "--version"], "herdr");
@@ -57,7 +62,8 @@ export async function checkPrerequisites(
   const install: string[] = [];
   if (platform === "darwin") {
     const brew = (["lima", "ansible", "herdr"] as const).filter((t) => missing.has(t));
-    if (brew.length) install.push(`brew install ${brew.join(" ")}`);
+    const formulae = [...brew.map(String), ...(missing.has("tofu") ? ["opentofu"] : []), ...(missing.has("aws") ? ["awscli"] : [])];
+    if (formulae.length) install.push(`brew install ${formulae.join(" ")}`);
   } else {
     if (missing.has("lima")) {
       install.push(
@@ -67,6 +73,8 @@ export async function checkPrerequisites(
     }
     if (missing.has("ansible")) install.push(`pipx install ansible-core   # ${ANSIBLE_FLOOR} or newer`);
     if (missing.has("herdr")) install.push("herdr: install it from its releases, https://herdr.dev");
+    if (missing.has("tofu")) install.push(`OpenTofu ${TOFU_FLOOR} or newer: https://opentofu.org/docs/intro/install/`);
+    if (missing.has("aws")) install.push("AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/getting-started-install.html");
   }
   if (missing.has("git")) install.push("install git with your package manager");
   if (missing.has("ssh")) install.push("install an OpenSSH client with your package manager");

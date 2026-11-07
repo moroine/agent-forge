@@ -9,12 +9,12 @@ import { laptopStateDir } from "../paths.ts";
 export type InstallStep = "vm" | "inventory" | "playbook" | "ssh" | "identity" | "claude" | "setup" | "image";
 
 const STEPS: readonly string[] = ["vm", "inventory", "playbook", "ssh", "identity", "claude", "setup", "image"];
-const KINDS: readonly string[] = ["lima", "remote"];
+const KINDS: readonly string[] = ["lima", "remote", "cloud"];
 const EXPOSURES: readonly string[] = ["local", "public", "lan"];
 
 export type LaptopHost = {
   name: string;
-  kind: "lima" | "remote";
+  kind: "lima" | "remote" | "cloud";
   address: string;
   port: number;
   user: string;

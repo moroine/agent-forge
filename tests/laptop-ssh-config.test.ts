@@ -289,3 +289,12 @@ test("hostDefinedElsewhere compares the resolved hostname", async () => {
   const failing = fakeContext({ rules: [{ match: "ssh -G", code: 255 }] });
   assert.equal(await hostDefinedElsewhere(failing, "forge-acme"), false);
 });
+
+test("a cloud host never gets the agent and has no HostKeyAlias; a remote host does", () => {
+  const cloud: LaptopHost = { ...remote, name: "forge-dev", kind: "cloud" };
+  const text = renderForgeSshConfig([cloud, remote], o);
+  const [c, r] = text.split("Host ").slice(1);
+  assert.match(c, /ForwardAgent no/);
+  assert.doesNotMatch(c, /ForwardAgent yes|HostKeyAlias/);
+  assert.match(r, /ForwardAgent yes/);
+});

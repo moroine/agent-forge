@@ -17,7 +17,7 @@ const GOOD: ExecRule[] = [
 const with_ = (match: string, over: Omit<ExecRule, "match">): ExecRule[] =>
   GOOD.map((r) => (r.match === match ? { match, ...over } : r));
 
-async function problem(rules: ExecRule[], kind: "lima" | "remote", platform: string): Promise<string> {
+async function problem(rules: ExecRule[], kind: "lima" | "remote" | "cloud", platform: string): Promise<string> {
   const ctx = fakeContext({ rules });
   try {
     await checkPrerequisites(ctx, kind, platform as NodeJS.Platform);
@@ -94,4 +94,31 @@ test("two problems are both listed", async () => {
   const msg = await problem(rules, "remote", "darwin");
   assert.match(msg, /herdr/);
   assert.match(msg, /ssh/);
+});
+
+const CLOUD: ExecRule[] = [
+  ...GOOD,
+  { match: "tofu version", stdout: "OpenTofu v1.13.9\non darwin_arm64\n" },
+  { match: "aws --version", stdout: "aws-cli/2.27.3 Python/3.13 Darwin/25 exe/arm64\n" },
+];
+
+test("the cloud kind asks for tofu and aws, never limactl", async () => {
+  const ctx = fakeContext({ rules: CLOUD });
+  await checkPrerequisites(ctx, "cloud", "darwin");
+  assert.ok(ctx.calls.some((c) => c[0] === "tofu"));
+  assert.ok(ctx.calls.some((c) => c[0] === "aws"));
+  assert.ok(!ctx.calls.some((c) => c[0] === "limactl"));
+});
+
+test("cloud: a missing tofu and aws share the darwin brew line", async () => {
+  const rules = CLOUD.map((r) => (r.match === "tofu version" || r.match === "aws --version" ? { match: r.match, code: 127 } : r));
+  const msg = await problem(rules, "cloud", "darwin");
+  assert.match(msg, /brew install opentofu awscli/);
+});
+
+test("cloud: tofu older than 1.10.0 and aws-cli v1 are refused", async () => {
+  const old = CLOUD.map((r) => (r.match === "tofu version" ? { match: r.match, stdout: "OpenTofu v1.9.2\n" } : r));
+  assert.match(await problem(old, "cloud", "linux"), /1\.9\.2[^]*1\.10\.0/);
+  const v1 = CLOUD.map((r) => (r.match === "aws --version" ? { match: r.match, stdout: "aws-cli/1.32.0 Python/3.9\n" } : r));
+  assert.match(await problem(v1, "cloud", "linux"), /AWS CLI/);
 });

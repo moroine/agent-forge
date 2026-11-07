@@ -44,7 +44,9 @@ function settings(h: LaptopHost, o: SshPaths): [string, string][] {
   if (h.kind === "lima") s.push(["HostKeyAlias", h.name], ["StrictHostKeyChecking", "accept-new"]);
   s.push(["UserKnownHostsFile", o.knownHosts], ["IdentityFile", o.keyPath(h.name)], ["IdentitiesOnly", "yes"]);
   if (h.identityAgent) s.push(["IdentityAgent", h.identityAgent]);
-  s.push(["ForwardAgent", "yes"]);
+  // The dev VM is an agent's machine with full rights: it never receives the
+  // maintainer's SSH agent (spec 5.3).
+  s.push(["ForwardAgent", h.kind === "cloud" ? "no" : "yes"]);
   return s;
 }
 

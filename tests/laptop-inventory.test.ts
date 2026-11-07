@@ -122,3 +122,17 @@ test("writeInventoryOnce keeps an existing file", () => {
   assert.equal(writeInventoryOnce(file, "two"), "kept");
   assert.equal(readFileSync(file, "utf8"), "one");
 });
+
+test("a cloud inventory carries the contributor variables as quoted scalars", () => {
+  const cloud: LaptopHost = { ...remote, name: "forge-dev", kind: "cloud" };
+  const t = renderInventory(cloud, {
+    ...opts(),
+    contributor: { upstream: "acme/forge", fork: "bot/forge", gitName: 'Bot "One"', gitEmail: "bot@example.org" },
+  });
+  assert.match(t, /^ {4}forge_contributor_upstream: "acme\/forge"$/m);
+  assert.match(t, /^ {4}forge_contributor_fork: "bot\/forge"$/m);
+  assert.match(t, /^ {4}forge_contributor_git_name: "Bot \\"One\\""$/m);
+  assert.match(t, /^ {4}forge_contributor_git_email: "bot@example.org"$/m);
+  assert.match(t, /forge_exposure: "public"/);
+  assert.doesNotMatch(t, /ansible_port|HostKeyAlias/);
+});
