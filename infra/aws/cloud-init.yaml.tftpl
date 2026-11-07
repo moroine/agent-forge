@@ -1,0 +1,10 @@
+#cloud-config
+# The admin account must stay alike print_user_data in ansible/tests/vm-test.sh.
+users:
+  - name: ubuntu
+    groups: [sudo]
+    shell: /bin/bash
+    sudo: "ALL=(ALL) NOPASSWD:ALL"
+    lock_passwd: true
+    ssh_authorized_keys:
+      - ${admin_public_key}

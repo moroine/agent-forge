@@ -1,2 +1,6 @@
 .claude/bash-audit.log
 node_modules/
+infra/**/.terraform/
+infra/**/*.tfstate*
+infra/**/*.tfvars.json
+infra/**/*.tfplan
