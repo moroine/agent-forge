@@ -10,8 +10,9 @@ import { join, relative } from "node:path";
 import { cmdInstall } from "../cli/lib/commands/install.ts";
 import { ForgeError } from "../cli/lib/context.ts";
 import { renderLaptopBlock } from "../cli/lib/herdr-config.ts";
+import { loadCloudSettings, saveCloudSettings, type CloudSettings } from "../cli/lib/laptop/cloud.ts";
 import {
-  forgeKeyPath, inventoryPath, knownHostsPath, loadHosts, saveHost, type InstallStep, type LaptopHost,
+  forgeKeyPath, hostDir, inventoryPath, knownHostsPath, loadHosts, saveHost, type InstallStep, type LaptopHost,
 } from "../cli/lib/laptop/state.ts";
 import { fakeContext, type ExecRule, type FakeContext } from "./lib/fake-context.ts";
 
@@ -1014,4 +1015,135 @@ test("a laptop herdr config that sets [ui.toast] or ui itself is left alone, wit
     assert.ok(line && /popup's warnings/.test(line), ctx.out_lines.join("\n"));
     assert.ok(ctx.out_lines.includes("  herdr notifications: set in your config"), ctx.out_lines.join("\n"));
   }
+});
+
+// --- A cloud host: the dev VM that OpenTofu creates (forge cloud create) ---
+
+const CLOUD_SETTINGS: CloudSettings = {
+  awsProfile: "forge-dev", region: "eu-west-3", instanceType: "m7i.2xlarge", diskGb: 200, budgetUsd: 60,
+  alertEmail: "ops@example.com", upstream: "example/agent-forge", fork: "bot-example/agent-forge",
+  botName: "Example Bot", botEmail: "1+bot-example@users.noreply.github.com",
+};
+// askCloudSettings' ten answers; the instance type and the disk take their defaults.
+const CLOUD_ANSWERS = [
+  "forge-dev", "eu-west-3", "", "", "60", "ops@example.com", "example/agent-forge", "bot-example/agent-forge",
+  "Example Bot", "1+bot-example@users.noreply.github.com",
+];
+const CLOUD_ALL: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude"];
+const TOKEN = "tok-abc";
+const CLOUD_RULES: ExecRule[] = [
+  { match: "tofu version", stdout: "OpenTofu v1.10.0\n" },
+  { match: "aws --version", stdout: "aws-cli/2.31.0 Python/3.13.7\n" },
+  { match: "describe-instance-types", stdout: '["nested-virtualization"]' },
+  { match: "checkip.amazonaws.com", stdout: "198.51.100.7\n" },
+  { match: "output -raw address", stdout: "203.0.113.20\n" },
+  { match: "ssh-keyscan", stdout: "203.0.113.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKey\n" },
+  { match: "'test' '-s' '.config/agent-forge/claude-token'", code: 1 },
+];
+const cloudHost = (): LaptopHost => ({
+  name: "forge-dev", kind: "cloud", address: "", port: 22, user: "alice", admin: "ubuntu",
+  adminKey: forgeKeyPath("forge-dev"), exposure: "public", done: [],
+});
+const noWait = async (): Promise<void> => {};
+
+// A new cloud host from its questions to herdr: the Include accepted, the
+// token pasted, the link and herdr's notifications declined.
+async function newCloud(): Promise<FakeContext> {
+  const ctx = laptop({ vm: null }, { rules: CLOUD_RULES, answers: ["dev", "alice", ...CLOUD_ANSWERS, 1, TOKEN, 2, 2] });
+  assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, cloud: true, sleep: noWait }), 0);
+  return ctx;
+}
+
+test("a new cloud host: settings asked, infra applied, address recorded, contributor playbook, no setup or image", async () => {
+  const ctx = await newCloud();
+  const host = loadHosts().find((h) => h.name === "forge-dev")!;
+  assert.equal(host.kind, "cloud");
+  assert.equal(host.address, "203.0.113.20");
+  assert.equal(host.admin, "ubuntu");
+  assert.equal(host.adminKey, forgeKeyPath("forge-dev"));
+  assert.deepEqual(host.done, CLOUD_ALL);
+  assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.7/32");
+  // OpenTofu, the first connection once sshd answers, the contributor playbook, herdr.
+  assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.20"), called(ctx).join("\n"));
+  assert.deepEqual(attached(ctx), [
+    `tofu -chdir=${CHECKOUT}/infra/aws apply -var-file=${join(hostDir("forge-dev"), "tofu.tfvars.json")}`,
+    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.20 true`,
+    `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`,
+    `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml`,
+    "herdr --remote forge-dev --remote-keybindings server",
+  ]);
+  assert.ok(ctx.calls.some((c) => c.join(" ").endsWith(`${CHECKOUT}/ansible/contributor.yml`)));
+  // No forge setup, no image, and never this machine's git identity: the dev VM commits as the bot.
+  assert.ok(!called(ctx).some((c) =>
+    /forge setup|image build|'forge' 'setup'|'image' 'build'|'git' 'config'/.test(c)), called(ctx).join("\n"));
+  assert.match(readFileSync(inventoryPath("forge-dev"), "utf8"), /forge_contributor_fork: "bot-example\/agent-forge"/);
+  assert.match(forgeSshFile(), /^Host forge-dev\n(  .*\n)*  ForwardAgent no$/m);
+  assert.ok(ctx.out_lines.includes("  Claude token: done"), ctx.out_lines.join("\n"));
+});
+
+test("the Claude token travels on stdin only", async () => {
+  const ctx = await newCloud();
+  assert.ok(!ctx.calls.some((c) => c.join(" ").includes(TOKEN)));
+  assert.ok(![...ctx.out_lines, ...ctx.err_lines].some((l) => l.includes(TOKEN)));
+  // execOptions follows the exec calls only: an attach call records none.
+  const execs = ctx.calls.filter((c) => !ctx.attachCalls.some((a) => a.argv === c));
+  assert.equal(execs.length, ctx.execOptions.length);
+  const i = execs.findIndex((c) => c.join(" ").includes("cat >"));
+  assert.ok(i >= 0, called(ctx).join("\n"));
+  assert.equal(ctx.execOptions[i]?.input, `${TOKEN}\n`);
+  // Never in a file on this machine.
+  for (const [rel, what] of snapshot(home)) {
+    if (what.startsWith("file ")) assert.ok(!readFileSync(join(home, rel), "utf8").includes(TOKEN), rel);
+  }
+});
+
+test("a cloud host whose first connection failed is retried, never forgotten", async () => {
+  saveHost(cloudHost());
+  saveCloudSettings("forge-dev", CLOUD_SETTINGS);
+  const state = join(hostDir("forge-dev"), "terraform.tfstate");
+  writeFileSync(state, "{}\n");
+  const ctx = laptop({ vm: null }, { rules: CLOUD_RULES, attachRules: [{ match: "ubuntu@203.0.113.20", code: 255 }] });
+  await assert.rejects(cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }),
+    /The VM step failed: run forge cloud create --host forge-dev to resume there\./);
+  assert.ok(attached(ctx).some((a) => a.startsWith("tofu ") && a.includes(" apply ")), attached(ctx).join("\n"));
+  assert.ok(existsSync(hostDir("forge-dev")));
+  assert.equal(readFileSync(state, "utf8"), "{}\n");
+  assert.deepEqual(loadHosts().map((h) => [h.name, h.done]), [["forge-dev", []]]);
+  assert.ok(!ctx.err_lines.some((l) => l.includes("forget these answers")));
+});
+
+test("a cloud VM that never answers on SSH stops the run after 36 tries, 5 s apart", async () => {
+  saveHost(cloudHost());
+  saveCloudSettings("forge-dev", CLOUD_SETTINGS);
+  const slept: number[] = [];
+  const ctx = laptop({ vm: null }, { rules: [{ match: "ssh-keyscan", stdout: "" }, ...CLOUD_RULES] });
+  await assert.rejects(cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: async (ms) => { slept.push(ms); } }),
+    /203\.0\.113\.20[\s\S]*forge cloud create --host forge-dev/);
+  assert.equal(called(ctx).filter((c) => c.startsWith("ssh-keyscan")).length, 36);
+  assert.deepEqual(slept, Array(35).fill(5000));
+  assert.ok(!attached(ctx).some((a) => a.includes("ubuntu@")));
+  assert.deepEqual(loadHosts().map((h) => h.name), ["forge-dev"]);
+});
+
+test("a re-run of a finished cloud host runs the playbook again, never OpenTofu or the token", async () => {
+  await newCloud();
+  const ctx = laptop({ vm: null }, { rules: CLOUD_RULES, answers: [2, 2] });
+  assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }), 0);
+  assert.deepEqual(attached(ctx), [
+    `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`,
+    `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml`,
+    "herdr --remote forge-dev --remote-keybindings server",
+  ]);
+  assert.ok(!called(ctx).some((c) => c.startsWith("tofu -chdir") || c.includes("claude-token")), called(ctx).join("\n"));
+  assert.deepEqual(asked(ctx), [LINK, TOASTS()]);
+  assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
+});
+
+test("--remote with a cloud host's address is refused: its SSH block would forward the agent", async () => {
+  saveHost({ ...cloudHost(), address: "203.0.113.20", done: CLOUD_ALL });
+  const ctx = laptop({ vm: null });
+  await assert.rejects(cmdInstall(ctx, { ...OPTS, remote: "203.0.113.20" }), (e: Error) =>
+    e instanceof ForgeError && /forge-dev/.test(e.message));
+  assert.deepEqual(asked(ctx), []);
+  assert.deepEqual(loadHosts().map((h) => h.name), ["forge-dev"]);
 });

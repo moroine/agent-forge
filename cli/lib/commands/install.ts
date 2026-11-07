@@ -1,8 +1,10 @@
 // forge install (spec "Sub-project 3: guided install"): installs or updates a
-// forge host from the laptop, the Lima VM forge-local or a remote VM
-// forge-<name>. Each step is recorded in hosts.json when it succeeds and
-// skipped on a re-run, so that a re-run picks up after a failure; a re-run of
-// a finished host is an update (playbook, setup and image again).
+// forge host from the laptop, the Lima VM forge-local, a remote VM
+// forge-<name>, or a cloud host forge-<name> (the contributor's dev VM, which
+// OpenTofu creates: `forge cloud create`). Each step is recorded in hosts.json
+// when it succeeds and skipped on a re-run, so that a re-run picks up after a
+// failure; a re-run of a finished host is an update (playbook, setup and image
+// again; a cloud host has only the playbook).
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync,
   statSync, symlinkSync, writeFileSync,
@@ -12,7 +14,11 @@ import { dirname, join, resolve } from "node:path";
 import { ForgeError, type Context } from "../context.ts";
 import { addLaptopBlock, laptopToasts, readConfig } from "../herdr-config.ts";
 import { forgeHome, herdrConfigPath, laptopDataDir, limaHome, repoRoot, sshDir } from "../paths.ts";
-import { ensureClaudeLogin, ensureGitIdentity, ensureImage, runSetup } from "../laptop/host-steps.ts";
+import {
+  applyInteractive, askCloudSettings, checkNestedVirt, currentPublicIp, infraAddress, infraFor, loadCloudSettings,
+  saveCloudSettings,
+} from "../laptop/cloud.ts";
+import { ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, runSetup } from "../laptop/host-steps.ts";
 import { renderInventory, writeInventoryOnce } from "../laptop/inventory.ts";
 import { chooseKey, githubAgent, keyLabel, listAgentKeys } from "../laptop/keys.ts";
 import {
@@ -30,13 +36,22 @@ import {
 } from "../laptop/state.ts";
 import { cmdOpen } from "./open.ts";
 
-// `lima` lets the tests skip ensureLimaVm's waits.
-export type InstallOptions = { remote?: string; host?: string; checkout?: string; lima?: LimaOptions };
+// `lima` lets the tests skip ensureLimaVm's waits, `sleep` the wait for a
+// cloud VM's sshd. `cloud` installs a new cloud host (forge cloud create).
+export type InstallOptions = {
+  remote?: string; host?: string; cloud?: boolean; checkout?: string; lima?: LimaOptions;
+  sleep?: (ms: number) => Promise<void>;
+};
 
 type Outcome = "done" | "already there";
 type Target = { kind: LaptopHost["kind"]; listed?: LaptopHost; address: string };
 
 const STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "identity", "claude", "setup", "image"];
+// A cloud host gets neither this machine's git identity (the agent commits as
+// the bot, which the playbook sets) nor forge setup and the image: the
+// agent's tests run them on the VM (spec §5.3).
+const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude"];
+const stepsFor = (kind: LaptopHost["kind"]): InstallStep[] => (kind === "cloud" ? CLOUD_STEPS : STEPS);
 // What a re-run of a finished host runs again: re-running is updating.
 const UPDATE: InstallStep[] = ["playbook", "setup", "image"];
 const LABELS: Record<InstallStep, string> = {
@@ -46,35 +61,56 @@ const LABELS: Record<InstallStep, string> = {
 const USER_NAME = /^[a-z_][a-z0-9_-]*$/;
 // A host name or an IP address: never an ssh option, never user@host.
 const ADDRESS = /^[A-Za-z0-9][A-Za-z0-9.:-]*$/;
+// The cloud VM's account, which OpenTofu gives the chosen key (Ubuntu's AMI).
+const CLOUD_ADMIN = "ubuntu";
+// A new cloud VM's sshd: probed every 5 s, for 3 minutes at most.
+const SSH_WAIT_MS = 5000;
+const SSH_TRIES = 36;
 
-// A remote's VM step is its first connection (it has no VM to create).
+// A remote's VM step is its first connection (it has no VM to create); a cloud
+// host's Claude step stores a token, not a login.
 const label = (step: InstallStep, kind: LaptopHost["kind"]): string =>
-  step === "vm" && kind === "remote" ? "first SSH connection" : LABELS[step];
+  step === "vm" && kind === "remote" ? "first SSH connection"
+    : step === "claude" && kind === "cloud" ? "Claude token"
+    : LABELS[step];
+
+// The command that resumes a host's install.
+const resumeCommand = (host: LaptopHost): string =>
+  host.kind === "remote" ? `forge install --host ${host.name}`
+    : host.kind === "cloud" ? `forge cloud create --host ${host.name}`
+    : "forge install";
 
 export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promise<number> {
   const checkout = opts.checkout ?? repoRoot();
   // 1-3. Which host, the laptop's tools, the key GitHub accepts.
   const target = await whichHost(ctx, opts);
   await checkPrerequisites(ctx, target.kind);
+  // A remote only. A cloud host is never forgotten (its directory holds the
+  // OpenTofu state): its VM step simply runs again.
   if (target.kind === "remote" && target.listed && !target.listed.done.includes("vm")) {
     await retryOrForget(ctx, target.listed);
   }
   const { key, agent } = await forgeKey(ctx, target.listed);
   // 4-5. A new host is saved, with its key, before anything is created.
-  const { host, vm } = target.kind === "lima"
-    ? await limaHost(ctx, target.listed, key, agent)
-    : { host: target.listed ?? (await newRemoteHost(ctx, target.address, key, agent)), vm: null };
+  let host: LaptopHost;
+  let vm: LimaInstance | null = null;
+  if (target.kind === "lima") ({ host, vm } = await limaHost(ctx, target.listed, key, agent));
+  else if (target.kind === "cloud") host = target.listed ?? (await newCloudHost(ctx, key, agent));
+  else host = target.listed ?? (await newRemoteHost(ctx, target.address, key, agent));
 
-  const finished = STEPS.every((s) => host.done.includes(s));
-  const resume = host.kind === "remote" ? `forge install --host ${host.name}` : "forge install";
+  const steps = stepsFor(host.kind);
+  const finished = steps.every((s) => host.done.includes(s));
+  const resume = resumeCommand(host);
   // A remote's first connection tests its answers: the next run offers to change them.
   const next = (s: InstallStep): string => s === "vm" && host.kind === "remote"
     ? `the next ${resume} offers to try again or to change these answers.`
     : `run ${resume} to resume there.`;
   const outcomes: [InstallStep, Outcome][] = [];
-  // Skipped when recorded (unless `always`), recorded when it succeeds. A
-  // failure names the step and the command that resumes there.
+  // Not a step of this host's kind: neither run nor shown. Skipped when
+  // recorded (unless `always`), recorded when it succeeds. A failure names the
+  // step and the command that resumes there.
   const step = async (s: InstallStep, run: () => Promise<Outcome>, always = false): Promise<void> => {
+    if (!steps.includes(s)) return;
     if (!always && host.done.includes(s)) { outcomes.push([s, "already there"]); return; }
     let outcome: Outcome;
     try {
@@ -83,19 +119,25 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
       if (!(e instanceof ForgeError)) throw e;
       throw new ForgeError(`${e.message}\nThe ${label(s, host.kind)} step failed: ${next(s)}`);
     }
-    host.done = STEPS.filter((x) => x === s || host.done.includes(x));
+    host.done = steps.filter((x) => x === s || host.done.includes(x));
     saveHost(host);
     outcomes.push([s, outcome]);
   };
 
   // 5-6. The machine: the Lima VM (started again when it is stopped, after a
-  // reboot), or the remote's first connection.
-  await step("vm", () => (host.kind === "lima" ? limaVm(ctx, host, checkout, opts.lima) : firstConnection(ctx, host)),
-    vm !== null && vm.status !== "Running");
+  // reboot), the cloud VM OpenTofu creates, or the remote's first connection.
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const machine = (): Promise<Outcome> => (host.kind === "lima" ? limaVm(ctx, host, checkout, opts.lima)
+    : host.kind === "cloud" ? cloudVm(ctx, host, checkout, sleep)
+    : firstConnection(ctx, host));
+  await step("vm", machine, vm !== null && vm.status !== "Running");
   // 7. Every run, so that a deleted inventory comes back; an existing one is
-  // kept, with the developer's edits.
+  // kept, with the developer's edits. A cloud host's also sets up the agent.
   await step("inventory", async () => {
-    const text = renderInventory(host, { forgeKey: key, adminKeyFile: host.adminKey, knownHosts: knownHostsPath() });
+    const text = renderInventory(host, {
+      forgeKey: key, adminKeyFile: host.adminKey, knownHosts: knownHostsPath(),
+      ...(host.kind === "cloud" ? { contributor: contributorVars(host.name) } : {}),
+    });
     return writeInventoryOnce(inventoryPath(host.name), text) === "written" ? "done" : "already there";
   }, true);
   // 8. On a finished host, or on a checkout that moved since the playbook last
@@ -103,7 +145,8 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
   // and recorded again. A HEAD that cannot be read counts as moved.
   const head = await checkoutHead(ctx, checkout);
   if (finished || (host.done.includes("playbook") && (!head || head !== host.deployed))) {
-    host.done = host.done.filter((s) => !UPDATE.includes(s));
+    const update = UPDATE.filter((s) => steps.includes(s));
+    host.done = host.done.filter((s) => !update.includes(s));
     saveHost(host);
   }
   await step("playbook", async () => {
@@ -115,7 +158,9 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
   await step("ssh", () => sshConfig(ctx, host), true);
   // 10. The host's account and runtime, over the alias.
   await step("identity", async () => ((await ensureGitIdentity(ctx, host)) === "set" ? "done" : "already there"));
-  await step("claude", async () => ((await ensureClaudeLogin(ctx, host)) === "logged-in" ? "done" : "already there"));
+  await step("claude", async () => (host.kind === "cloud"
+    ? ((await ensureClaudeToken(ctx, host)) === "stored" ? "done" : "already there")
+    : ((await ensureClaudeLogin(ctx, host)) === "logged-in" ? "done" : "already there")));
   await step("setup", async () => { await runSetup(ctx, host); return "done"; });
   await step("image", async () => ((await ensureImage(ctx, host, checkout)) === "built" ? "done" : "already there"));
   // 11. Not recorded steps: asked while the link, or herdr's notifications,
@@ -131,8 +176,9 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
 }
 
 // No option: forge-local when it is listed or nothing is (a first install),
-// else a question: never a VM nobody asked for. --host: an installed host.
-// --remote: the installed remote with that address, or a new one.
+// else a question: never a VM nobody asked for. --host: an installed host, of
+// any kind. --remote: the installed remote with that address, or a new one.
+// `cloud`: a new cloud host, whose address OpenTofu gives.
 async function whichHost(ctx: Context, opts: InstallOptions): Promise<Target> {
   if (opts.remote !== undefined && opts.host !== undefined) {
     throw new ForgeError("--remote and --host do not go together: --remote <address> for a new host, --host <name> for an installed one");
@@ -141,9 +187,15 @@ async function whichHost(ctx: Context, opts: InstallOptions): Promise<Target> {
     const listed = await selectHost(ctx, opts.host);
     return { kind: listed.kind, listed, address: listed.address };
   }
+  if (opts.cloud) return { kind: "cloud", address: "" };
   const hosts = loadHosts();
   if (opts.remote !== undefined) {
     if (!ADDRESS.test(opts.remote)) throw new ForgeError(`--remote takes a host name or an IP address, not ${opts.remote}`);
+    // A second, remote entry for a cloud VM would forward the SSH agent to it.
+    const cloud = hosts.find((h) => h.kind === "cloud" && h.address === opts.remote);
+    if (cloud) {
+      throw new ForgeError(`${opts.remote} is the cloud host ${cloud.name}: ${resumeCommand(cloud)} updates it`);
+    }
     return { kind: "remote", listed: hosts.find((h) => h.kind === "remote" && h.address === opts.remote), address: opts.remote };
   }
   const local = hosts.find((h) => h.name === LIMA_NAME);
@@ -239,7 +291,9 @@ async function retryOrForget(ctx: Context, host: LaptopHost): Promise<void> {
 }
 
 // Its directory (inventory and key), its entry, and its block in forge's SSH
-// file when that file exists.
+// file when that file exists. Never for a cloud host: its directory holds the
+// OpenTofu state, without which its AWS resources could not be stopped or
+// destroyed.
 function forgetEntry(name: string): void {
   rmSync(hostDir(name), { recursive: true, force: true });
   forgetHost(name);
@@ -263,8 +317,8 @@ async function refuseHandDefined(ctx: Context, name: string): Promise<void> {
   }
 }
 
-// What a remote host needs and forge cannot guess, asked once.
-async function newRemoteHost(ctx: Context, address: string, key: string, agent: string | undefined): Promise<LaptopHost> {
+// A new host's name, forge-<name>: free, and no Host block of the developer's.
+async function askHostName(ctx: Context): Promise<string> {
   const answer = (await ctx.prompt.ask("Host name: forge-<name>"))?.trim();
   if (!answer) throw new ForgeError("a remote host needs a name: forge-<name>, as forge-acme");
   const name = answer.startsWith("forge-") ? answer : `forge-${answer}`;
@@ -276,20 +330,53 @@ async function newRemoteHost(ctx: Context, address: string, key: string, agent: 
     throw new ForgeError(`${name} is already installed: forge install --host ${name} updates it`);
   }
   await refuseHandDefined(ctx, name);
-  const admin = (await ctx.prompt.ask("Admin account (default ubuntu)"))?.trim() || "ubuntu";
-  if (!USER_NAME.test(admin)) throw new ForgeError(`${admin} is not a valid account name`);
-  const exposure = await ctx.prompt.pick("Exposure", ["public: a cloud VM with a public address", "lan: a machine on your network"]);
-  if (exposure === null) throw new ForgeError("no exposure chosen: public or lan");
+  return name;
+}
+
+async function askForgeUser(ctx: Context, admin: string): Promise<string> {
   const login = userInfo().username;
   const user = (await ctx.prompt.ask(`Forge user name (default ${login})`))?.trim() || login;
   if (!USER_NAME.test(user)) throw new ForgeError(`${user} is not a valid user name: lowercase letters, digits, _ and -`);
   if (user === admin) throw new ForgeError(`the forge user must differ from the admin account (${admin})`);
+  return user;
+}
+
+// What a remote host needs and forge cannot guess, asked once.
+async function newRemoteHost(ctx: Context, address: string, key: string, agent: string | undefined): Promise<LaptopHost> {
+  const name = await askHostName(ctx);
+  const admin = (await ctx.prompt.ask("Admin account (default ubuntu)"))?.trim() || "ubuntu";
+  if (!USER_NAME.test(admin)) throw new ForgeError(`${admin} is not a valid account name`);
+  const exposure = await ctx.prompt.pick("Exposure", ["public: a cloud VM with a public address", "lan: a machine on your network"]);
+  if (exposure === null) throw new ForgeError("no exposure chosen: public or lan");
+  const user = await askForgeUser(ctx, admin);
   const host: LaptopHost = {
     name, kind: "remote", address, port: 22, user, admin, adminKey: await adminKey(ctx, name, key),
     exposure: exposure === 1 ? "public" : "lan", ...(agent ? { identityAgent: agent } : {}), done: [],
   };
   saveNewHost(host, key);
   return host;
+}
+
+// A cloud host: its name, its forge user and its cloud settings, asked once
+// and saved before anything is created. The admin account accepts the GitHub
+// key (OpenTofu installs its public half); the address comes from OpenTofu.
+async function newCloudHost(ctx: Context, key: string, agent: string | undefined): Promise<LaptopHost> {
+  const name = await askHostName(ctx);
+  const user = await askForgeUser(ctx, CLOUD_ADMIN);
+  const settings = await askCloudSettings(ctx);
+  const host: LaptopHost = {
+    name, kind: "cloud", address: "", port: 22, user, admin: CLOUD_ADMIN, adminKey: forgeKeyPath(name),
+    exposure: "public", ...(agent ? { identityAgent: agent } : {}), done: [],
+  };
+  saveCloudSettings(name, settings);
+  saveNewHost(host, key);
+  return host;
+}
+
+// The agent's repositories and the bot's git identity, from the cloud settings.
+function contributorVars(name: string): { upstream: string; fork: string; gitName: string; gitEmail: string } {
+  const s = loadCloudSettings(name);
+  return { upstream: s.upstream, fork: s.fork, gitName: s.botName, gitEmail: s.botEmail };
 }
 
 // The GitHub key (its public half, which IdentityFile names while the private
@@ -314,6 +401,38 @@ async function limaVm(ctx: Context, host: LaptopHost, checkout: string, lima?: L
   return "done";
 }
 
+// The cloud VM: checked for nested virtualization, then created (or found
+// unchanged) by OpenTofu, which shows its plan and asks; SSH is opened to this
+// machine's current address only. Then, once sshd answers, the first
+// connection, as for a remote. Run again until it succeeds: OpenTofu's state
+// knows what exists.
+async function cloudVm(
+  ctx: Context, host: LaptopHost, checkout: string, sleep: (ms: number) => Promise<void>,
+): Promise<Outcome> {
+  const settings = loadCloudSettings(host.name);
+  await checkNestedVirt(ctx, settings);
+  saveCloudSettings(host.name, { ...settings, sshCidr: `${await currentPublicIp(ctx)}/32` });
+  const infra = infraFor(host.name, checkout);
+  await applyInteractive(ctx, infra);
+  host.address = await infraAddress(ctx, infra);
+  await waitForSsh(ctx, host.address, sleep);
+  return firstConnection(ctx, host);
+}
+
+// A new instance boots for a minute or two before sshd answers. The keys
+// ssh-keyscan prints only say it does: the first connection asks about them.
+async function waitForSsh(ctx: Context, address: string, sleep: (ms: number) => Promise<void>): Promise<void> {
+  for (let i = 0; i < SSH_TRIES; i++) {
+    if (i > 0) await sleep(SSH_WAIT_MS);
+    const r = await ctx.exec(["ssh-keyscan", "-T", "5", address]);
+    if (r.stdout.split("\n").some((l) => l.trim() !== "" && !l.startsWith("#"))) return;
+  }
+  throw new ForgeError(
+    `${address} did not answer on SSH within ${(SSH_TRIES * SSH_WAIT_MS) / 60000} minutes: ` +
+    "check the instance in the AWS console, and that this machine's public address has not changed",
+  );
+}
+
 // In the terminal, so that OpenSSH asks about the new host's key once, in the
 // open; exactly one key is offered (sshd allows two attempts, fail2ban bans).
 async function firstConnection(ctx: Context, host: LaptopHost): Promise<Outcome> {
@@ -330,14 +449,16 @@ async function firstConnection(ctx: Context, host: LaptopHost): Promise<Outcome>
 
 // From the checkout, whose HEAD the playbook deploys (its directory too: an
 // ansible.cfg wherever forge was run from is never read); the collections
-// live in forge's data directory.
+// live in forge's data directory. A cloud host's playbook is site.yml plus the
+// agent's role.
 async function playbook(ctx: Context, host: LaptopHost, checkout: string): Promise<void> {
   const collections = join(laptopDataDir(), "collections");
   const opts = { env: { ANSIBLE_COLLECTIONS_PATH: collections }, cwd: checkout };
   const requirements = join(checkout, "ansible", "requirements.yml");
   const galaxy = await ctx.attach(["ansible-galaxy", "collection", "install", "-r", requirements, "-p", collections], opts);
   if (galaxy !== 0) throw new ForgeError(`ansible-galaxy collection install failed (exit code ${galaxy})`);
-  const play = await ctx.attach(["ansible-playbook", "-i", inventoryPath(host.name), join(checkout, "ansible", "site.yml")], opts);
+  const file = host.kind === "cloud" ? "contributor.yml" : "site.yml";
+  const play = await ctx.attach(["ansible-playbook", "-i", inventoryPath(host.name), join(checkout, "ansible", file)], opts);
   if (play !== 0) throw new ForgeError(`ansible-playbook failed (exit code ${play})`);
 }
 

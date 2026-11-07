@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createContext, ForgeError } from "../cli/lib/context.ts";
 import type { Context } from "../cli/lib/context.ts";
 import {
-  ensureClaudeLogin, ensureGitIdentity, ensureImage, imageDecision, runSetup,
+  ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, imageDecision, runSetup,
 } from "../cli/lib/laptop/host-steps.ts";
 import type { LaptopHost } from "../cli/lib/laptop/state.ts";
 import { fakeContext } from "./lib/fake-context.ts";
@@ -89,6 +89,33 @@ test("the Claude login is attached with a tty when the credentials are missing",
 test("a failed Claude login names the step", async () => {
   const ctx = fakeContext({ rules: [{ match: "'test' '-e'", code: 1 }], attachCode: 1 });
   await assert.rejects(ensureClaudeLogin(ctx, host), (e: Error) => e instanceof ForgeError && /claude auth login/.test(e.message));
+});
+
+// The cloud host's Claude credential: a setup-token, pasted on the laptop.
+const TOKEN_PROBE = "'test' '-s' '.config/agent-forge/claude-token'";
+
+test("a stored Claude token is kept and nothing is asked", async () => {
+  const ctx = fakeContext({ rules: [{ match: TOKEN_PROBE, code: 0 }] });
+  assert.equal(await ensureClaudeToken(ctx, host), "already");
+  assert.deepEqual(ctx.err_lines, []);
+  assert.equal(ctx.calls.length, 1);
+});
+
+test("the pasted Claude token is trimmed and written over ssh's stdin into a private file", async () => {
+  const ctx = fakeContext({ rules: [{ match: TOKEN_PROBE, code: 1 }], answers: ["  tok-abc \n"] });
+  assert.equal(await ensureClaudeToken(ctx, host), "stored");
+  assert.deepEqual(ctx.calls[1], ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "forge-acme", "--",
+    "'sh' '-c' 'umask 077 && mkdir -p .config/agent-forge && cat > .config/agent-forge/claude-token'"]);
+  assert.deepEqual(ctx.execOptions[1], { input: "tok-abc\n" });
+});
+
+test("an empty or malformed Claude token is refused, without quoting it, and nothing is written", async () => {
+  for (const answer of ["", null, "s3cr3t abc", "s3cr3t'x"]) {
+    const ctx = fakeContext({ rules: [{ match: TOKEN_PROBE, code: 1 }], answers: [answer] });
+    await assert.rejects(ensureClaudeToken(ctx, host), (e: Error) =>
+      e instanceof ForgeError && !e.message.includes("s3cr3t"), String(answer));
+    assert.equal(ctx.calls.length, 1, String(answer));
+  }
 });
 
 test("runSetup attaches forge setup and fails on a non-zero code", async () => {

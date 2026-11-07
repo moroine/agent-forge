@@ -1,5 +1,6 @@
 // Host account and runtime steps of `forge install`, run from the laptop over
-// the SSH alias: git identity, Claude login, `forge setup`, `agent-base` image.
+// the SSH alias: git identity, Claude login (or a cloud host's Claude token),
+// `forge setup`, `agent-base` image.
 import { ForgeError, mustSucceed } from "../context.ts";
 import type { Context } from "../context.ts";
 import { remoteAttach, remoteExec } from "./remote.ts";
@@ -52,6 +53,28 @@ export async function ensureClaudeLogin(ctx: Context, host: LaptopHost): Promise
     throw new ForgeError("claude auth login did not finish");
   }
   return "logged-in";
+}
+
+// A cloud host's Claude credential (spec §5.3): a `claude setup-token` token,
+// one year, model requests only, revocable in claude.ai (Settings > Claude
+// Code). Relative to the forge user's home; the agent's launcher reads it.
+export const CLAUDE_TOKEN_FILE = ".config/agent-forge/claude-token";
+const TOKEN = /^[A-Za-z0-9._~+/=-]+$/;
+
+// Pasted at a prompt that does not echo it, then written on the host through
+// ssh's stdin: never in an argv, a printed line or a file on this machine.
+// An error never quotes it.
+export async function ensureClaudeToken(ctx: Context, host: LaptopHost): Promise<"stored" | "already"> {
+  if ((await remoteExec(ctx, host, ["test", "-s", CLAUDE_TOKEN_FILE])).code === 0) return "already";
+  ctx.out(`Claude Code on ${host.name} needs a token: run claude setup-token on this machine, then paste the token it prints.`);
+  const token = ((await ctx.prompt.askSecret("Claude token")) ?? "").trim();
+  if (!token) throw new ForgeError("no Claude token given: paste the token claude setup-token prints");
+  if (!TOKEN.test(token)) {
+    throw new ForgeError("that is not a Claude token (letters, digits and . _ ~ + / = - only, no spaces): paste only what claude setup-token prints");
+  }
+  await mustSucceed("writing the Claude token on the host", remoteExec(ctx, host,
+    ["sh", "-c", `umask 077 && mkdir -p .config/agent-forge && cat > ${CLAUDE_TOKEN_FILE}`], `${token}\n`));
+  return "stored";
 }
 
 export async function runSetup(ctx: Context, host: LaptopHost): Promise<void> {
