@@ -438,6 +438,9 @@ async function waitForSsh(ctx: Context, address: string, sleep: (ms: number) => 
 async function firstConnection(ctx: Context, host: LaptopHost): Promise<Outcome> {
   mkdirSync(dirname(knownHostsPath()), { recursive: true, mode: 0o700 });
   const argv = ["ssh", "-o", sshOption("UserKnownHostsFile", knownHostsPath()), "-o", "IdentitiesOnly=yes"];
+  // By address, not by the alias whose ForwardAgent no would apply: a Host *
+  // of ~/.ssh/config must not forward the agent to the dev VM.
+  if (host.kind === "cloud") argv.push("-o", "ForwardAgent=no");
   if (host.identityAgent) argv.push("-o", sshOption("IdentityAgent", host.identityAgent));
   argv.push("-i", host.adminKey, `${host.admin}@${host.address}`, "true");
   const code = await ctx.attach(argv);

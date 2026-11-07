@@ -1067,7 +1067,8 @@ test("a new cloud host: settings asked, infra applied, address recorded, contrib
   assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.20"), called(ctx).join("\n"));
   assert.deepEqual(attached(ctx), [
     `tofu -chdir=${CHECKOUT}/infra/aws apply -var-file=${join(hostDir("forge-dev"), "tofu.tfvars.json")}`,
-    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.20 true`,
+    // By address, not by the alias: the alias's ForwardAgent no would not apply.
+    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.20 true`,
     `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`,
     `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml`,
     "herdr --remote forge-dev --remote-keybindings server",
@@ -1076,7 +1077,9 @@ test("a new cloud host: settings asked, infra applied, address recorded, contrib
   // No forge setup, no image, and never this machine's git identity: the dev VM commits as the bot.
   assert.ok(!called(ctx).some((c) =>
     /forge setup|image build|'forge' 'setup'|'image' 'build'|'git' 'config'/.test(c)), called(ctx).join("\n"));
-  assert.match(readFileSync(inventoryPath("forge-dev"), "utf8"), /forge_contributor_fork: "bot-example\/agent-forge"/);
+  const inventory = readFileSync(inventoryPath("forge-dev"), "utf8");
+  assert.match(inventory, /forge_contributor_fork: "bot-example\/agent-forge"/);
+  assert.match(inventory, /ansible_ssh_common_args: ".*-o ForwardAgent=no.*"/);
   assert.match(forgeSshFile(), /^Host forge-dev\n(  .*\n)*  ForwardAgent no$/m);
   assert.ok(ctx.out_lines.includes("  Claude token: done"), ctx.out_lines.join("\n"));
 });

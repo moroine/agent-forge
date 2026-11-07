@@ -24,6 +24,10 @@ export function renderInventory(
   const path = (name: string, v: string): string => `-o ${shellQuote(sshOption(name, v))}`;
   const args = ["-o IdentitiesOnly=yes", path("UserKnownHostsFile", o.knownHosts)];
   if (h.kind === "lima") args.push(`-o HostKeyAlias=${HOST_KEY_ALIAS}`, "-o StrictHostKeyChecking=accept-new");
+  // Ansible connects by address, not by the alias whose ForwardAgent no would
+  // apply: a Host * of ~/.ssh/config must not forward the agent to the dev VM
+  // (a -o on the command line wins over the config files).
+  if (h.kind === "cloud") args.push("-o ForwardAgent=no");
   if (h.identityAgent) args.push(path("IdentityAgent", h.identityAgent));
   // No ansible_port for a remote host: an explicit one would stop the preflight
   // from probing forge_ssh_port, locking out a developer who edits it. Lima

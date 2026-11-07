@@ -136,3 +136,17 @@ test("a cloud inventory carries the contributor variables as quoted scalars", ()
   assert.match(t, /forge_exposure: "public"/);
   assert.doesNotMatch(t, /ansible_port|HostKeyAlias/);
 });
+
+// The playbook connects by address, not by the alias: the alias's
+// ForwardAgent no would not apply, and a `Host *` of the developer's could
+// forward the agent to the dev VM. A -o on the command line wins over it.
+test("a cloud inventory turns agent forwarding off, whatever ~/.ssh/config says", { skip: !hasSsh }, () => {
+  const cloud: LaptopHost = { ...remote, name: "forge-dev", kind: "cloud" };
+  const args = commonArgs(renderInventory(cloud, opts()));
+  assert.ok(args.join(" ").includes("-o ForwardAgent=no"), args.join(" "));
+  const config = join(mkdtempSync(join(tmpdir(), "inv-")), "config");
+  writeFileSync(config, "Host *\n  ForwardAgent yes\n");
+  const r = spawnSync("ssh", ["-F", config, "-G", ...args, "203.0.113.20"], { encoding: "utf8" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /^forwardagent no$/m);
+});
