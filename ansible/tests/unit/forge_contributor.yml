@@ -1,0 +1,27 @@
+---
+- name: Forge contributor input checks
+  hosts: contributor_cases
+  gather_facts: false
+  tasks:
+    - name: Run the input checks
+      block:
+        - name: Include the input checks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/forge_contributor/tasks/inputs.yml"
+        - name: Record success
+          ansible.builtin.set_fact:
+            unit_outcome: passed
+      rescue:
+        - name: Record failure
+          ansible.builtin.set_fact:
+            unit_outcome: failed
+            unit_message: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Check the outcome
+      ansible.builtin.assert:
+        that:
+          - unit_outcome == unit_expect
+          - unit_expect == 'passed' or unit_expect_message in unit_message
+        fail_msg: >-
+          {{ inventory_hostname }}: expected {{ unit_expect }}
+          ({{ unit_expect_message | default('') }}), got {{ unit_outcome }}:
+          {{ unit_message | default('') }}

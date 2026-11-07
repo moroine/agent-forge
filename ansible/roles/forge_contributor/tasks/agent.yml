@@ -1,0 +1,83 @@
+---
+- name: Clone the upstream repository  # noqa: latest[git]
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.git:
+    repo: "https://github.com/{{ forge_contributor_upstream }}.git"
+    dest: "{{ forge_contributor_clone_dir }}"
+    # Never update: a re-run of the playbook must not touch the agent's
+    # branches and uncommitted work.
+    update: false
+
+- name: List the clone's remotes  # noqa: command-instead-of-module (the git module has no remote handling)
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.command: git -C "{{ forge_contributor_clone_dir }}" remote
+  register: forge_contributor_remotes
+  changed_when: false
+
+- name: Add the fork remote  # noqa: command-instead-of-module
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.command: >-
+    git -C "{{ forge_contributor_clone_dir }}" remote add fork
+    "https://github.com/{{ forge_contributor_fork }}.git"
+  when: "'fork' not in forge_contributor_remotes.stdout_lines"
+  changed_when: true
+
+- name: Set the bot's git identity and turn signing off
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  community.general.git_config:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    scope: global
+  loop:
+    - {name: user.name, value: "{{ forge_contributor_git_name }}"}
+    - {name: user.email, value: "{{ forge_contributor_git_email }}"}
+    - {name: commit.gpgsign, value: "false"}
+
+- name: Create ~/.claude
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.file:
+    path: "{{ forge_contributor_home }}/.claude"
+    state: directory
+    mode: "0755"
+
+# Security: container/pre-bash.sh treats a missing or unreadable forge-mode as
+# autonomous, which would allow pushes and PRs. No ignore_errors, no condition:
+# the play must fail if this marker cannot be written.
+- name: Mark the agent as a contributor
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.copy:
+    content: "contributor\n"
+    dest: "{{ forge_contributor_home }}/.claude/forge-mode"
+    owner: "{{ forge_contributor_user }}"
+    mode: "0644"
+
+- name: Install the clone's Ansible collections
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.command: >-
+    ansible-galaxy collection install
+    -r "{{ forge_contributor_clone_dir }}/ansible/requirements.yml"
+  register: forge_contributor_collections
+  changed_when: "'Installing' in forge_contributor_collections.stdout"
+
+- name: Create ~/.local/bin
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.file:
+    path: "{{ forge_contributor_home }}/.local/bin"
+    state: directory
+    mode: "0755"
+
+- name: Install the launcher
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.template:
+    src: forge-contributor.j2
+    dest: "{{ forge_contributor_home }}/.local/bin/forge-contributor"
+    mode: "0755"

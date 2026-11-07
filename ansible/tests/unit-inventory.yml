@@ -123,3 +123,20 @@ all:
           forge_ssh_port: 22
           unit_expect_port: 22
           unit_expect_probe: skipped
+    contributor_cases:
+      vars:
+        forge_contributor_upstream: example/agent-forge
+        forge_contributor_fork: bot-example/agent-forge
+        forge_contributor_git_name: Example Bot
+        forge_contributor_git_email: 1+bot-example@users.noreply.github.com
+      hosts:
+        contributor_valid:
+          unit_expect: passed
+        contributor_url_upstream:
+          forge_contributor_upstream: https://x:tok@github.com/example/agent-forge
+          unit_expect: failed
+          unit_expect_message: forge_contributor_upstream
+        contributor_no_email:
+          forge_contributor_git_email: ""
+          unit_expect: failed
+          unit_expect_message: forge_contributor_git_email

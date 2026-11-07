@@ -1,0 +1,28 @@
+---
+# The role builds the GitHub URLs itself from owner/repo, so a URL, let alone
+# one carrying a credential, can never reach the clone's remotes.
+- name: Check the repositories are owner/repo names
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_upstream is defined
+      - forge_contributor_upstream is match('^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$')
+    fail_msg: "forge_contributor_upstream must be owner/repo (got: {{ forge_contributor_upstream | default('nothing') }})."
+
+- name: Check the fork is an owner/repo name
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_fork is defined
+      - forge_contributor_fork is match('^[A-Za-z0-9-]+/[A-Za-z0-9._-]+$')
+    fail_msg: "forge_contributor_fork must be owner/repo (got: {{ forge_contributor_fork | default('nothing') }})."
+
+- name: Check the git name
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_git_name | default('') | length > 0
+    fail_msg: forge_contributor_git_name must not be empty.
+
+- name: Check the git email
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_git_email | default('') is search('@')
+    fail_msg: forge_contributor_git_email must be an email address.

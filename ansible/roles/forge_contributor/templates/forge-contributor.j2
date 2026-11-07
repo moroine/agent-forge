@@ -1,0 +1,26 @@
+#!/usr/bin/env bash
+# Launches Claude Code in the contributor's clone. Managed by Ansible.
+set -e
+
+clone={{ forge_contributor_clone_dir | quote }}
+token_file="$HOME/.config/agent-forge/claude-token"
+
+if [ ! -d "$clone/.git" ]; then
+  echo "forge-contributor: $clone is missing; re-run 'forge cloud create' to install it." >&2
+  exit 1
+fi
+
+# The token is read, never printed.
+if [ -r "$token_file" ]; then
+  CLAUDE_CODE_OAUTH_TOKEN="$(cat "$token_file")"
+  export CLAUDE_CODE_OAUTH_TOKEN
+fi
+
+cd "$clone"
+
+# Claude Code keeps a directory's conversations in ~/.claude/projects/<cwd, / as ->/.
+project_dir="$HOME/.claude/projects/$(pwd | tr '/' '-')"
+if compgen -G "$project_dir/*.jsonl" > /dev/null; then
+  exec claude --continue "$@"
+fi
+exec claude "$@"

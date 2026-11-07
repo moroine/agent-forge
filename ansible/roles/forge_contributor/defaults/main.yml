@@ -1,0 +1,35 @@
+---
+# Inputs, with no default (the inventory sets them): forge_contributor_upstream
+# and forge_contributor_fork (owner/repo), forge_contributor_git_name and
+# forge_contributor_git_email (the bot's identity).
+forge_contributor_user: "{{ forge_users[0].name }}"
+forge_contributor_home: "/home/{{ forge_contributor_user }}"
+forge_contributor_clone_dir: "{{ forge_contributor_home }}/{{ forge_contributor_upstream | basename }}"
+
+# The toolchain below is what the agent needs to run every test of
+# agent-forge; another project replaces this list. Each download is pinned by
+# version and verified by sha256.
+forge_contributor_apt_packages:
+  - qemu-system-x86
+  - qemu-utils
+  - ansible-lint
+
+# Lima >= 2.1.2 is needed by ansible/tests/vm-test.sh --lima. The sha256 is
+# the line of the release's SHA256SUMS for lima-<v>-Linux-x86_64.tar.gz.
+forge_contributor_lima_version: "2.3.0"
+forge_contributor_lima_url: >-
+  https://github.com/lima-vm/lima/releases/download/v{{ forge_contributor_lima_version }}/lima-{{ forge_contributor_lima_version }}-Linux-x86_64.tar.gz
+forge_contributor_lima_sha256: cc8ba97f1c801b899f7c9eda9919dfc4ce4fa2c140c53e5add15aa2d0a1936f9
+
+# Keep in step with .github/workflows/ci.yml.
+forge_contributor_betterleaks_version: "1.10.0"
+forge_contributor_betterleaks_url: "https://github.com/betterleaks/betterleaks/releases/download/\
+  v{{ forge_contributor_betterleaks_version }}/\
+  betterleaks_{{ forge_contributor_betterleaks_version }}_linux_x64.tar.gz"
+forge_contributor_betterleaks_sha256: 9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe
+
+# From the release's tofu_<v>_SHA256SUMS.
+forge_contributor_tofu_version: "1.13.9"
+forge_contributor_tofu_url: >-
+  https://github.com/opentofu/opentofu/releases/download/v{{ forge_contributor_tofu_version }}/tofu_{{ forge_contributor_tofu_version }}_linux_amd64.tar.gz
+forge_contributor_tofu_sha256: b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857

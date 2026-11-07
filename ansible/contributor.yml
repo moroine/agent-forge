@@ -1,0 +1,19 @@
+---
+# Turns an agent-forge host into the contributor's dev VM: site.yml first
+# (hardening, firewall, Incus, the forge user), then the forge_contributor
+# role (clone, toolchain, bot identity, `contributor` mode, launcher).
+# `forge cloud create` runs it. By hand, from a checkout:
+#   ansible-galaxy collection install -r ansible/requirements.yml
+#   ansible-playbook -i inventory.yml ansible/contributor.yml
+# The inventory also sets the forge_contributor_* inputs (see the role).
+- name: Provision the host
+  ansible.builtin.import_playbook: site.yml
+
+- name: Provision the contributor
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Apply the forge_contributor role
+      ansible.builtin.import_role:
+        name: forge_contributor

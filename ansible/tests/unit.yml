@@ -18,3 +18,5 @@
   ansible.builtin.import_playbook: unit/forge_users.yml
 - name: Site playbook structure
   ansible.builtin.import_playbook: unit/site_structure.yml
+- name: Forge contributor
+  ansible.builtin.import_playbook: unit/forge_contributor.yml
