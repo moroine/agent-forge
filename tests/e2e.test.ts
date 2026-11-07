@@ -253,7 +253,7 @@ test("--remote and --host are refused outside the laptop commands that take them
     assert.match(remote.stderr, /^Error: --remote only goes with install/m, cmd);
     const host = forge([cmd, "--host", "forge-acme"]);
     assert.equal(host.status, 1, `${cmd}: ${host.stderr}`);
-    assert.match(host.stderr, /^Error: --host only goes with install, open, fetch and ship: .*forge fetch --host <name>, forge ship <task> --host <name>$/m, cmd);
+    assert.match(host.stderr, /^Error: --host only goes with install, open, fetch, ship and cloud: .*forge ship <task> --host <name>, forge cloud start --host <name>$/m, cmd);
   }
   const open = forge(["open", "--remote", "203.0.113.10"], "", { FORGE_SIDE: "laptop" });
   assert.equal(open.status, 1);
