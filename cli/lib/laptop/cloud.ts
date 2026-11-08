@@ -109,7 +109,7 @@ export async function askCloudSettings(ctx: Context): Promise<CloudSettings> {
     (v) => /^[a-z0-9-]+\.[a-z0-9]+$/.test(v), "a type such as m7i.2xlarge");
   const diskGb = positiveInt("disk size", await ask(ctx, "Disk size in GB", String(DEFAULT_DISK_GB)), MIN_DISK_GB);
   const budgetUsd = positiveInt("budget", await ask(ctx, "Monthly budget alert in USD"), 1);
-  const alertEmail = checked("alert email", await ask(ctx, "Email for budget and idle alerts"), validEmail, "an email address");
+  const alertEmail = checked("alert email", await ask(ctx, "Email for budget alerts (the idle stop sends none)"), validEmail, "an email address");
   const upstream = checked("upstream", await ask(ctx, "Upstream repository (owner/repo)"), validRepo, "owner/repo");
   const fork = checked("fork", await ask(ctx, "The agent's fork (owner/repo)"), validRepo, "owner/repo");
   const botName = checked("bot name", await ask(ctx, "Git author name of the agent"), (v) => v.length > 0, "a non-empty name");

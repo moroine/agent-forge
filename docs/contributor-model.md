@@ -25,13 +25,30 @@ yours and no AWS credential, and your SSH agent is never forwarded to it.
 **Status.** The dev VM works. Publishing does not yet: the relay that pushes
 the agent's branches to its fork and opens pull requests comes next. Until
 then the agent cannot publish. The `contributor` mode of the hook blocks
-`git push` and `gh`, and the VM holds no GitHub credential. You fetch its work
-yourself.
+`git push` and `gh`, and the VM holds no GitHub credential. The agent's work
+stays on the VM, where you read it: in herdr, or over `ssh <host>`.
 
 ## Before you start
 
 - A dedicated AWS account, and a named profile for it in the AWS CLI
   (`aws configure --profile <profile>`). Do not reuse a production account.
+  The profile needs rights on EC2 (instances, volumes, Elastic IPs, the VPC,
+  subnets, internet gateways, route tables, security groups and tags, and
+  describing instance types), CloudWatch alarms, AWS Budgets, and reading SSM
+  parameters (Canonical publishes the Ubuntu image's ID there). It needs no
+  IAM rights: forge creates no role.
+- Enough EC2 vCPUs. An `m7i.2xlarge` needs 8 vCPUs of the "Running On-Demand
+  Standard (A, C, D, H, I, M, R, T, Z) instances" quota, and a new account may
+  have less. Check it in the region you will use:
+
+  ```bash
+  aws service-quotas get-service-quota --service-code ec2 --quota-code L-1216C47A \
+    --profile <profile> --region <region> --query Quota.Value
+  ```
+
+  If it is under 8, ask for more in the Service Quotas console (Amazon
+  Elastic Compute Cloud, that quota, "Request increase"). AWS can take a while
+  to answer.
 - OpenTofu and the AWS CLI on your machine: `brew install opentofu awscli` on
   macOS, or your distribution's packages on Linux.
 - The agent's GitHub account: a separate account, a fork of the repository
@@ -49,22 +66,26 @@ forge cloud create
 It asks for a host name (`forge-<name>`, for example `forge-dev`), then the
 AWS profile, the region (for example `eu-west-3`), the
 instance type (default `m7i.2xlarge`), the disk size (default 200 GB), a
-monthly budget in USD, an email for budget and idle alerts, the upstream
+monthly budget in USD, an email for budget alerts, the upstream
 repository, the agent's fork (`owner/repo`), and the agent's git name and
 email. The answers are kept in `cloud.json` (see "Where forge keeps its
 files"), so the next run asks nothing.
 
 It checks that the instance type supports nested virtualization, shows
-OpenTofu's plan, and waits for your `yes`. It creates one instance, one Elastic
-IP, an encrypted root disk of the size you chose, a security group
-that opens SSH to your current address only, a monthly budget that mails you at
-80 % of the spend and at 100 % of the forecast, and an idle alarm. An
-`m7i.2xlarge` costs real money while it runs: stop it when you do not use it.
+OpenTofu's plan, and waits for your `yes`. It creates a network of its own
+(a VPC, one public subnet, an internet gateway and a route table), one
+instance, one Elastic IP, an encrypted root disk of the size you chose, a
+security group that opens SSH to your current address only, a monthly budget
+that mails you at 80 % of the spend and at 100 % of the forecast, and an idle
+alarm. An `m7i.2xlarge` costs real money while it runs: stop it when you do
+not use it. Stopped, the instance costs nothing, but AWS still bills its disk
+(per GB and month, at the size you chose) and its public IPv4 address (the
+Elastic IP, per hour, running or not).
 
 Then it installs the VM with Ansible. On the first SSH connection OpenSSH asks
 you to accept the new host's key; check it is the right machine and answer
-`yes`. The install is resumable: if a step fails, run `forge cloud create`
-again.
+`yes`. The install is resumable: if a step fails, run
+`forge cloud create --host <name>` again.
 
 ### The Claude credential
 
@@ -84,10 +105,11 @@ To replace an expired or revoked token there is no forge command yet. Make a
 new one with `claude setup-token`, then:
 
 ```bash
-ssh <host> 'umask 077 && cat > .config/agent-forge/claude-token'
+read -rs t && printf '%s\n' "$t" | ssh <host> 'umask 077 && mkdir -p .config/agent-forge && cat > .config/agent-forge/claude-token && chmod 600 .config/agent-forge/claude-token'; unset t
 ```
 
-Paste the token, press Enter, then Ctrl-D. `<host>` is the VM's name, for example `forge-dev`.
+Paste the token at the silent prompt and press Enter. `<host>` is the VM's
+name, for example `forge-dev`.
 
 ## Day to day
 
@@ -101,8 +123,14 @@ move networks. In herdr on the VM, run `forge-contributor` in a pane: it
 starts Claude Code in the clone, and continues the last conversation if there
 is one.
 
+Start and stop only start and stop the VM and set the SSH address. When your
+checkout's `infra/aws` would change anything else (after a `git pull`, say),
+they refuse: run `forge cloud create --host <name>`, which shows OpenTofu's
+plan and applies it after your `yes`, then installs the VM again.
+
 A forgotten VM stops itself: the idle alarm stops it after two hours of low
-CPU (below 5 % on average). The next `forge cloud start` starts it again.
+CPU (below 5 % on average). The stop is silent, with no email; the next
+`forge cloud start` starts it again.
 
 ## Rebuild
 
@@ -111,8 +139,19 @@ forge cloud rebuild
 ```
 
 It replaces the instance with a new one and installs it again. The Elastic IP
-stays. The disk goes, with the clone and every branch not yet published, so
-fetch what you want to keep first. forge asks you to confirm.
+stays. The disk goes, with the clone and every branch on it: until the relay
+exists, none of the agent's work is published anywhere else. forge asks you to
+confirm.
+
+## If you suspect the dev VM is compromised
+
+1. Stop it: `forge cloud stop`.
+2. Revoke its Claude token in claude.ai (see "The Claude credential").
+3. Rebuild it: `forge cloud rebuild`, which asks for a new token.
+
+The bot's GitHub credentials were never on the VM, nor your SSH key, your SSH
+agent or any AWS credential. Once the relay exists, also look at the bot's
+recent activity on GitHub and at the relay's audit log.
 
 ## Your terminal
 
@@ -126,13 +165,19 @@ set `clipboard-write = deny`.
 For a cloud host named `<name>`, in `<laptop state>/hosts/<name>/`, where
 `<laptop state>` is `$XDG_CONFIG_HOME/agent-forge` or `~/.config/agent-forge`:
 
-- `cloud.json`: your answers. Edit it by hand to fix a mistyped setting.
+- `cloud.json`: your answers. Edit it by hand to fix a mistyped setting. The
+  upstream, the fork and the bot's name and email reach the VM through
+  `inventory.yml`, which is written once: after editing one of them, delete
+  `inventory.yml` in the same directory, and the next
+  `forge cloud create --host <name>` writes it again.
 - `tofu.tfvars.json`: the variables forge gives OpenTofu, rewritten at each
   command.
 - `terraform.tfstate`: the OpenTofu state. Never delete it while the VM
   exists: OpenTofu would lose track of what it created.
 - `tofu/`: OpenTofu's data directory.
-- `inventory.yml`: the Ansible inventory.
+- `inventory.yml`: the Ansible inventory, written once (your edits are kept).
+- `forge-key.pub`: the public half of the key you chose, which the VM's
+  accounts accept.
 
 ## Remove everything
 
@@ -145,12 +190,22 @@ TF_DATA_DIR="$D/tofu" tofu -chdir=infra/aws destroy -var-file="$D/tofu.tfvars.js
 
 OpenTofu lists what it will destroy and asks for `yes`. This deletes the
 instance, its disk (and everything on it), the Elastic IP, the security group,
-the budget and the alarm.
+the VPC, its subnet, internet gateway and route table, the budget and the
+alarm.
 
-Afterwards forge forgets nothing by itself. Delete by hand:
+Afterwards forge forgets nothing by itself. Note the host's `address` in
+`<laptop state>/hosts.json`, then delete by hand:
 
-- `<laptop state>/hosts/<name>/`, only once `tofu destroy` has succeeded;
+- `<laptop state>/hosts/<name>/`, `forge-key.pub` included, only once
+  `tofu destroy` has succeeded;
 - the host's entry in `<laptop state>/hosts.json`;
+- its SSH block, `Host <name>` in `~/.ssh/config.d/agent-forge.config`. forge
+  rewrites that file from `hosts.json` at every `forge install`, so once the
+  entry is gone the next install of another host drops the block. With no
+  other host, delete the block by hand, or the file and the
+  `Include config.d/agent-forge.config` line at the top of `~/.ssh/config`;
+- its host keys in forge's own `known_hosts`:
+  `ssh-keygen -R <address> -f "<laptop state>/known_hosts"`;
 - the Claude token, in claude.ai (see above);
 - the agent's fork and GitHub account, if you no longer need them.
 
