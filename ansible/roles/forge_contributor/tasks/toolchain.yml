@@ -2,7 +2,19 @@
 # ansible-core: Ubuntu 26.04 (resolute) packages ansible-core 2.20.1
 # (packages.ubuntu.com/resolute/ansible-core), which vm-test.sh accepts, so
 # the `ansible` package installed by forge_users is enough: no pipx fallback.
-- name: Install the QEMU, lint and jq packages
+- name: Add OpenTofu's repository
+  ansible.builtin.include_role:
+    name: base
+    tasks_from: apt_repo.yml
+  vars:
+    base_apt_repo_name: opentofu
+    base_apt_repo_key_url: "{{ forge_contributor_tofu_key_url }}"
+    base_apt_repo_fingerprint: "{{ forge_contributor_tofu_fingerprint }}"
+    base_apt_repo_uris: ["{{ forge_contributor_tofu_uri }}"]
+    base_apt_repo_suites: [any]
+    base_apt_repo_components: [main]
+
+- name: Install QEMU, OpenTofu, ansible-lint and jq
   ansible.builtin.apt:
     name: "{{ forge_contributor_apt_packages }}"
     state: present
@@ -33,20 +45,6 @@
     dest: /usr/local/bin
     remote_src: true
     include: [betterleaks]
-
-- name: Download OpenTofu
-  ansible.builtin.get_url:
-    url: "{{ forge_contributor_tofu_url }}"
-    dest: "/var/tmp/tofu-{{ forge_contributor_tofu_version }}.tar.gz"
-    checksum: "sha256:{{ forge_contributor_tofu_sha256 }}"
-    mode: "0644"
-
-- name: Install the tofu binary
-  ansible.builtin.unarchive:
-    src: "/var/tmp/tofu-{{ forge_contributor_tofu_version }}.tar.gz"
-    dest: /usr/local/bin
-    remote_src: true
-    include: [tofu]
 
 # vm-test.sh --lima runs QEMU with KVM as the forge user. site.yml sets that
 # user's groups exactly, kvm included through forge_users_extra_groups (which

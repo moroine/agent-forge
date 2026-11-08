@@ -7,8 +7,9 @@ forge_contributor_home: "/home/{{ forge_contributor_user }}"
 forge_contributor_clone_dir: "{{ forge_contributor_home }}/{{ forge_contributor_upstream | basename }}"
 
 # The toolchain below is what the agent needs to run every test of
-# agent-forge; another project replaces this list. Each download is pinned by
-# version and verified by sha256.
+# agent-forge; another project replaces this list. A tool comes from apt when
+# Ubuntu or its vendor publishes a package; Lima and Betterleaks publish none,
+# so their downloads are pinned by version and verified by sha256.
 forge_contributor_apt_packages:
   - qemu-system-x86
   - qemu-utils
@@ -16,6 +17,16 @@ forge_contributor_apt_packages:
   # container/pre-bash.sh refuses every command without it (fail-closed), and
   # npm test runs its tests.
   - jq
+  # From OpenTofu's repository, below.
+  - tofu
+
+# OpenTofu's official apt repository (opentofu.org/docs/intro/install/deb).
+# apt checks the repository's signature, made by this packagecloud key. The
+# other key OpenTofu publishes (get.opentofu.org/opentofu.gpg) signs the
+# packages themselves, which apt does not check: it is not installed.
+forge_contributor_tofu_key_url: https://packages.opentofu.org/opentofu/tofu/gpgkey
+forge_contributor_tofu_fingerprint: F4AF70F66EAC4337EEECC97407D3DFCD4C61499F
+forge_contributor_tofu_uri: https://packages.opentofu.org/opentofu/tofu/any/
 
 # Lima >= 2.1.2 is needed by ansible/tests/vm-test.sh --lima. The sha256 is
 # the line of the release's SHA256SUMS for lima-<v>-Linux-x86_64.tar.gz.
@@ -30,9 +41,3 @@ forge_contributor_betterleaks_url: "https://github.com/betterleaks/betterleaks/r
   v{{ forge_contributor_betterleaks_version }}/\
   betterleaks_{{ forge_contributor_betterleaks_version }}_linux_x64.tar.gz"
 forge_contributor_betterleaks_sha256: 9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe
-
-# From the release's tofu_<v>_SHA256SUMS.
-forge_contributor_tofu_version: "1.13.9"
-forge_contributor_tofu_url: >-
-  https://github.com/opentofu/opentofu/releases/download/v{{ forge_contributor_tofu_version }}/tofu_{{ forge_contributor_tofu_version }}_linux_amd64.tar.gz
-forge_contributor_tofu_sha256: b34b327cc1ef07178207b6f2cd1f5276537d3e5b7be316500f6dac50d4c0a857
