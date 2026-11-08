@@ -1,5 +1,9 @@
 ---
 forge_users_install_root: /opt/agent-forge
+# Optional, from the inventory: groups the forge user is in besides
+# incus-admin (it is in exactly those). forge cloud create sets [kvm] for the
+# dev VM, whose tests run QEMU with KVM.
+forge_users_extra_groups: []
 # CLI entry point inside a release (framing spec layout, since sub-project 2).
 # ansible/tests/unit/forge_users.yml checks it exists in the checkout: the
 # link to it is created even when the target is missing.

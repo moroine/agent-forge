@@ -2,7 +2,7 @@
 # ansible-core: Ubuntu 26.04 (resolute) packages ansible-core 2.20.1
 # (packages.ubuntu.com/resolute/ansible-core), which vm-test.sh accepts, so
 # the `ansible` package installed by forge_users is enough: no pipx fallback.
-- name: Install the QEMU and lint packages
+- name: Install the QEMU, lint and jq packages
   ansible.builtin.apt:
     name: "{{ forge_contributor_apt_packages }}"
     state: present
@@ -48,9 +48,23 @@
     remote_src: true
     include: [tofu]
 
-# vm-test.sh --lima runs QEMU with KVM as the forge user.
-- name: Let the forge user use /dev/kvm
-  ansible.builtin.user:
-    name: "{{ forge_contributor_user }}"
-    groups: kvm
-    append: true
+# vm-test.sh --lima runs QEMU with KVM as the forge user. site.yml sets that
+# user's groups exactly, kvm included through forge_users_extra_groups (which
+# forge cloud create writes in the inventory): adding it here would remove and
+# re-add it on every run. Only checked.
+- name: Read the kvm group
+  ansible.builtin.getent:
+    database: group
+    key: kvm
+    fail_key: false
+
+- name: Check the forge user can use /dev/kvm
+  ansible.builtin.assert:
+    that:
+      - getent_group.kvm is not none
+      - forge_contributor_user in getent_group.kvm[2].split(',')
+    fail_msg: >-
+      {{ forge_contributor_user }} is not in the kvm group, which
+      ansible/tests/vm-test.sh --lima needs: set forge_users_extra_groups: [kvm]
+      in the inventory's vars.
+    quiet: true

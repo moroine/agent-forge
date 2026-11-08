@@ -13,6 +13,9 @@ forge_contributor_apt_packages:
   - qemu-system-x86
   - qemu-utils
   - ansible-lint
+  # container/pre-bash.sh refuses every command without it (fail-closed), and
+  # npm test runs its tests.
+  - jq
 
 # Lima >= 2.1.2 is needed by ansible/tests/vm-test.sh --lima. The sha256 is
 # the line of the release's SHA256SUMS for lima-<v>-Linux-x86_64.tar.gz.

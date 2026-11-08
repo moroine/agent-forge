@@ -101,6 +101,10 @@ resource "aws_instance" "dev" {
 resource "aws_eip" "dev" {
   domain   = "vpc"
   instance = aws_instance.dev.id
+
+  # AWS documents that an EIP may need the internet gateway to exist first:
+  # without this, the first apply can race it.
+  depends_on = [aws_internet_gateway.dev]
 }
 
 # Start and stop without touching the rest of the stack.

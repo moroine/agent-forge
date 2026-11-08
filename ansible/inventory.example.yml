@@ -47,3 +47,6 @@ all:
     # forge_incus_storage_source: ""
     # Extra addresses fail2ban never bans.
     # forge_fail2ban_ignoreip: []
+    # Groups of the forge user besides incus-admin (it is in exactly those;
+    # forge cloud create sets [kvm] for the dev VM).
+    # forge_users_extra_groups: []

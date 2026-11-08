@@ -137,6 +137,22 @@ test("a cloud inventory carries the contributor variables as quoted scalars", ()
   assert.doesNotMatch(t, /ansible_port|HostKeyAlias/);
 });
 
+// site.yml sets the forge user's groups exactly: kvm (vm-test.sh --lima runs
+// QEMU with KVM) comes from the inventory, or each run would drop it.
+test("a cloud inventory adds the forge user to kvm, another host's does not", { skip: !hasAnsible }, () => {
+  const dir = mkdtempSync(join(tmpdir(), "inv-"));
+  const hostvars = (h: LaptopHost) => {
+    const file = join(dir, `${h.name}.yml`);
+    writeFileSync(file, renderInventory(h, opts()));
+    const r = spawnSync("ansible-inventory", ["-i", file, "--list"], { encoding: "utf8" });
+    assert.equal(r.status, 0, r.stderr);
+    return JSON.parse(r.stdout)._meta.hostvars[h.name];
+  };
+  assert.deepEqual(hostvars({ ...remote, name: "forge-dev", kind: "cloud" }).forge_users_extra_groups, ["kvm"]);
+  assert.equal("forge_users_extra_groups" in hostvars(remote), false);
+  assert.equal("forge_users_extra_groups" in hostvars(lima), false);
+});
+
 // The playbook connects by address, not by the alias: the alias's
 // ForwardAgent no would not apply, and a `Host *` of the developer's could
 // forward the agent to the dev VM. A -o on the command line wins over it.

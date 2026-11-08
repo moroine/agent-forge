@@ -56,6 +56,9 @@ export function renderInventory(
         `    forge_contributor_git_email: ${q(o.contributor.gitEmail)}`,
       ]
       : []),
+    // site.yml sets the forge user's groups exactly; vm-test.sh --lima on the
+    // dev VM runs QEMU with KVM as that user.
+    ...(h.kind === "cloud" ? ['    forge_users_extra_groups: ["kvm"]'] : []),
     "    forge_users:",
     `      - name: ${q(h.user)}`,
     "        ssh_keys:",

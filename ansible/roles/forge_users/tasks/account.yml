@@ -3,7 +3,8 @@
   ansible.builtin.user:
     name: "{{ forge_user.name }}"
     shell: /bin/bash
-    groups: [incus-admin]
+    # Exactly these: a group added by hand is removed on the next run.
+    groups: "{{ ['incus-admin'] + forge_users_extra_groups }}"
     append: false
     password: "!"   # locked: SSH keys only
     create_home: true
