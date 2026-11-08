@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cmdCloud } from "../cli/lib/commands/cloud.ts";
+import { ForgeError } from "../cli/lib/context.ts";
 import { loadCloudSettings, saveCloudSettings, type CloudSettings } from "../cli/lib/laptop/cloud.ts";
 import { forgeKeyPath, hostDir, knownHostsPath, loadHosts, saveHost, type InstallStep, type LaptopHost } from "../cli/lib/laptop/state.ts";
 import { fakeContext, type ExecRule, type FakeContext } from "./lib/fake-context.ts";
@@ -40,7 +41,7 @@ const RULES: ExecRule[] = [
   { match: "aws --version", stdout: "aws-cli/2.31.0 Python/3.13.7\n" },
   { match: "describe-instance-types", stdout: '["nested-virtualization"]' },
   { match: "checkip.amazonaws.com", stdout: "198.51.100.7\n" },
-  { match: "show -json", stdout: '{"resource_changes":[{"address":"aws_instance.dev","change":{"actions":["update"]}}]}' },
+  { match: "show -json", stdout: '{"resource_changes":[{"address":"aws_ec2_instance_state.dev","change":{"actions":["update"]}}]}' },
   { match: "output -raw address", stdout: "203.0.113.20\n" },
   { match: "ssh-keyscan", stdout: "203.0.113.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKey\n" },
   { match: "'test' '-s' '.config/agent-forge/claude-token'", code: 1 },
@@ -147,8 +148,11 @@ test("create --host updates the listed cloud host, create alone starts a new one
   install();
   const ctx = laptop({ answers: [1, 2, 2] });
   assert.equal(await cmdCloud(ctx, "create", { host: "forge-dev", checkout: CHECKOUT, sleep: noWait }), 0);
-  assert.ok(attached(ctx).some((a) => a.includes("contributor.yml")));
-  assert.ok(!attached(ctx).some((a) => a.startsWith("tofu ")));
+  // What start and stop refuse to apply, create --host shows and applies.
+  const apply = attached(ctx).findIndex((a) => a.startsWith("tofu ") && a.includes(" apply ") && !a.includes("-replace"));
+  assert.ok(apply >= 0, attached(ctx).join("\n"));
+  assert.ok(apply < attached(ctx).findIndex((a) => a.includes("contributor.yml")), attached(ctx).join("\n"));
+  assert.ok(!attached(ctx).some((a) => a.includes("ubuntu@")), attached(ctx).join("\n"));
 
   // No --host: the first question of a new cloud host (its name), unanswered here.
   const fresh = fakeContext({ rules: RULES, answers: [] });
@@ -169,6 +173,18 @@ test("no cloud host: start fails, and a remote host is never offered", async () 
   const ctx = fakeContext({ rules: RULES });
   await assert.rejects(cmdCloud(ctx, "start", { checkout: CHECKOUT, sleep: noWait }), /no cloud host: run forge cloud create/);
   assert.ok(!existsSync(join(hostDir("forge-acme"), "tofu.tfvars.json")));
+});
+
+// An unfinished install (the token never pasted, say) has nothing start or
+// stop should touch on their own: the install resumes first.
+test("start and stop refuse a host whose install is not finished, before any command", async () => {
+  install(host({ done: ["vm", "inventory", "playbook", "ssh"] }));
+  for (const sub of ["start", "stop"]) {
+    const ctx = fakeContext({ rules: RULES });
+    await assert.rejects(cmdCloud(ctx, sub, { checkout: CHECKOUT, sleep: noWait }), (e: Error) =>
+      e instanceof ForgeError && /forge cloud create --host forge-dev/.test(e.message), sub);
+    assert.deepEqual(ctx.calls, [], sub);
+  }
 });
 
 test("an unknown subcommand lists the four", async () => {

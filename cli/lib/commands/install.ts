@@ -4,7 +4,7 @@
 // OpenTofu creates: `forge cloud create`). Each step is recorded in hosts.json
 // when it succeeds and skipped on a re-run, so that a re-run picks up after a
 // failure; a re-run of a finished host is an update (playbook, setup and image
-// again; a cloud host has only the playbook).
+// again; a cloud host's are OpenTofu and the playbook).
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync,
   statSync, symlinkSync, writeFileSync,
@@ -50,7 +50,7 @@ const STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "identity", 
 // A cloud host gets neither this machine's git identity (the agent commits as
 // the bot, which the playbook sets) nor forge setup and the image: the
 // agent's tests run them on the VM (spec §5.3).
-const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude"];
+export const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude"];
 const stepsFor = (kind: LaptopHost["kind"]): InstallStep[] => (kind === "cloud" ? CLOUD_STEPS : STEPS);
 // What a re-run of a finished host runs again: re-running is updating.
 const UPDATE: InstallStep[] = ["playbook", "setup", "image"];
@@ -126,11 +126,14 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
 
   // 5-6. The machine: the Lima VM (started again when it is stopped, after a
   // reboot), the cloud VM OpenTofu creates, or the remote's first connection.
+  // A cloud host's runs every time: OpenTofu applies what start and stop
+  // refuse (a changed infra/aws), and starts a VM the idle alarm stopped.
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  const reached = host.done.includes("vm");
   const machine = (): Promise<Outcome> => (host.kind === "lima" ? limaVm(ctx, host, checkout, opts.lima)
-    : host.kind === "cloud" ? cloudVm(ctx, host, checkout, sleep)
+    : host.kind === "cloud" ? cloudVm(ctx, host, checkout, sleep, reached)
     : firstConnection(ctx, host));
-  await step("vm", machine, vm !== null && vm.status !== "Running");
+  await step("vm", machine, host.kind === "cloud" || (vm !== null && vm.status !== "Running"));
   // 7. Every run, so that a deleted inventory comes back; an existing one is
   // kept, with the developer's edits. A cloud host's also sets up the agent.
   await step("inventory", async () => {
@@ -401,13 +404,14 @@ async function limaVm(ctx: Context, host: LaptopHost, checkout: string, lima?: L
   return "done";
 }
 
-// The cloud VM: checked for nested virtualization, then created (or found
-// unchanged) by OpenTofu, which shows its plan and asks; SSH is opened to this
-// machine's current address only. Then, once sshd answers, the first
-// connection, as for a remote. Run again until it succeeds: OpenTofu's state
+// The cloud VM: checked for nested virtualization, then created (or updated,
+// or found unchanged) by OpenTofu, which shows its plan and asks (an empty
+// plan asks nothing); SSH is opened to this machine's current address only.
+// Then, once sshd answers, the first connection, as for a remote, unless an
+// earlier run made it (`reached`). Run on every install: OpenTofu's state
 // knows what exists.
 async function cloudVm(
-  ctx: Context, host: LaptopHost, checkout: string, sleep: (ms: number) => Promise<void>,
+  ctx: Context, host: LaptopHost, checkout: string, sleep: (ms: number) => Promise<void>, reached: boolean,
 ): Promise<Outcome> {
   const settings = loadCloudSettings(host.name);
   await checkNestedVirt(ctx, settings);
@@ -416,7 +420,7 @@ async function cloudVm(
   await applyInteractive(ctx, infra);
   host.address = await infraAddress(ctx, infra);
   await waitForSsh(ctx, host.address, sleep);
-  return firstConnection(ctx, host);
+  return reached ? "done" : firstConnection(ctx, host);
 }
 
 // A new instance boots for a minute or two before sshd answers. The keys

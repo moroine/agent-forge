@@ -201,12 +201,56 @@ export async function applyInteractive(ctx: Context, infra: Infra, extra: string
   if (code !== 0) throw new ForgeError(`tofu apply failed (exit code ${code})`);
 }
 
-type PlanChange = { address: string; change: { actions: string[] } };
+type PlanChange = { address: string; change: { actions: string[]; before?: unknown; after?: unknown } };
 
-// Start and stop run without review, so they apply only a plan that changes
-// things in place (the instance state, the SSH rule): a plan that would create
-// or destroy anything, such as a replaced VM after a git pull of infra/aws,
-// is refused and left to `forge cloud create`.
+const INSTANCE_STATE = "aws_ec2_instance_state.dev";
+const SECURITY_GROUP = "aws_security_group.dev";
+
+// JSON with sorted keys: two values are equal when their texts are.
+function canonical(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(canonical).join(",")}]`;
+  if (typeof v === "object" && v !== null) {
+    const o = v as Record<string, unknown>;
+    return `{${Object.keys(o).sort().map((k) => `${JSON.stringify(k)}:${canonical(o[k])}`).join(",")}}`;
+  }
+  return JSON.stringify(v) ?? "null";
+}
+
+// The security group's update only sets the SSH source: before and after are
+// the same once every ingress rule's cidr_blocks is left out (the rules are a
+// set, compared in any order), and every rule after it opens to `sshCidr`
+// only. An attribute OpenTofu does not know yet is missing from `after`, so
+// the two differ.
+function setsSshSourceOnly(c: PlanChange, sshCidr: string): boolean {
+  const ingress = (sg: unknown): Record<string, unknown>[] | null => {
+    if (typeof sg !== "object" || sg === null) return null;
+    const rules = (sg as Record<string, unknown>).ingress;
+    return Array.isArray(rules) && rules.every((r) => typeof r === "object" && r !== null && !Array.isArray(r))
+      ? (rules as Record<string, unknown>[]) : null;
+  };
+  const before = ingress(c.change.before);
+  const after = ingress(c.change.after);
+  if (!before || !after) return false;
+  const withoutSources = (sg: unknown, rules: Record<string, unknown>[]): string => canonical({
+    ...(sg as Record<string, unknown>),
+    ingress: rules.map((r) => canonical(Object.fromEntries(Object.entries(r).filter(([k]) => k !== "cidr_blocks")))).sort(),
+  });
+  return withoutSources(c.change.before, before) === withoutSources(c.change.after, after) &&
+    after.every((r) => canonical(r.cidr_blocks) === canonical([sshCidr]));
+}
+
+// What start and stop apply without review: reads, no-ops, the instance's
+// state, and the SSH rule's source.
+function quietAction(c: PlanChange, action: string, sshCidr: string): boolean {
+  if (action === "no-op" || action === "read") return true;
+  if (action !== "update") return false;
+  return c.address === INSTANCE_STATE || (c.address === SECURITY_GROUP && setsSshSourceOnly(c, sshCidr));
+}
+
+// Start and stop run without review, so they apply only a plan that starts or
+// stops the instance and sets the SSH rule's source: a plan that would create,
+// destroy or change anything else, such as a replaced VM or a widened rule
+// after a git pull of infra/aws, is refused and left to `forge cloud create`.
 export async function applyQuiet(ctx: Context, infra: Infra, running: boolean): Promise<void> {
   const tfvars = await prepare(ctx, infra, running);
   const plan = join(hostDir(infra.name), "start.tfplan");
@@ -219,13 +263,16 @@ export async function applyQuiet(ctx: Context, infra: Infra, running: boolean): 
   } catch {
     throw new ForgeError("tofu show: the plan is not readable JSON");
   }
-  const SAFE = ["no-op", "update", "read"];
-  const unsafe = changes.filter((c) => c.change.actions.some((a) => !SAFE.includes(a)));
+  // renderTfvars (in prepare) refused a missing sshCidr already.
+  const sshCidr = infra.settings.sshCidr ?? "";
+  const refused = (c: PlanChange): string[] => c.change.actions.filter((a) => !quietAction(c, a, sshCidr));
+  const unsafe = changes.filter((c) => refused(c).length > 0);
   if (unsafe.length > 0) {
-    const verbs = [...new Set(unsafe.flatMap((c) => c.change.actions.filter((a) => !SAFE.includes(a))))].join("/");
+    const verbs = [...new Set(unsafe.flatMap(refused))].join("/");
     throw new ForgeError(
       `this checkout's infra/aws would also ${verbs} ${unsafe.map((c) => c.address).join(", ")}: ` +
-      `forge cloud start and stop only start, stop and open SSH. Run forge cloud create --host ${infra.name} to review and apply it.`,
+      `forge cloud start and stop only start and stop the VM and set the SSH address. ` +
+      `Run forge cloud create --host ${infra.name} to review and apply it.`,
     );
   }
   await mustSucceed("tofu apply", ctx.exec(tofuArgs(infra, "apply", "-input=false", plan), { env }));

@@ -70,6 +70,42 @@ test("applyQuiet refuses a plan that replaces or creates anything", async () => 
   assert.ok(!ctx.calls.some((c) => c.includes("apply")));
 });
 
+// The security group as `tofu show -json` gives it: inline rules, a set.
+const rule = (o: Record<string, unknown>) => ({
+  cidr_blocks: ["192.0.2.9/32"], description: "SSH from the maintainer", from_port: 22, ipv6_cidr_blocks: [],
+  prefix_list_ids: [], protocol: "tcp", security_groups: [], self: false, to_port: 22, ...o,
+});
+const group = (ingress: unknown[], egress: unknown[] = [rule({ cidr_blocks: ["0.0.0.0/0"], from_port: 0, to_port: 0, protocol: "-1" })]) => ({
+  description: "Dev VM: SSH from the maintainer only", egress, id: "sg-0example", ingress, name: "forge-dev-1",
+  tags_all: { "agent-forge": "forge-dev" }, vpc_id: "vpc-0example",
+});
+const sgPlan = (after: unknown): string => JSON.stringify({ resource_changes: [{
+  address: "aws_security_group.dev", change: { actions: ["update"], before: group([rule({})]), after },
+}] });
+
+// Start and stop run without review: an in-place update is applied only
+// when it is the instance's state, or the SSH rule's source set to this
+// machine's address and nothing else.
+test("applyQuiet applies a security group update that only sets the SSH source", async () => {
+  const ctx = fakeContext({ rules: [{ match: " show -json ", stdout: sgPlan(group([rule({ cidr_blocks: ["198.51.100.7/32"] })])) }] });
+  await applyQuiet(ctx, INFRA, true);
+  assert.ok(ctx.calls.some((c) => c.includes("apply") && c.some((a) => a.endsWith(".tfplan"))));
+});
+
+test("applyQuiet refuses any other in-place update", async () => {
+  const plans: [string, string][] = [
+    ["alarm", JSON.stringify({ resource_changes: [{ address: "aws_cloudwatch_metric_alarm.idle", change: { actions: ["update"] } }] })],
+    ["widened", sgPlan(group([rule({ cidr_blocks: ["0.0.0.0/0"] })]))],
+    ["egress", sgPlan(group([rule({ cidr_blocks: ["198.51.100.7/32"] })], [rule({ cidr_blocks: ["0.0.0.0/0"], from_port: 443, to_port: 443 })]))],
+    ["second port", sgPlan(group([rule({ cidr_blocks: ["198.51.100.7/32"] }), rule({ cidr_blocks: ["198.51.100.7/32"], from_port: 80, to_port: 80 })]))],
+  ];
+  for (const [what, plan] of plans) {
+    const ctx = fakeContext({ rules: [{ match: " show -json ", stdout: plan }] });
+    await assert.rejects(applyQuiet(ctx, INFRA, true), /update aws_.*forge cloud create --host forge-dev/s, what);
+    assert.ok(!ctx.calls.some((c) => c.includes("apply")), what);
+  }
+});
+
 test("tofu runs in the checkout's infra/aws with the host's data directory and state", async () => {
   const ctx = fakeContext({ rules: [{ match: " show -json ", stdout: planJson([]) }] });
   await applyQuiet(ctx, INFRA, true);

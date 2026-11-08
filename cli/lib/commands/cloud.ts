@@ -9,7 +9,7 @@ import {
 import { forgetHostKeys } from "../laptop/lima.ts";
 import { remoteExec } from "../laptop/remote.ts";
 import { loadHosts, saveHost, type LaptopHost } from "../laptop/state.ts";
-import { cmdInstall } from "./install.ts";
+import { CLOUD_STEPS, cmdInstall } from "./install.ts";
 import { cmdOpen } from "./open.ts";
 
 export type CloudOptions = { host?: string; checkout?: string; sleep?: (ms: number) => Promise<void> };
@@ -36,6 +36,15 @@ async function selectCloudHost(ctx: Context, wanted?: string): Promise<LaptopHos
   return clouds[i - 1];
 }
 
+// Start and stop work on a finished install only: before that, the SSH
+// address or the OpenTofu state may be missing, and the install resumes first.
+function installed(host: LaptopHost): LaptopHost {
+  if (!CLOUD_STEPS.every((s) => host.done.includes(s))) {
+    throw new ForgeError(`${host.name}'s install is not finished: run forge cloud create --host ${host.name} to resume it`);
+  }
+  return host;
+}
+
 export async function cmdCloud(ctx: Context, sub: string | undefined, opts: CloudOptions = {}): Promise<number> {
   const checkout = opts.checkout ?? repoRoot();
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
@@ -45,8 +54,8 @@ export async function cmdCloud(ctx: Context, sub: string | undefined, opts: Clou
       if (opts.host !== undefined) await selectCloudHost(ctx, opts.host);
       return cmdInstall(ctx, opts.host !== undefined ? { host: opts.host, checkout, sleep } : { cloud: true, checkout, sleep });
     }
-    case "start": return start(ctx, await selectCloudHost(ctx, opts.host), checkout, sleep);
-    case "stop": return stop(ctx, await selectCloudHost(ctx, opts.host), checkout);
+    case "start": return start(ctx, installed(await selectCloudHost(ctx, opts.host)), checkout, sleep);
+    case "stop": return stop(ctx, installed(await selectCloudHost(ctx, opts.host)), checkout);
     case "rebuild": return rebuild(ctx, await selectCloudHost(ctx, opts.host), checkout, sleep);
     default: throw new ForgeError(`usage: ${USAGE}`);
   }

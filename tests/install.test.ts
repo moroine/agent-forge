@@ -1128,16 +1128,24 @@ test("a cloud VM that never answers on SSH stops the run after 36 tries, 5 s apa
   assert.deepEqual(loadHosts().map((h) => h.name), ["forge-dev"]);
 });
 
-test("a re-run of a finished cloud host runs the playbook again, never OpenTofu or the token", async () => {
+// After a change to infra/aws, `forge cloud start` refuses and points here: a
+// re-run applies OpenTofu again (its plan asks, an empty one asks nothing),
+// then the playbook; never the first connection or the token again.
+test("a re-run of a finished cloud host applies OpenTofu and the playbook again, never the first connection or the token", async () => {
   await newCloud();
-  const ctx = laptop({ vm: null }, { rules: CLOUD_RULES, answers: [2, 2] });
+  const ctx = laptop({ vm: null }, { rules: [{ match: "checkip.amazonaws.com", stdout: "198.51.100.8\n" }, ...CLOUD_RULES], answers: [2, 2] });
   assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }), 0);
+  assert.ok(called(ctx).some((c) => c.startsWith(`tofu -chdir=${CHECKOUT}/infra/aws init`)), called(ctx).join("\n"));
   assert.deepEqual(attached(ctx), [
+    `tofu -chdir=${CHECKOUT}/infra/aws apply -var-file=${join(hostDir("forge-dev"), "tofu.tfvars.json")}`,
     `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`,
     `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml`,
     "herdr --remote forge-dev --remote-keybindings server",
   ]);
-  assert.ok(!called(ctx).some((c) => c.startsWith("tofu -chdir") || c.includes("claude-token")), called(ctx).join("\n"));
+  // This machine's address may have moved since the last run.
+  assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.8/32");
+  assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.20"), called(ctx).join("\n"));
+  assert.ok(!called(ctx).some((c) => c.includes("claude-token")), called(ctx).join("\n"));
   assert.deepEqual(asked(ctx), [LINK, TOASTS()]);
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
 });
