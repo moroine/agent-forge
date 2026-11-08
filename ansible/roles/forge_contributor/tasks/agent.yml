@@ -1,4 +1,13 @@
 ---
+# Every task below runs as the forge user (become_user) from the admin
+# account: Ansible hands its temporary files to that user with setfacl, which
+# Ubuntu 26.04's cloud image lacks (the rest of the playbook runs as root and
+# sets owners instead, see forge_users/tasks/github.yml).
+- name: Install acl, for the tasks run as the forge user
+  ansible.builtin.apt:
+    name: acl
+    state: present
+
 - name: Clone the upstream repository  # noqa: latest[git]
   become: true
   become_user: "{{ forge_contributor_user }}"
