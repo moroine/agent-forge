@@ -581,6 +581,8 @@ Known limits:
   `ansible-lint ansible/`.
 - `FORGE_INTEGRATION=1 npm run test:integration` runs against a real,
   throwaway Incus.
+- An agent can develop agent-forge on its own AWS VM, as a contributor: see
+  [docs/contributor-model.md](docs/contributor-model.md).
 - `ansible/tests/vm-test.sh` provisions a fresh machine twice, verifies it,
   reboots it and verifies again: `--lima` for a throwaway Lima VM, `--host`
   for a fresh cloud VM, or a VM on an Incus host with KVM. See

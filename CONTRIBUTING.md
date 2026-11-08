@@ -106,6 +106,9 @@ the full list:
 Claude Code sessions in this repository follow `CLAUDE.md`, and the hook in
 `.claude/settings.json` applies to them.
 
+An agent can also develop agent-forge on its own AWS VM, as a contributor: see
+[docs/contributor-model.md](docs/contributor-model.md).
+
 ## License
 
 By contributing, you agree that your contribution is licensed under the
