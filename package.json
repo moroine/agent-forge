@@ -11,7 +11,8 @@
     "test:integration": "node --test --test-concurrency=1 tests/integration/*.test.ts",
     "test:ansible": "ansible-playbook -i ansible/tests/unit-inventory.yml ansible/tests/unit.yml",
     "check": "tsc --noEmit",
-    "hooks:install": "bash .githooks/install.sh"
+    "hooks:install": "bash .githooks/install.sh",
+    "secrets:triage": "bash .github/scripts/triage-secrets.sh"
   },
   "devDependencies": {
     "typescript": "^5.7.0",

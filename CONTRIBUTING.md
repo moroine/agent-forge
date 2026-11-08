@@ -82,6 +82,17 @@ is not a secret. The format is `<path>:<rule>:<line>` for the pre-commit hook
 (`--ignore-gitleaks-allow`): the fingerprint is the only way to suppress a
 finding.
 
+`npm run secrets:triage` does this for you, one finding at a time. Without
+arguments it scans the staged changes, as the hook does; with
+`npm run secrets:triage -- <base> <head>` it scans the commits `<base>..<head>`,
+as CI does (CI prints the command with its range). For each finding not yet
+ignored, it shows the flagged lines and asks why they are not a secret: a
+reason appends that comment and the fingerprint to `.betterleaksignore`, an
+empty answer keeps the finding. Review the result with
+`git diff -- .betterleaksignore` before committing it. The flagged lines are
+shown in clear (control characters removed): run it in your own terminal,
+never through an agent, whose transcript would receive a real secret.
+
 Changes to `.github/`, `.githooks/`, `.betterleaksignore`, `betterleaks.toml`
 and `.gitleaksignore` get extra scrutiny in review: on a pull request, the
 workflow, the ignore files and the Betterleaks configuration come from the

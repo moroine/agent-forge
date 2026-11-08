@@ -34,8 +34,10 @@ if [ -z "$base" ] || [ "$base" = 0000000000000000000000000000000000000000 ] \
   || ! git cat-file -e "$base^{commit}" 2>/dev/null; then
   echo "scan-secrets: no usable base, scanning the full history of $head"
   opts="--diff-merges=remerge $head"
+  triage_range="<base> $head"
 else
   opts="--diff-merges=remerge $base..$head"
+  triage_range="$base $head"
 fi
 
 # --ignore-gitleaks-allow: inline allow comments cannot silence a finding; the
@@ -58,5 +60,6 @@ code=0
 env -u BETTERLEAKS_VALIDATE -u BETTERLEAKS_ANALYZE betterleaks "${args[@]}" "$top" || code=$?
 if [ "$code" -ne 0 ]; then
   grep -E '^ *"(File|RuleID|StartLine|Commit|Fingerprint)":' "$report" || true
+  echo "To review each finding and record a false positive, from a clone: npm run secrets:triage -- $triage_range (see CONTRIBUTING.md)."
 fi
 exit "$code"

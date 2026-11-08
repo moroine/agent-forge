@@ -51,6 +51,6 @@ code=0
 env -u BETTERLEAKS_VALIDATE -u BETTERLEAKS_ANALYZE betterleaks "${args[@]}" "$top" || code=$?
 if [ "$code" -ne 0 ]; then
   grep -E '^ *"(File|RuleID|StartLine|Fingerprint)":' "$report" >&2 || true
-  echo "pre-commit: betterleaks found a possible secret in the staged changes. See CONTRIBUTING.md for false positives." >&2
+  echo "pre-commit: betterleaks found a possible secret in the staged changes. To review each finding and record a false positive: npm run secrets:triage (see CONTRIBUTING.md)." >&2
   exit 1
 fi
