@@ -73,7 +73,9 @@ export async function ensureClaudeToken(ctx: Context, host: LaptopHost): Promise
     throw new ForgeError("that is not a Claude token (letters, digits and . _ ~ + / = - only, no spaces): paste only what claude setup-token prints");
   }
   await mustSucceed("writing the Claude token on the host", remoteExec(ctx, host,
-    ["sh", "-c", `umask 077 && mkdir -p .config/agent-forge && cat > ${CLAUDE_TOKEN_FILE}`], `${token}\n`));
+    // chmod as well: umask narrows a new file only, not one already there.
+    ["sh", "-c", `umask 077 && mkdir -p .config/agent-forge && cat > ${CLAUDE_TOKEN_FILE} && chmod 600 ${CLAUDE_TOKEN_FILE}`],
+    `${token}\n`));
   return "stored";
 }
 

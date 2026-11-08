@@ -104,8 +104,11 @@ test("a stored Claude token is kept and nothing is asked", async () => {
 test("the pasted Claude token is trimmed and written over ssh's stdin into a private file", async () => {
   const ctx = fakeContext({ rules: [{ match: TOKEN_PROBE, code: 1 }], answers: ["  tok-abc \n"] });
   assert.equal(await ensureClaudeToken(ctx, host), "stored");
+  // At a prompt that does not echo (the fake's askSecret logs "label: ", ask "label> ").
+  assert.deepEqual(ctx.err_lines, ["Claude token: "]);
+  // chmod too: umask does not narrow a file that already exists.
   assert.deepEqual(ctx.calls[1], ["ssh", "-o", "BatchMode=yes", "-o", "ForwardAgent=no", "forge-acme", "--",
-    "'sh' '-c' 'umask 077 && mkdir -p .config/agent-forge && cat > .config/agent-forge/claude-token'"]);
+    "'sh' '-c' 'umask 077 && mkdir -p .config/agent-forge && cat > .config/agent-forge/claude-token && chmod 600 .config/agent-forge/claude-token'"]);
   assert.deepEqual(ctx.execOptions[1], { input: "tok-abc\n" });
 });
 

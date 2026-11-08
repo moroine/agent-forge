@@ -38,7 +38,11 @@ expect_block() {
 }
 
 MODE_FILE=$(mktemp)
-trap 'rm -f "$MODE_FILE"' EXIT
+# Le journal d'audit du hook va dans un fichier temporaire : jamais des
+# centaines de fausses commandes dans le vrai ~/.claude/bash-audit.log.
+FORGE_AUDIT_LOG=$(mktemp)
+export FORGE_AUDIT_LOG
+trap 'rm -f "$MODE_FILE" "$FORGE_AUDIT_LOG"' EXIT
 
 run_hook_as() {
   local mode="$1" cmd="$2"
@@ -206,7 +210,8 @@ expect_block_as contributor 'git rebase origin/main'
 # Only holds on a machine without /workspace (the Mac, CI).
 if [ ! -d /workspace ]; then
   AUDIT_HOME=$(mktemp -d)
-  HOME="$AUDIT_HOME" FORGE_MODE_FILE="$MODE_FILE.none" run_hook 'git status' || true
+  # Without the harness's FORGE_AUDIT_LOG: the fallback is what is tested.
+  (unset FORGE_AUDIT_LOG; HOME="$AUDIT_HOME" FORGE_MODE_FILE="$MODE_FILE.none" run_hook 'git status') || true
   if [ -s "$AUDIT_HOME/.claude/bash-audit.log" ]; then
     PASS=$((PASS + 1))
   else

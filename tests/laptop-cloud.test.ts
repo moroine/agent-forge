@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { fakeContext } from "./lib/fake-context.ts";
 import { hostDir } from "../cli/lib/laptop/state.ts";
 import {
-  applyQuiet, askCloudSettings, checkNestedVirt, currentPublicIp, type CloudSettings, type Infra,
+  applyInteractive, applyQuiet, askCloudSettings, checkNestedVirt, currentPublicIp, type CloudSettings, type Infra,
 } from "../cli/lib/laptop/cloud.ts";
 
 const ENV = ["FORGE_HOME", "XDG_CONFIG_HOME", "XDG_DATA_HOME"];
@@ -104,6 +104,29 @@ test("applyQuiet refuses any other in-place update", async () => {
     await assert.rejects(applyQuiet(ctx, INFRA, true), /update aws_.*forge cloud create --host forge-dev/s, what);
     assert.ok(!ctx.calls.some((c) => c.includes("apply")), what);
   }
+});
+
+// Static keys exported on this machine could aim OpenTofu or the AWS CLI at
+// another account than the settings' profile: they reach neither, empty.
+test("tofu and aws run with the settings' profile and the static AWS keys emptied", async () => {
+  const ctx = fakeContext({ rules: [
+    { match: " show -json ", stdout: planJson([]) }, { match: "describe-instance-types", stdout: '["nested-virtualization"]' },
+  ] });
+  await checkNestedVirt(ctx, SETTINGS);
+  await applyQuiet(ctx, INFRA, true);
+  await applyInteractive(ctx, INFRA);
+  const want = {
+    AWS_PROFILE: "forge-dev", AWS_ACCESS_KEY_ID: "", AWS_SECRET_ACCESS_KEY: "", AWS_SESSION_TOKEN: "",
+    AWS_ACCESS_KEY: "", AWS_SECRET_KEY: "", AWS_SECURITY_TOKEN: "",
+  };
+  // execOptions follows the exec calls, which all come before the attach.
+  const execs = ctx.calls.slice(0, ctx.execOptions.length);
+  assert.ok(execs.length > 0 && execs.every((c) => c[0] === "tofu" || c[0] === "aws"), execs.join("\n"));
+  for (const [i, c] of execs.entries()) {
+    for (const [k, v] of Object.entries(want)) assert.equal(ctx.execOptions[i]?.env?.[k], v, `${c.join(" ")}: ${k}`);
+  }
+  assert.equal(ctx.attachCalls.length, 1);
+  for (const [k, v] of Object.entries(want)) assert.equal(ctx.attachCalls[0].opts?.env?.[k], v, `tofu apply: ${k}`);
 });
 
 test("tofu runs in the checkout's infra/aws with the host's data directory and state", async () => {

@@ -157,11 +157,23 @@ export async function currentPublicIp(ctx: Context): Promise<string> {
   return text;
 }
 
+// Static keys exported on this machine can win over a profile and would aim
+// OpenTofu or the AWS CLI at another account: both get the settings' profile,
+// and those variables (their legacy names too) empty, which the AWS CLI and
+// the Go SDK behind OpenTofu's provider treat as unset.
+const STATIC_AWS_KEYS = [
+  "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY", "AWS_SESSION_TOKEN", "AWS_ACCESS_KEY", "AWS_SECRET_KEY", "AWS_SECURITY_TOKEN",
+];
+
+function awsEnv(s: CloudSettings): Record<string, string> {
+  return { AWS_PROFILE: s.awsProfile, ...Object.fromEntries(STATIC_AWS_KEYS.map((k) => [k, ""])) };
+}
+
 export async function checkNestedVirt(ctx: Context, s: CloudSettings): Promise<void> {
   const r = await ctx.exec([
     "aws", "ec2", "describe-instance-types", "--profile", s.awsProfile, "--region", s.region,
     "--instance-types", s.instanceType, "--query", "InstanceTypes[0].ProcessorInfo.SupportedFeatures", "--output", "json",
-  ]);
+  ], { env: awsEnv(s) });
   if (r.code !== 0) throw new ForgeError(`aws describe-instance-types failed: ${r.stderr.trim() || `exit code ${r.code}`}`);
   let features: unknown;
   try {
@@ -178,8 +190,8 @@ function tofuArgs(infra: Infra, ...args: string[]): string[] {
   return ["tofu", `-chdir=${infra.checkout}/infra/aws`, ...args];
 }
 
-function tofuEnv(infra: Infra): { TF_DATA_DIR: string } {
-  return { TF_DATA_DIR: join(hostDir(infra.name), "tofu") };
+function tofuEnv(infra: Infra): Record<string, string> {
+  return { ...awsEnv(infra.settings), TF_DATA_DIR: join(hostDir(infra.name), "tofu") };
 }
 
 // Writes the variables and initializes the backend; returns the tfvars path.
