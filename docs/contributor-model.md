@@ -104,22 +104,26 @@ AWS profile, the region (for example `eu-west-3`), the
 instance type (default `m7i.2xlarge`), the disk size (default 200 GB), a
 monthly budget in USD, an email for budget alerts, the upstream
 repository, the agent's fork (`owner/repo`, which the relay creates if it is
-missing), and the agent's git name and email. The answers are kept in
+missing), the agent's git name and email, and the GitHub logins the agent
+takes instructions from (yours, comma-separated). `forge relay read` shows only
+these logins' text, plus the bot's, and their @mentions are not neutralized: a
+mistyped login hides your own comments from the agent. The answers are kept in
 `cloud.json` (see "Where forge keeps its files"), so the next run asks nothing.
 
 It checks that the instance type supports nested virtualization, shows
 OpenTofu's plan, and waits for your `yes`. It creates a network of its own
 (a VPC, one public subnet, an internet gateway and a route table), the dev
-instance, one Elastic IP, an encrypted root disk of the size you chose, the
-relay (see "The relay"), a
-security group that opens SSH to your current address only, a monthly budget
+instance, an encrypted root disk of the size you chose, the relay (see "The
+relay"), one Elastic IP for each of the two VMs, a security group that opens SSH
+to your current address only, a monthly budget
 that mails you at 80 % of the spend and at 100 % of the forecast, and an idle
 alarm. An `m7i.2xlarge` costs real money while it runs: stop it when you do
-not use it. Stopped, the instance costs nothing, but AWS still bills its disk
+not use it. Stopped, an instance costs nothing, but AWS still bills its disk
 (per GB and month, at the size you chose) and its public IPv4 address (the
 Elastic IP, per hour, running or not). The relay is a `t3.small` with a 20 GB
-disk and a private address: it starts and stops with the dev VM, so it adds
-a few dollars a month, mostly its disk while stopped.
+disk and an Elastic IP of its own, which you reach over SSH from your address.
+It starts and stops with the dev VM, so it adds a few dollars a month, mostly
+its disk and its address while stopped.
 
 Then it installs the dev VM with Ansible. On the first SSH connection OpenSSH
 asks you to accept the new host's key; check it is the right machine and
@@ -262,12 +266,14 @@ forge cloud stop      # stops the VM; the disk, the clone and the branches stay
 `forge cloud start` reads your current public address, so it works after you
 move networks. It opens SSH to that one address: on a mobile connection whose
 public address changes from one connection to the next, SSH may never answer.
-Start the VM from a connection with a stable address. In herdr on the VM, run `forge-contributor` in a pane: it
-starts Claude Code in the clone, and continues the last conversation if there
-is one.
+Start the VM from a connection with a stable address.
+
+In herdr on the VM, run `forge-contributor` in a pane: it starts Claude Code
+in the clone, and continues the last conversation if there is one.
 
 Start and stop act on both instances, the dev VM and the relay; the relay has
-no idle alarm. They only start and stop the VMs and set the SSH address. When your
+no idle alarm. They only start and stop the VMs and set the SSH address. When
+your
 checkout's `infra/aws` would change anything else (after a `git pull`, say),
 they refuse: run `forge cloud create --host <name>`, which shows OpenTofu's
 plan and applies it after your `yes`, then installs the VM again.
@@ -301,7 +307,8 @@ also how you replace an expired or revoked token.
 ## If you suspect the dev VM is compromised
 
 1. Stop it: `forge cloud stop`.
-2. Revoke its Claude token in claude.ai (see "The Claude credential").
+2. Revoke its Claude token (see "The Claude credential": revoking the token
+   alone may not be possible, and a global Log Out is the sure way).
 3. Rebuild it: `forge cloud rebuild`, which asks for a new token.
 4. Look at the bot's recent activity on GitHub, and at the relay's audit log
    over `ssh` on the relay.
@@ -354,7 +361,7 @@ TF_DATA_DIR="$D/tofu" tofu -chdir=infra/aws destroy -var-file="$D/tofu.tfvars.js
 ```
 
 OpenTofu lists what it will destroy and asks for `yes`. This deletes the
-instances (dev VM and relay), their disks (and everything on it), the Elastic IP, the security group,
+instances (dev VM and relay), their disks (and everything on it), the two Elastic IPs, the security group,
 the VPC, its subnet, internet gateway and route table, the budget and the
 alarm.
 
@@ -371,7 +378,8 @@ Afterwards forge forgets nothing by itself. Note the host's `address` in
   `Include config.d/agent-forge.config` line at the top of `~/.ssh/config`;
 - its host keys in forge's own `known_hosts`:
   `ssh-keygen -R <address> -f "<laptop state>/known_hosts"`;
-- the Claude token, in claude.ai (see above);
+- the Claude token (see "The Claude credential": revoking it alone may not be
+  possible, and a global Log Out is the sure way);
 - the bot's token and signing key, on its GitHub account, and the account and
   its fork, if you no longer need them.
 
