@@ -11,6 +11,10 @@ import { crossReferences } from "./text.ts";
 const TASK = /^[A-Za-z0-9][A-Za-z0-9._-]{0,99}$/;
 const MAX_COMMITS = 200;
 
+// The largest request the relay reads, in bytes: it stops reading past it.
+// The dev VM's client refuses such a request before sending it.
+export const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
+
 // agent/<task> → <task>: one ref component that git accepts (no `..`, no
 // trailing `.lock` or `.`) and that cannot leave refs/heads/agent/.
 export function validTask(branch: string): string {

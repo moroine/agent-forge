@@ -12,7 +12,7 @@ import type { RelayPaths } from "./paths.ts";
 import { validTask } from "./policy.ts";
 import { publish, type RelayDeps } from "./publish.ts";
 import { scanText } from "./scan.ts";
-import { takeWrite, withState } from "./state.ts";
+import { takeAttempt, takeWrite, withState } from "./state.ts";
 import { checkPublicText } from "./text.ts";
 
 export const OPS = ["publish", "open-pr", "comment", "reply", "read", "ci", "ci-log"] as const;
@@ -21,17 +21,20 @@ type Op = (typeof OPS)[number];
 const TITLE_MAX = 256;
 const PR_BODY_MAX = 20_000;
 const COMMENT_MAX = 10_000;
-const MAX_INTEGER = 1e9;
+// An issue or pull request number. GitHub's comment and job IDs are far
+// larger (review comments near 2e9, Actions jobs past 1e10): they are `id`s,
+// bounded only by what a JSON number holds exactly.
+const MAX_NUMBER = 1e9;
 
 // The exact fields of each request; the kind says how each is validated.
-const FIELDS: Record<Op, Record<string, "string" | "int">> = {
+const FIELDS: Record<Op, Record<string, "string" | "int" | "id">> = {
   publish: { branch: "string", bundle: "string" },
   "open-pr": { branch: "string", title: "string", body: "string" },
   comment: { pr: "int", body: "string" },
-  reply: { pr: "int", commentId: "int", body: "string" },
+  reply: { pr: "int", commentId: "id", body: "string" },
   read: { number: "int" },
   ci: { pr: "int" },
-  "ci-log": { pr: "int", job: "int" },
+  "ci-log": { pr: "int", job: "id" },
 };
 
 type Request = Record<string, string | number>;
@@ -58,8 +61,11 @@ function parseRequest(op: Op, input: Buffer): Request {
   for (const [name, kind] of Object.entries(fields)) {
     const v = o[name];
     if (kind === "string" && typeof v !== "string") throw new RelayError(`${op}: ${name} must be a string`);
-    if (kind === "int" && !(typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_INTEGER)) {
-      throw new RelayError(`${op}: ${name} must be an integer between 1 and ${MAX_INTEGER}`);
+    if (kind === "int" && !(typeof v === "number" && Number.isInteger(v) && v >= 1 && v <= MAX_NUMBER)) {
+      throw new RelayError(`${op}: ${name} must be an integer between 1 and ${MAX_NUMBER}`);
+    }
+    if (kind === "id" && !(typeof v === "number" && Number.isSafeInteger(v) && v >= 1)) {
+      throw new RelayError(`${op}: ${name} must be a positive integer of at most ${Number.MAX_SAFE_INTEGER}`);
     }
   }
   return o as Request;
@@ -106,6 +112,9 @@ async function handle(d: RelayDeps, op: Op, input: Buffer, audit: Audit): Promis
     case "publish": {
       // The branch is logged once validTask accepted it: before, it is agent text.
       audit.branch = `agent/${validTask(r.branch as string)}`;
+      // The attempt is counted first, under a short lock of its own, released
+      // before publish takes its lock (the lock is not reentrant).
+      await withState(d.paths.stateDir, async (s) => takeAttempt(s, d.now()));
       const bundle = decodeBundle(r.bundle as string);
       audit.bundleBytes = bundle.length;
       // publish takes the state lock and counts its own write.

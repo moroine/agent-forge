@@ -8,8 +8,8 @@ import { tmpdir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import { ForgeError, mustSucceed, type Context } from "../context.ts";
 import { configPath } from "../paths.ts";
-import { printable } from "../printable.ts";
-import { validTask } from "./policy.ts";
+import { printable, printableText } from "../printable.ts";
+import { MAX_REQUEST_BYTES, validTask } from "./policy.ts";
 
 export type RelayClientConfig = { address: string; user: string; key: string; knownHosts: string };
 
@@ -52,13 +52,22 @@ export function loadRelayClientConfig(file: string = relayClientConfigPath()): R
 // The agent is never forwarded (no ForwardAgent), the relay's host key must
 // match the pinned file, and nothing is ever asked on a terminal.
 export async function relayCall(ctx: Context, cfg: RelayClientConfig, op: string, request: object): Promise<Record<string, unknown>> {
+  // The relay stops reading past its cap and answers at once: ssh would then
+  // fail to write the rest, with no answer to read. Refused here, clearly.
+  const input = JSON.stringify(request);
+  if (Buffer.byteLength(input) > MAX_REQUEST_BYTES) {
+    const mib = MAX_REQUEST_BYTES / (1024 * 1024);
+    throw new ForgeError(op === "publish"
+      ? `the branch is too big to publish: its new commits make a request over the relay's ${mib} MiB; leave large or generated files out of the commits`
+      : `the request is too big: it is over the relay's ${mib} MiB`);
+  }
   const argv = [
     "ssh", "-F", "/dev/null", "-i", cfg.key, "-o", "IdentitiesOnly=yes",
     "-o", `UserKnownHostsFile=${cfg.knownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
     "-o", "ControlMaster=auto", "-o", `ControlPath=${join(dirname(cfg.key), "cm-%C")}`, "-o", "ControlPersist=60",
     `${cfg.user}@${cfg.address}`, op,
   ];
-  const r = await ctx.exec(argv, { input: JSON.stringify(request) });
+  const r = await ctx.exec(argv, { input });
   const lines = r.stdout.split("\n").filter((l) => l.trim() !== "");
   let answer: unknown;
   try {
@@ -67,8 +76,9 @@ export async function relayCall(ctx: Context, cfg: RelayClientConfig, op: string
     throw new ForgeError(`the relay did not answer: ${printable(r.stderr.trim()) || `ssh exit code ${r.code}`}`);
   }
   const a = (typeof answer === "object" && answer !== null ? answer : {}) as Record<string, unknown>;
+  // A refusal can span lines (each Betterleaks finding has its own): they are kept.
   if (a.ok !== true) {
-    throw new ForgeError(`the relay refused: ${printable(typeof a.error === "string" ? a.error : "no reason given")}`);
+    throw new ForgeError(`the relay refused: ${printableText(typeof a.error === "string" ? a.error : "no reason given")}`);
   }
   return a;
 }
@@ -113,10 +123,15 @@ export async function publishBranch(ctx: Context, cfg: RelayClientConfig, cwd: s
   const forkRef = `refs/remotes/fork/${branch}`;
   const known = await gitOut(ctx, root, "rev-parse", "--verify", "-q", forkRef);
 
+  // A branch already at the fork's head is sent whole, from origin/main: the
+  // bundle would otherwise be empty, and a relay rebuilt since it published
+  // the branch records it (adopts it) only from a publish.
+  const since = known === null || known === tip ? [] : [`^${forkRef}`];
+
   const tmp = await mkdtemp(join(tmpdir(), "forge-relay-"));
   try {
     const file = join(tmp, "out.bundle");
-    const made = await ctx.exec(gitArgs(root, ["bundle", "create", "-q", file, `refs/heads/${branch}`, "^refs/remotes/origin/main", ...(known === null ? [] : [`^${forkRef}`])]));
+    const made = await ctx.exec(gitArgs(root, ["bundle", "create", "-q", file, `refs/heads/${branch}`, "^refs/remotes/origin/main", ...since]));
     if (made.code !== 0) throw new ForgeError(`nothing to publish from ${branch}: ${printable(made.stderr.trim())}`);
     const bundle = (await readFile(file)).toString("base64");
     const answer = await relayCall(ctx, cfg, "publish", { branch, bundle });
@@ -139,11 +154,17 @@ export async function publishBranch(ctx: Context, cfg: RelayClientConfig, cwd: s
       throw new ForgeError("the published branch does not hold the tree that was sent: the local branch is untouched");
     }
 
-    // Moves the branch only if it is still where it was sent from.
+    // Moves the branch only if it is still where it was sent from. If the
+    // agent committed meanwhile, its commits are put back on the published
+    // head with commands the hook allows (it blocks git rebase), named with
+    // the real commits: the tip that was sent and the branch's tip now.
     const moved = await ctx.exec(gitArgs(root, ["update-ref", `refs/heads/${branch}`, head, tip]));
     if (moved.code !== 0) {
-      throw new ForgeError(`${branch} moved during the publish: it was published at ${head.slice(0, 12)}; ` +
-        `move your new commits onto fork/${branch} (git rebase fork/${branch})`);
+      const now = await gitOut(ctx, root, "rev-parse", "--verify", "-q", `refs/heads/${branch}^{commit}`);
+      const published = `it was published at ${head.slice(0, 12)}, which fork/${branch} holds`;
+      if (now === null) throw new ForgeError(`${branch} was deleted during the publish: ${published}`);
+      throw new ForgeError(`${branch} moved during the publish: ${published}. To put your new commits on it, ` +
+        `run on ${branch}: git reset --keep fork/${branch} && git cherry-pick ${tip}..${now}`);
     }
     return { head, url };
   } finally {

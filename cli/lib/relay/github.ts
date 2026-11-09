@@ -2,7 +2,7 @@
 // reads filtered by author, and the fork created when it is missing. Every
 // path is built here from the relay's configuration and validated integers;
 // nothing the dev VM sends is a path, a URL or a repository.
-import { printableText } from "../printable.ts";
+import { printable, printableText } from "../printable.ts";
 import { RelayError, type RelayConfig } from "./config.ts";
 import { validTask } from "./policy.ts";
 
@@ -68,6 +68,14 @@ function num(n: number, what: string): number {
   return n;
 }
 
+// A comment's or a job's ID: GitHub's are far past an issue number (review
+// comments near 2e9, Actions jobs past 1e10), so only a JSON number's exact
+// range bounds them.
+function id(n: number, what: string): number {
+  if (!Number.isSafeInteger(n) || n < 1) throw new RelayError(`${what} ID must be a positive integer of at most ${Number.MAX_SAFE_INTEGER}`);
+  return n;
+}
+
 export function filterByAuthor<T extends { author: string }>(items: T[], allowed: readonly string[]): { kept: T[]; hidden: number } {
   const ok = new Set(allowed.map((a) => a.toLowerCase()));
   const kept = items.filter((i) => ok.has(i.author.toLowerCase()));
@@ -87,7 +95,14 @@ export async function ensureFork(gh: GitHub, cfg: RelayConfig, sleep: (ms: numbe
     check(first);
     return "exists";
   }
-  await post(gh, `/repos/${cfg.upstream}/forks`, { name: cfg.upstream.split("/")[1], default_branch_only: true });
+  // Named as the configuration names it, which may differ from upstream's
+  // name. GitHub answers with the repository it made, or with the bot's
+  // existing fork of upstream under another name, which it returns instead of
+  // making a second one: polling for cfg.fork would then wait in vain.
+  const made = str(obj((await post(gh, `/repos/${cfg.upstream}/forks`, { name: cfg.fork.split("/")[1], default_branch_only: true })).json).full_name);
+  if (made !== "" && !eq(made, cfg.fork)) {
+    throw new RelayError(`GitHub answered the fork request with ${printable(made).slice(0, 140)}, not ${cfg.fork}: the bot already has a fork of ${cfg.upstream} under that name, or a repository that took it; rename or delete that repository on GitHub, then try again`);
+  }
   // Forking is asynchronous: poll until the repository answers.
   for (let i = 0; i < 60; i++) {
     const res = await get(gh, path, 200, 404);
@@ -132,8 +147,8 @@ export async function comment(gh: GitHub, cfg: RelayConfig, pr: number, body: st
 }
 
 export async function reply(gh: GitHub, cfg: RelayConfig, pr: number, commentId: number, body: string): Promise<{ url: string }> {
+  id(commentId, "comment");
   await botPull(gh, cfg, pr);
-  num(commentId, "comment");
   const c = obj((await get(gh, `/repos/${cfg.upstream}/pulls/comments/${commentId}`)).json);
   if (!str(c.pull_request_url).endsWith(`/repos/${cfg.upstream}/pulls/${pr}`)) {
     throw new RelayError(`comment ${commentId} is not a comment of pull request ${pr}`);
@@ -207,7 +222,7 @@ export async function ciRuns(gh: GitHub, cfg: RelayConfig, pr: number): Promise<
 }
 
 export async function ciLog(gh: GitHub, cfg: RelayConfig, pr: number, jobId: number): Promise<string> {
-  num(jobId, "job");
+  id(jobId, "job");
   if (!(await ciRuns(gh, cfg, pr)).some((r) => r.id === jobId)) throw new RelayError(`job ${jobId} is not one of the checks of pull request ${pr}`);
   const res = await get(gh, `/repos/${cfg.upstream}/actions/jobs/${jobId}/logs`);
   return printableText(res.text.slice(-200_000));

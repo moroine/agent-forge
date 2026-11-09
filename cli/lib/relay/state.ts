@@ -1,8 +1,8 @@
 // The relay's state, <stateDir>/state.json: the head it last published on the
 // fork for each task, the head it is about to push (pending), and the times
-// of its recent writes to GitHub. Two requests can run at once (two
-// terminals, a multiplexed ssh connection), so each one reads and writes the
-// state under one lock.
+// of its recent writes to GitHub and of its recent publish attempts. Two
+// requests can run at once (two terminals, a multiplexed ssh connection), so
+// each one reads and writes the state under one lock.
 import { randomBytes } from "node:crypto";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
@@ -12,7 +12,7 @@ import { RelayError } from "./config.ts";
 // `pending[t]` is written before a push and cleared once the push is recorded
 // in `published[t]` (or refused): if the relay dies in between, the next
 // publish still recognizes the fork's head as its own.
-export type RelayState = { published: Record<string, string>; pending: Record<string, string>; writes: number[] };
+export type RelayState = { published: Record<string, string>; pending: Record<string, string>; writes: number[]; attempts: number[] };
 
 const RETRY_MS = 100;
 const WAIT_MS = 30_000;
@@ -29,7 +29,7 @@ const token = (): string => randomBytes(12).toString("hex");
 const heads = (): Record<string, string> => Object.create(null) as Record<string, string>;
 
 function emptyState(): RelayState {
-  return { published: heads(), pending: heads(), writes: [] };
+  return { published: heads(), pending: heads(), writes: [], attempts: [] };
 }
 
 async function readState(file: string): Promise<RelayState> {
@@ -48,7 +48,7 @@ async function readState(file: string): Promise<RelayState> {
     throw bad();
   }
   if (typeof json !== "object" || json === null || Array.isArray(json)) throw bad();
-  const o = json as { published?: unknown; pending?: unknown; writes?: unknown };
+  const o = json as { published?: unknown; pending?: unknown; writes?: unknown; attempts?: unknown };
   const map = (v: unknown): Record<string, string> => {
     if (typeof v !== "object" || v === null || Array.isArray(v)) throw bad();
     const m = heads();
@@ -58,8 +58,12 @@ async function readState(file: string): Promise<RelayState> {
     }
     return m;
   };
-  if (!Array.isArray(o.writes) || o.writes.some((w) => typeof w !== "number" || !Number.isFinite(w))) throw bad();
-  return { published: map(o.published), pending: map(o.pending ?? {}), writes: o.writes as number[] };
+  const times = (v: unknown): number[] => {
+    if (!Array.isArray(v) || v.some((w) => typeof w !== "number" || !Number.isFinite(w))) throw bad();
+    return v as number[];
+  };
+  // A state file written before the attempt cap existed has no `attempts`.
+  return { published: map(o.published), pending: map(o.pending ?? {}), writes: times(o.writes), attempts: times(o.attempts ?? []) };
 }
 
 type Held = { dir: string; lockDir: string; owner: string };
@@ -75,7 +79,7 @@ async function writeState(held: Held, s: RelayState): Promise<void> {
   try {
     const fh = await fsp.open(tmp, "wx", 0o600);
     try {
-      await fh.writeFile(`${JSON.stringify({ published: { ...s.published }, pending: { ...s.pending }, writes: s.writes })}\n`);
+      await fh.writeFile(`${JSON.stringify({ published: { ...s.published }, pending: { ...s.pending }, writes: s.writes, attempts: s.attempts })}\n`);
       await fh.sync();
     } finally {
       await fh.close();
@@ -163,13 +167,31 @@ export async function withState<T>(dir: string, fn: (s: RelayState, save: () => 
   }
 }
 
+const minutesUntil = (times: number[], now: number): string => {
+  const wait = Math.max(1, Math.ceil((Math.min(...times) + HOUR_MS - now) / 60_000));
+  return `${wait} minute${wait === 1 ? "" : "s"}`;
+};
+
 // Counts one write to GitHub (publish, open-pr, comment, reply) against the
 // hourly cap, which bounds what a tricked agent can post. `now` is in ms.
 export function takeWrite(s: RelayState, now: number, perHour: number): void {
   s.writes = s.writes.filter((t) => t > now - HOUR_MS);
   if (s.writes.length >= perHour) {
-    const wait = Math.max(1, Math.ceil((Math.min(...s.writes) + HOUR_MS - now) / 60_000));
-    throw new RelayError(`write cap reached: ${perHour} writes to GitHub in the last hour; try again in ${wait} minute${wait === 1 ? "" : "s"}`);
+    throw new RelayError(`write cap reached: ${perHour} writes to GitHub in the last hour; try again in ${minutesUntil(s.writes, now)}`);
   }
   s.writes.push(now);
+}
+
+// Publish attempts an hour, refused or not. The write cap counts only what
+// reaches GitHub, but every attempt makes the relay store and check a bundle
+// of up to 64 MiB: this bounds the disk and the work the dev VM can cost it.
+export const PUBLISH_ATTEMPTS_PER_HOUR = 60;
+
+// Counts one publish attempt, before its bundle is read. `now` is in ms.
+export function takeAttempt(s: RelayState, now: number): void {
+  s.attempts = s.attempts.filter((t) => t > now - HOUR_MS);
+  if (s.attempts.length >= PUBLISH_ATTEMPTS_PER_HOUR) {
+    throw new RelayError(`publish attempt cap reached: ${PUBLISH_ATTEMPTS_PER_HOUR} in the last hour; try again in ${minutesUntil(s.attempts, now)}`);
+  }
+  s.attempts.push(now);
 }

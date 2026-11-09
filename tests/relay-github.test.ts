@@ -86,14 +86,19 @@ test("reply refuses a review comment of another pull request", async () => {
   assert.equal(sent("POST", "/repos/acme/widgets/pulls/7/comments/55/replies"), undefined);
 });
 
-test("reply posts to the comment's thread", async () => {
+test("reply posts to the comment's thread, with a comment ID as large as GitHub's", async () => {
+  // Review comment IDs are near 2e9 now.
+  const id = 2_874_512_345;
   const { gh, sent } = fake({
     "GET /repos/acme/widgets/pulls/7": pull(),
-    "GET /repos/acme/widgets/pulls/comments/55": { json: { pull_request_url: "https://api.github.com/repos/acme/widgets/pulls/7" } },
-    "POST /repos/acme/widgets/pulls/7/comments/55/replies": { status: 201, json: { html_url: "https://x/r" } },
+    [`GET /repos/acme/widgets/pulls/comments/${id}`]: { json: { pull_request_url: "https://api.github.com/repos/acme/widgets/pulls/7" } },
+    [`POST /repos/acme/widgets/pulls/7/comments/${id}/replies`]: { status: 201, json: { html_url: "https://x/r" } },
   });
-  assert.deepEqual(await reply(gh, cfg, 7, 55, "ok"), { url: "https://x/r" });
-  assert.deepEqual(sent("POST", "/repos/acme/widgets/pulls/7/comments/55/replies"), { body: "ok" });
+  assert.deepEqual(await reply(gh, cfg, 7, id, "ok"), { url: "https://x/r" });
+  assert.deepEqual(sent("POST", `/repos/acme/widgets/pulls/7/comments/${id}/replies`), { body: "ok" });
+  const none = fake({});
+  await assert.rejects(() => reply(none.gh, cfg, 7, 2 ** 53, "ok"), /comment ID/);
+  assert.equal(none.requests.length, 0);
 });
 
 test("readThread keeps the maintainer's and the bot's text only", async () => {
@@ -141,16 +146,29 @@ test("openPull refuses a task that is not a branch name", async () => {
   assert.equal(requests.length, 0);
 });
 
-test("ensureFork creates a missing fork, then waits for it", async () => {
+test("ensureFork creates a missing fork under the configured name, then waits for it", async () => {
+  // A fork named otherwise than upstream.
+  const named = parseRelayConfig({ ...cfg, fork: "bot/widgets-fork" });
   const { gh, sent, requests } = fake({
-    "GET /repos/bot/widgets": [{ status: 404 }, { status: 404 }, { json: { fork: true, parent: { full_name: "acme/widgets" } } }],
-    "POST /repos/acme/widgets/forks": { status: 202, json: {} },
+    "GET /repos/bot/widgets-fork": [{ status: 404 }, { status: 404 }, { json: { fork: true, parent: { full_name: "acme/widgets" } } }],
+    "POST /repos/acme/widgets/forks": { status: 202, json: { full_name: "bot/widgets-fork" } },
   });
   const sleeps: number[] = [];
-  assert.equal(await ensureFork(gh, cfg, async (ms) => { sleeps.push(ms); }), "created");
-  assert.deepEqual(sent("POST", "/repos/acme/widgets/forks"), { name: "widgets", default_branch_only: true });
+  assert.equal(await ensureFork(gh, named, async (ms) => { sleeps.push(ms); }), "created");
+  assert.deepEqual(sent("POST", "/repos/acme/widgets/forks"), { name: "widgets-fork", default_branch_only: true });
   assert.deepEqual(sleeps, [5000]);
   assert.equal(requests.filter((r) => r.method === "GET").length, 3);
+});
+
+test("ensureFork refuses at once a fork GitHub answers under another name", async () => {
+  // The bot's existing fork of upstream, which GitHub returns instead of a new one.
+  const named = parseRelayConfig({ ...cfg, fork: "bot/widgets-fork" });
+  const { gh, requests } = fake({
+    "GET /repos/bot/widgets-fork": { status: 404 },
+    "POST /repos/acme/widgets/forks": { status: 202, json: { full_name: "bot/widgets" } },
+  });
+  await assert.rejects(() => ensureFork(gh, named, async () => {}), /answered the fork request with bot\/widgets, not bot\/widgets-fork/);
+  assert.equal(requests.filter((r) => r.method === "GET").length, 1);
 });
 
 test("ensureFork refuses a repository that is not a fork of upstream", async () => {
@@ -163,13 +181,15 @@ test("ensureFork refuses a repository that is not a fork of upstream", async () 
 });
 
 test("ciRuns lists the checks of the head commit, ciLog reads one of them", async () => {
+  // Actions job IDs are past 1e10 now.
+  const job = 41_234_567_890;
   const { gh } = fake({
     "GET /repos/acme/widgets/pulls/7": pull(),
-    "GET /repos/acme/widgets/commits/abc1234/check-runs": { json: { check_runs: [{ id: 40, name: "test", status: "completed", conclusion: "failure", extra: 1 }] } },
-    "GET /repos/acme/widgets/actions/jobs/40/logs": { text: "line\x1b[2J one\n" },
+    "GET /repos/acme/widgets/commits/abc1234/check-runs": { json: { check_runs: [{ id: job, name: "test", status: "completed", conclusion: "failure", extra: 1 }] } },
+    [`GET /repos/acme/widgets/actions/jobs/${job}/logs`]: { text: "line\x1b[2J one\n" },
   });
-  assert.deepEqual(await ciRuns(gh, cfg, 7), [{ id: 40, name: "test", status: "completed", conclusion: "failure" }]);
-  assert.equal(await ciLog(gh, cfg, 7, 40), "line[2J one\n");
+  assert.deepEqual(await ciRuns(gh, cfg, 7), [{ id: job, name: "test", status: "completed", conclusion: "failure" }]);
+  assert.equal(await ciLog(gh, cfg, 7, job), "line[2J one\n");
 });
 
 test("ciLog refuses a job that is not one of the pull request's checks", async () => {

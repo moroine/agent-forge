@@ -21,6 +21,8 @@ bash -n "$FORGE"
 assert_contains 'exec node "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/forge.ts" "$@"'
 assert_contains 'export FORGE_INVOKED_AS="${BASH_SOURCE[0]}"'
 assert_contains 'forge requires Node 24+'
+# CLAUDE.md's bash strict mode: every command of the shim is guarded for it.
+assert_contains 'set -e'
 
 echo ""
 echo "PASS=$PASS FAIL=$FAIL"

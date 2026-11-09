@@ -9,9 +9,8 @@ import { RELAY_PATHS, readToken, type RelayPaths } from "./lib/relay/paths.ts";
 import type { RelayDeps } from "./lib/relay/publish.ts";
 import { auditFor, fail, serve } from "./lib/relay/serve.ts";
 import { RelayError } from "./lib/relay/config.ts";
+import { MAX_REQUEST_BYTES as MAX_INPUT } from "./lib/relay/policy.ts";
 import { relaySetup } from "./lib/relay/setup.ts";
-
-const MAX_INPUT = 64 * 1024 * 1024;
 
 const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
 

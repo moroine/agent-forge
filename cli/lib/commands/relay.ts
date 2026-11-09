@@ -19,8 +19,19 @@ export type RelayOptions = {
 const USAGE = "usage: forge relay publish [<task>] | pr <task> --title <text> --body-file <file|-> | " +
   "comment <pr> --body-file <file|-> | reply <pr> <comment-id> --body-file <file|-> | read <number> | ci <pr> [<job-id>]";
 
+// An issue or pull request number, as the relay bounds it (1e9 at most).
 function integer(s: string | undefined, what: string): number {
   if (s === undefined || !/^[1-9][0-9]{0,8}$/.test(s)) throw new ForgeError(`${what} must be a positive integer\n${USAGE}`);
+  return Number(s);
+}
+
+// A comment's or a job's ID: GitHub's are far larger than an issue number
+// (review comments near 2e9, Actions jobs past 1e10), so only what a JSON
+// number holds exactly bounds them.
+function id(s: string | undefined, what: string): number {
+  if (s === undefined || !/^[1-9][0-9]{0,15}$/.test(s) || !Number.isSafeInteger(Number(s))) {
+    throw new ForgeError(`${what} must be a positive integer of at most ${Number.MAX_SAFE_INTEGER}\n${USAGE}`);
+  }
   return Number(s);
 }
 
@@ -38,11 +49,15 @@ function str(v: unknown): string {
   return typeof v === "string" ? v : "";
 }
 
+// A review comment that answers another says which: GitHub takes a reply to
+// a thread's first comment only (a reply to a reply is refused with 422), so
+// the agent replies to that ID.
 function printThread(ctx: Context, t: Thread): void {
   ctx.out(printable(`#${t.number} ${t.kind}${t.title ? `: ${t.title}` : ""} (${t.state})`));
   for (const i of t.items as ThreadItem[]) {
     const where = i.path !== undefined ? `, ${i.path}${i.line !== undefined ? `:${i.line}` : ""}` : "";
-    ctx.out(printable(`--- ${i.kind} ${i.id} by ${i.author}, ${i.createdAt}${where}`));
+    const thread = i.inReplyTo !== undefined ? `, in reply to ${i.inReplyTo}` : "";
+    ctx.out(printable(`--- ${i.kind} ${i.id} by ${i.author}, ${i.createdAt}${where}${thread}`));
     ctx.out(printableText(i.body));
   }
   if (t.hidden > 0) ctx.out(`${t.hidden} items from other accounts hidden`);
@@ -70,7 +85,7 @@ export async function cmdRelay(ctx: Context, sub: string | undefined, args: stri
       return 0;
     }
     case "reply": {
-      const a = await relayCall(ctx, cfg, "reply", { pr: integer(args[0], "<pr>"), commentId: integer(args[1], "<comment-id>"), body: body(opts) });
+      const a = await relayCall(ctx, cfg, "reply", { pr: integer(args[0], "<pr>"), commentId: id(args[1], "<comment-id>"), body: body(opts) });
       ctx.out(printable(str(a.url)));
       return 0;
     }
@@ -82,7 +97,7 @@ export async function cmdRelay(ctx: Context, sub: string | undefined, args: stri
     case "ci": {
       const pr = integer(args[0], "<pr>");
       if (args[1] !== undefined) {
-        const a = await relayCall(ctx, cfg, "ci-log", { pr, job: integer(args[1], "<job-id>") });
+        const a = await relayCall(ctx, cfg, "ci-log", { pr, job: id(args[1], "<job-id>") });
         ctx.out(printableText(str(a.log)));
         return 0;
       }

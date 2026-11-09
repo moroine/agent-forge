@@ -127,6 +127,7 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
     if (upstreamMain === null) throw new ForgeError("upstream main is missing from the mirror after fetching it");
     const forkHead = await commitAt(ctx, repo, ref("fork", t));
     const recorded = s.published[t] ?? null;
+    let adopted = false;
     if (forkHead !== null && forkHead === s.pending[t]) {
       // An earlier publish pushed this head, then died before recording it.
       s.published[t] = forkHead;
@@ -139,11 +140,25 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
       }
     } else if (forkHead !== null) {
       await adopt(d, t, forkHead, upstreamMain);
+      adopted = true;
     }
     // Any other pending head was never pushed: the fork does not have it.
     delete s.pending[t];
 
     const tmp = await mkdtemp(path.join(os.tmpdir(), "forge-relay-publish-"));
+    // Answered with a bundle the client fetches into its fork/agent/<t>: the
+    // published head, without what `base` already has.
+    const answer = async (head: string, base: string): Promise<{ head: string; url: string; bundle: Buffer }> => {
+      await git(ctx, repo, "recording the published head", "update-ref", ref("published", t), head);
+      const file = path.join(tmp, "published.bundle");
+      await git(ctx, repo, "bundling the published branch", "bundle", "create", "-q", file, ref("published", t), `^${base}`);
+      return { head, url: `https://github.com/${cfg.fork}/tree/agent/${t}`, bundle: await readFile(file) };
+    };
+    // Set once the bundle's branch is in the mirror. A publish that fails
+    // after that forgets it: a refused bundle's objects are then referenced
+    // by nothing, and git's own gc prunes them, so refused publishes do not
+    // fill the relay's disk.
+    let fetchedIncoming = false;
     try {
       // Only refs/heads/agent/<t> is taken from the bundle, into the relay's
       // own namespace; whatever else it carries is ignored. Its objects are
@@ -157,10 +172,11 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
       const fetched = await ctx.exec(gitIn(repo, "-c", "transfer.fsckObjects=true", "fetch", "-q", "--no-tags", "--no-write-fetch-head",
         incomingBundle, `+refs/heads/agent/${t}:${ref("incoming", t)}`));
       if (fetched.code !== 0) throw new RelayError(`the bundle's agent/${t} could not be fetched: ${oneLine(fetched.stderr)}`);
+      fetchedIncoming = true;
       const incoming = (await git(ctx, repo, "reading the incoming branch", "rev-parse", "--verify", ref("incoming", t))).stdout.trim();
       if ((await git(ctx, repo, "reading the incoming branch", "cat-file", "-t", incoming)).stdout.trim() !== "commit") {
-        // A tag or a blob is not kept: the other tasks' refs must be commits.
-        await git(ctx, repo, "forgetting the incoming branch", "update-ref", "-d", ref("incoming", t));
+        // A tag or a blob is not kept (forgotten below, as for any refusal):
+        // the other tasks' refs must be commits.
         throw new RelayError(`the bundle's agent/${t} is not a commit`);
       }
 
@@ -186,7 +202,15 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         ...(others.length > 0 ? ["--not", ...others] : []))).stdout);
       if (shas.length > MAX_COMMITS) throw new RelayError(`this publish brings more than ${MAX_COMMITS} commits: squash some of them`);
       if (shas.length === 0) {
-        throw new RelayError(`nothing new to publish: every commit of agent/${t} is on upstream main, on the fork, or was sent for another task`);
+        if (!adopted || forkHead === null) {
+          throw new RelayError(`nothing new to publish: every commit of agent/${t} is on upstream main, on the fork, or was sent for another task`);
+        }
+        // A branch an earlier relay published (before a rebuild), sent again
+        // with nothing new: recorded as it is on the fork, so that open-pr
+        // accepts it, and answered with its head. Nothing reaches GitHub.
+        s.published[t] = forkHead;
+        await save();
+        return await answer(forkHead, upstreamMain);
       }
       const commits = [];
       for (const sha of shas) commits.push(await readCommit(ctx, repo, sha));
@@ -252,12 +276,12 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         await save();
       }
       s.published[t] = head;
-
-      // Answered with a bundle the client fetches into its fork/agent/<t>.
-      await git(ctx, repo, "recording the published head", "update-ref", ref("published", t), head);
-      const answer = path.join(tmp, "published.bundle");
-      await git(ctx, repo, "bundling the published branch", "bundle", "create", "-q", answer, ref("published", t), `^${since ?? upstreamMain}`);
-      return { head, url: `https://github.com/${cfg.fork}/tree/agent/${t}`, bundle: await readFile(answer) };
+      return await answer(head, since ?? upstreamMain);
+    } catch (e) {
+      // Best effort: the failure is what the agent must hear, and a ref left
+      // behind is forgotten by this task's next publish, which replaces it.
+      if (fetchedIncoming) await ctx.exec(gitIn(repo, "update-ref", "-d", ref("incoming", t))).catch(() => {});
+      throw e;
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }

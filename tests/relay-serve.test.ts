@@ -15,6 +15,9 @@ import type { FakeContext } from "./lib/fake-context.ts";
 
 const fakeBetterleaks = path.join(import.meta.dirname, "fixtures", "fake-betterleaks");
 const HEAD = "0123456789abcdef0123456789abcdef01234567";
+// GitHub's IDs as they are now: a review comment's near 2e9, an Actions job's past 1e10.
+const COMMENT_ID = 2_874_512_345;
+const JOB_ID = 41_234_567_890;
 
 let root: string;
 let calls: string[];
@@ -31,6 +34,10 @@ const github: GitHub = {
     if (method === "GET" && p === "/repos/acme/widgets/pulls/7") return ok({ user: { login: "bot" }, head: { sha: HEAD, repo: { full_name: "bot/widgets" } } });
     if (method === "POST" && p === "/repos/acme/widgets/issues/7/comments") return ok({ html_url: "https://github.com/acme/widgets/pull/7#c1" });
     if (method === "POST" && p === "/repos/acme/widgets/pulls") return ok({ number: 8, html_url: "https://github.com/acme/widgets/pull/8" });
+    if (method === "GET" && p === `/repos/acme/widgets/pulls/comments/${COMMENT_ID}`) return ok({ pull_request_url: "https://api.github.com/repos/acme/widgets/pulls/7" });
+    if (method === "POST" && p === `/repos/acme/widgets/pulls/7/comments/${COMMENT_ID}/replies`) return ok({ html_url: "https://github.com/acme/widgets/pull/7#r1" });
+    if (method === "GET" && p.startsWith(`/repos/acme/widgets/commits/${HEAD}/check-runs`)) return ok({ check_runs: [{ id: JOB_ID, name: "test", status: "completed", conclusion: "failure" }] });
+    if (method === "GET" && p === `/repos/acme/widgets/actions/jobs/${JOB_ID}/logs`) return { status: 200, headers: new Headers(), json: null, text: "the log\n" };
     return { status: 599, headers: new Headers(), json: null, text: "" };
   },
 };
@@ -88,7 +95,9 @@ test("a malformed request or an unknown field is refused, with its reason", asyn
     ["comment", { pr: 2e9, body: "x" }, /pr must be an integer/],
     ["comment", { pr: 7 }, /body must be a string/],
     ["comment", { pr: 7, body: 3 }, /body must be a string/],
-    ["ci-log", { pr: 7, job: -1 }, /job must be an integer/],
+    ["ci-log", { pr: 7, job: -1 }, /job must be a positive integer/],
+    ["ci-log", { pr: 7, job: 2 ** 53 }, /job must be a positive integer/],
+    ["reply", { pr: 7, commentId: 1.5, body: "x" }, /commentId must be a positive integer/],
     ["publish", { branch: "agent/t", bundle: "not base64!" }, /not base64/],
     ["publish", { branch: "agent/t", bundle: "" }, /bundle is empty/],
     ["publish", { branch: "t", bundle: "AAAA" }, /agent\/<task>/],
@@ -149,6 +158,30 @@ test("open-pr and comment answer on one line", async () => {
   await withState(d.paths.stateDir, async (s) => { s.published.t = HEAD; });
   assert.deepEqual(await answer("open-pr", { branch: "agent/t", title: "title", body: "body" }), { ok: true, number: 8, url: "https://github.com/acme/widgets/pull/8" });
   assert.deepEqual(await answer("comment", { pr: 7, body: "hi" }), { ok: true, url: "https://github.com/acme/widgets/pull/7#c1" });
+});
+
+test("reply and ci-log take GitHub's real comment and job IDs, past 1e9", async () => {
+  assert.deepEqual(await answer("reply", { pr: 7, commentId: COMMENT_ID, body: "done" }), { ok: true, url: "https://github.com/acme/widgets/pull/7#r1" });
+  assert.deepEqual(await answer("ci-log", { pr: 7, job: JOB_ID }), { ok: true, log: "the log\n" });
+  assert.ok(calls.includes(`GET /repos/acme/widgets/actions/jobs/${JOB_ID}/logs`), calls.join("\n"));
+  assert.ok(audit().some((l) => l.commentId === COMMENT_ID) && audit().some((l) => l.job === JOB_ID));
+});
+
+test("publish attempts are capped at 60 an hour, counted before the bundle is read", async () => {
+  // A state file from before the cap, without `attempts`.
+  fs.writeFileSync(path.join(d.paths.stateDir, "state.json"), JSON.stringify({ published: {}, pending: {}, writes: [] }));
+  // Refused at GitHub (the fake knows no fork), the attempt still counts.
+  assert.equal((await answer("publish", { branch: "agent/t", bundle: "AAAA" })).ok, false);
+  await withState(d.paths.stateDir, async (s) => {
+    assert.equal(s.attempts.length, 1);
+    const now = Date.now();
+    s.attempts = Array.from({ length: 60 }, (_, i) => now - i * 1000);
+  });
+  const before = { github: calls.length, exec: ctx.calls.length };
+  const a = await answer("publish", { branch: "agent/t", bundle: "not base64!" });
+  assert.equal(a.ok, false);
+  assert.match(String(a.error), /^publish attempt cap reached: 60 in the last hour/);
+  assert.deepEqual({ github: calls.length, exec: ctx.calls.length }, before);
 });
 
 test("the write cap refuses the third comment of the hour", async () => {

@@ -89,16 +89,54 @@ test("publish aligns the local branch on the published head", async () => {
   assert.ok(ctx.out_lines.join("\n").includes("https://github.com/bot/widgets/tree/agent/t"));
 });
 
-test("a commit made during the publish is kept, and the message says how to continue", async () => {
+test("a commit made during the publish is kept, and the message gives commands the hook allows", async () => {
   relay = (_op, req) => publishAnswer(req, () => {
     fs.writeFileSync(path.join(dev, "b.txt"), "b\n");
     git(dev, "add", "b.txt");
     git(dev, "commit", "-q", "-m", "add b");
   });
   const before = git(dev, "rev-parse", "HEAD");
-  await assert.rejects(run("publish"), /moved during the publish/);
-  assert.notEqual(git(dev, "rev-parse", "refs/heads/agent/t"), before);
+  const err = await run("publish").then(() => null, (e: Error) => e);
+  const now = git(dev, "rev-parse", "refs/heads/agent/t");
+  assert.notEqual(now, before);
   assert.equal(git(dev, "log", "-1", "--format=%s", "refs/heads/agent/t"), "add b");
+  // The real commits: the tip that was sent, the branch's tip now.
+  const command = `git reset --keep fork/agent/t && git cherry-pick ${before}..${now}`;
+  assert.ok(err !== null && /moved during the publish/.test(err.message) && err.message.endsWith(command), String(err));
+
+  // container/pre-bash.sh, in the dev VM's mode, lets the agent run it...
+  const mode = path.join(root, "forge-mode");
+  fs.writeFileSync(mode, "contributor");
+  execFileSync("bash", [path.join(import.meta.dirname, "..", "container", "pre-bash.sh")], {
+    input: JSON.stringify({ tool_input: { command } }),
+    env: { ...process.env, FORGE_MODE_FILE: mode, FORGE_AUDIT_LOG: path.join(root, "bash-audit.log") },
+  });
+  // ...and it puts the new commit on the published head.
+  execFileSync("bash", ["-c", command], { cwd: dev, stdio: "ignore" });
+  assert.equal(git(dev, "rev-parse", "HEAD^"), git(fork, "rev-parse", "refs/relay/published/agent/t"));
+  assert.equal(git(dev, "log", "-1", "--format=%s"), "add b");
+  assert.equal(git(dev, "status", "--porcelain"), "");
+});
+
+test("a branch already at the fork's head is sent whole, for a rebuilt relay to record", async () => {
+  relay = (_op, req) => publishAnswer(req);
+  await run("publish");
+  let sent = "";
+  relay = (_op, req) => {
+    sent = path.join(root, "sent.bundle");
+    fs.writeFileSync(sent, Buffer.from(req.bundle as string, "base64"));
+    return publishAnswer(req);
+  };
+  assert.equal(await run("publish"), 0);
+  assert.equal(sshCalls.length, 2);
+  assert.match(git(dev, "bundle", "list-heads", sent), / refs\/heads\/agent\/t$/);
+});
+
+test("a request over the relay's 64 MiB is refused before it is sent", async () => {
+  relay = () => { throw new Error("must not reach the relay"); };
+  const big = "x".repeat(64 * 1024 * 1024);
+  await assert.rejects(cmdRelay(ctx, "comment", ["7"], { cwd: dev, configFile, bodyFile: "-", stdin: () => big }), /too big/);
+  assert.equal(sshCalls.length, 0);
 });
 
 test("publish refuses a branch outside agent/*", async () => {
@@ -120,22 +158,40 @@ test("ssh never forwards the agent and checks the relay's host key", async () =>
 test("read prints each item and says how many were hidden, without control characters", async () => {
   relay = () => ({ ok: true, thread: {
     number: 3, kind: "pull", title: "T", state: "open", hidden: 2,
-    items: [{ kind: "review-comment", id: 9, author: "maint", createdAt: "2026-11-09", body: "fix\x1b[2Jthis", path: "a.ts", line: 4 }],
+    items: [
+      { kind: "review-comment", id: 9, author: "maint", createdAt: "2026-11-09", body: "fix\x1b[2Jthis", path: "a.ts", line: 4 },
+      { kind: "review-comment", id: 10, author: "bot", createdAt: "2026-11-09", body: "done", path: "a.ts", line: 4, inReplyTo: 9 },
+    ],
   } });
   await run("read", "3");
   const text = ctx.out_lines.join("\n");
-  assert.ok(text.includes("--- review-comment 9 by maint, 2026-11-09, a.ts:4"));
+  assert.ok(text.includes("--- review-comment 9 by maint, 2026-11-09, a.ts:4\n"));
+  // A reply names its thread's first comment, the one a new reply must answer.
+  assert.ok(text.includes("--- review-comment 10 by bot, 2026-11-09, a.ts:4, in reply to 9\n"), text);
   assert.ok(text.includes("fix[2Jthis") && !text.includes("\x1b"));
   assert.ok(text.includes("2 items from other accounts hidden"));
 });
 
-test("ci with a job id asks for its log; a relay refusal becomes an error", async () => {
+test("ci with a job id asks for its log; a relay refusal becomes an error, its lines kept", async () => {
+  // Actions job IDs are past 1e10 now.
   relay = (op, req) => {
     assert.equal(op, "ci-log");
-    assert.deepEqual(req, { pr: 5, job: 77 });
-    return { ok: false, error: "nope\x1b[1m" };
+    assert.deepEqual(req, { pr: 5, job: 41_234_567_890 });
+    return { ok: false, error: "nope\x1b[1m\n  second line" };
   };
-  await assert.rejects(run("ci", "5", "77"), (e: Error) => e.message.includes("nope") && !e.message.includes("\x1b"));
+  await assert.rejects(run("ci", "5", "41234567890"), (e: Error) => e.message.includes("nope[1m\n  second line") && !e.message.includes("\x1b"));
+});
+
+test("reply takes a comment ID as large as GitHub's, up to what a JSON number holds", async () => {
+  relay = (op, req) => {
+    assert.equal(op, "reply");
+    assert.deepEqual(req, { pr: 7, commentId: 2_874_512_345, body: "ok" });
+    return { ok: true, url: "https://x/r" };
+  };
+  const reply = (id: string) => cmdRelay(ctx, "reply", ["7", id], { cwd: dev, configFile, bodyFile: "-", stdin: () => "ok" });
+  assert.equal(await reply("2874512345"), 0);
+  await assert.rejects(reply("9007199254740993"), /comment-id/);
+  assert.equal(sshCalls.length, 1);
 });
 
 test("a missing client config says there is no relay on this host", async () => {

@@ -5,6 +5,7 @@
 # Le type-stripping n'existe qu'à partir de Node 24 : sans ce garde-fou,
 # l'opérateur sur une version plus ancienne reçoit une SyntaxError brute sur
 # les annotations de type, au lieu d'un message qui dit quoi faire.
+set -e
 version="$(node -v 2>/dev/null)" || { echo "forge requires Node 24+ (node not found)" >&2; exit 1; }
 major="${version#v}"
 major="${major%%.*}"

@@ -121,9 +121,9 @@ const forkHead = (t: string): string | null => (exists(fork, `refs/heads/agent/$
 const tree = (repo: string, rev: string): string => git(repo, "rev-parse", `${rev}^{tree}`);
 const stateOf = (d: RelayDeps): RelayState => {
   const file = path.join(d.paths.stateDir, "state.json");
-  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { published: {}, pending: {}, writes: [] };
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { published: {}, pending: {}, writes: [], attempts: [] };
 };
-const nothingRecorded = { published: {}, pending: {}, writes: [] };
+const nothingRecorded = { published: {}, pending: {}, writes: [], attempts: [] };
 
 // One commit of `file` on agent/<t> in the dev clone, which is created from
 // `from` (origin/main by default) when it does not exist.
@@ -321,6 +321,27 @@ test("adopts an unrecorded fork branch of the bot's commits, refuses one with an
   assert.equal(stateOf(d).published.u, undefined);
 });
 
+test("after a rebuild, a published branch with nothing new is adopted and recorded, not refused", async () => {
+  work("t", "a.txt");
+  const first = await publish(relay("old"), { branch: "agent/t", bundle: bundle("t") });
+  align("t", first);
+  const d = relay("new");
+  // The client sends a branch already at the fork's head whole, from origin/main.
+  const file = path.join(root, "whole.bundle");
+  git(dev, "bundle", "create", "-q", file, "refs/heads/agent/t", "^refs/remotes/origin/main");
+  const res = await publish(d, { branch: "agent/t", bundle: fs.readFileSync(file) });
+  assert.equal(res.head, first.head);
+  assert.equal(forkHead("t"), first.head);
+  // Recorded, so open-pr accepts it; nothing reached GitHub, so no write counted.
+  assert.deepEqual(stateOf(d).published, { t: first.head });
+  assert.deepEqual(stateOf(d).writes, []);
+  align("t", res);
+  assert.equal(git(dev, "rev-parse", "refs/heads/agent/t"), first.head);
+
+  // Recorded now, the same branch is nothing new.
+  await refused(publish(d, { branch: "agent/t", bundle: fs.readFileSync(file) }), /nothing new to publish/);
+});
+
 test("a Betterleaks finding refuses the publish and pushes nothing", async () => {
   const d = relay();
   blEnv.FAKE_BL_FIND = "1";
@@ -331,6 +352,8 @@ test("a Betterleaks finding refuses the publish and pushes nothing", async () =>
   );
   assert.equal(forkHead("t"), null);
   assert.deepEqual(stateOf(d), nothingRecorded);
+  // The refused branch is forgotten: its objects are left to git's gc.
+  assert.equal(exists(d.paths.mirror, "refs/relay/incoming/agent/t"), false);
 });
 
 test("the scans run in a fresh directory and refuse a mirror holding an ignore file", async () => {
@@ -442,6 +465,10 @@ test("refuses a task built on another task, published or only sent", async () =>
   assert.equal(forkHead("t"), null);
   assert.equal(forkHead("s"), null);
   assert.deepEqual(stateOf(d).published, { u: u.head });
+  // The refused tasks' branches are forgotten, the published one's is kept.
+  assert.equal(exists(d.paths.mirror, "refs/relay/incoming/agent/t"), false);
+  assert.equal(exists(d.paths.mirror, "refs/relay/incoming/agent/s"), false);
+  assert.equal(git(d.paths.mirror, "rev-parse", "refs/relay/incoming/agent/u"), original);
 });
 
 test("refuses more than 200 commits before reading any of them", async () => {
@@ -460,7 +487,7 @@ test("refuses more than 200 commits before reading any of them", async () => {
 });
 
 test("takeWrite refuses past the hourly cap", () => {
-  const s: RelayState = { published: {}, pending: {}, writes: [] };
+  const s: RelayState = { published: {}, pending: {}, writes: [], attempts: [] };
   takeWrite(s, 0, 2);
   takeWrite(s, 60_000, 2);
   assert.throws(() => takeWrite(s, 120_000, 2), (e) => e instanceof RelayError && /write cap/.test(e.message));
