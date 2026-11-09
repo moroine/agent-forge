@@ -208,10 +208,12 @@ const SIGNING = "ssh-ed25519 AAAAsign forge-relay-signing";
 const KEYS = { push: PUSH, signing: SIGNING };
 const GREETING = (login: string) => `Hi ${login}! You've successfully authenticated, but GitHub does not provide shell access.\n`;
 // How the setup reaches github.com as the bot: the push key alone, GitHub's
-// pinned host keys alone.
+// pinned host keys alone, bounded in time like a push.
 const SSH_CHECK = [
   "ssh", "-F", "/dev/null", "-i", RELAY_PATHS.pushKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-  "-o", `UserKnownHostsFile=${RELAY_PATHS.githubKnownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+  "-o", `UserKnownHostsFile=${RELAY_PATHS.githubKnownHosts}`, "-o", "GlobalKnownHostsFile=/dev/null",
+  "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+  "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
   "-T", "git@github.com",
 ];
 

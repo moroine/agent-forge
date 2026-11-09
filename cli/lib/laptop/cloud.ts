@@ -225,13 +225,17 @@ function tofuEnv(infra: Infra): Record<string, string> {
   return { ...awsEnv(infra.settings), TF_DATA_DIR: join(hostDir(infra.name), "tofu") };
 }
 
+// OpenTofu's state for a host: its local backend's file, there once an apply
+// has run.
+export const tofuStatePath = (name: string): string => join(hostDir(name), "terraform.tfstate");
+
 // Writes the variables and initializes the backend; returns the tfvars path.
 async function prepare(ctx: Context, infra: Infra, running: boolean, metadata: Metadata): Promise<string> {
   const dir = hostDir(infra.name);
   const tfvars = join(dir, "tofu.tfvars.json");
   writePrivate(tfvars, renderTfvars(infra, running, metadata));
   await mustSucceed("tofu init", ctx.exec(
-    tofuArgs(infra, "init", "-input=false", `-backend-config=path=${join(dir, "terraform.tfstate")}`),
+    tofuArgs(infra, "init", "-input=false", `-backend-config=path=${tofuStatePath(infra.name)}`),
     { env: tofuEnv(infra) },
   ));
   return tfvars;

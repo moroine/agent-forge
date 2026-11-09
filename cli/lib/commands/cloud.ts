@@ -2,15 +2,16 @@
 // laptop. `create` installs a cloud host (or resumes its install), `start`
 // and `stop` switch the instances on and off, `rebuild` replaces the dev VM
 // with a new one, `rebuild-relay` the relay.
+import { existsSync } from "node:fs";
 import { ForgeError, type Context } from "../context.ts";
 import { repoRoot } from "../paths.ts";
 import {
   applyInteractive, applyQuiet, currentPublicIp, DEV_INSTANCE, infraFor, loadCloudSettings, RELAY_INSTANCE,
-  saveCloudSettings,
+  saveCloudSettings, tofuStatePath,
 } from "../laptop/cloud.ts";
 import { forgetHostKeys } from "../laptop/lima.ts";
 import { remoteExec } from "../laptop/remote.ts";
-import { loadHosts, saveHost, type InstallStep, type LaptopHost } from "../laptop/state.ts";
+import { loadHosts, saveHost, type LaptopHost } from "../laptop/state.ts";
 import { CLOUD_STEPS, cmdInstall, relayReached } from "./install.ts";
 import { cmdOpen } from "./open.ts";
 
@@ -41,14 +42,25 @@ async function selectCloudHost(ctx: Context, wanted?: string): Promise<LaptopHos
 // Start works on a finished install only: before that, the SSH address or
 // the OpenTofu state may be missing, and the install resumes first. A host
 // installed before the relay existed lacks its step: create --host adds the
-// relay. Stop needs only the instances, in OpenTofu's state once the `vm`
-// step is done: a failed update, a failed relay step included, never keeps
-// the machines running, which costs money.
-const STOP_STEPS: InstallStep[] = ["vm"];
-
-function installed(host: LaptopHost, steps: readonly InstallStep[]): LaptopHost {
-  if (!steps.every((s) => host.done.includes(s))) {
+// relay.
+function installed(host: LaptopHost): LaptopHost {
+  if (!CLOUD_STEPS.every((s) => host.done.includes(s))) {
     throw new ForgeError(`${host.name}'s install is not finished: run forge cloud create --host ${host.name} to resume it`);
+  }
+  return host;
+}
+
+// Stop needs only what OpenTofu acts on: its state, there once an apply has
+// run, and the SSH address its variables carry. No install step is asked
+// for: instances run, and cost money, whatever step an install or an update
+// stopped at (the SSH wait of a first create, a rebuild's reinstall, the relay
+// step). applyQuiet still refuses any change but starting and stopping.
+function stoppable(host: LaptopHost): LaptopHost {
+  if (!existsSync(tofuStatePath(host.name)) || !loadCloudSettings(host.name).sshCidr) {
+    throw new ForgeError(
+      `${host.name} has no OpenTofu state or no SSH address yet, so nothing to stop: ` +
+      `run forge cloud create --host ${host.name} to resume its install`,
+    );
   }
   return host;
 }
@@ -62,8 +74,8 @@ export async function cmdCloud(ctx: Context, sub: string | undefined, opts: Clou
       if (opts.host !== undefined) await selectCloudHost(ctx, opts.host);
       return cmdInstall(ctx, opts.host !== undefined ? { host: opts.host, checkout, sleep } : { cloud: true, checkout, sleep });
     }
-    case "start": return start(ctx, installed(await selectCloudHost(ctx, opts.host), CLOUD_STEPS), checkout, sleep);
-    case "stop": return stop(ctx, installed(await selectCloudHost(ctx, opts.host), STOP_STEPS), checkout);
+    case "start": return start(ctx, installed(await selectCloudHost(ctx, opts.host)), checkout, sleep);
+    case "stop": return stop(ctx, stoppable(await selectCloudHost(ctx, opts.host)), checkout);
     case "rebuild": return rebuild(ctx, await selectCloudHost(ctx, opts.host), checkout, sleep);
     case "rebuild-relay": return rebuildRelay(ctx, await selectCloudHost(ctx, opts.host), checkout, sleep);
     default: throw new ForgeError(`usage: ${USAGE}`);

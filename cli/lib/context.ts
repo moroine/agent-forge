@@ -4,9 +4,11 @@ import { spawn } from "node:child_process";
 import { constants } from "node:os";
 import { createPrompt } from "./prompt.ts";
 
-export type ExecResult = { code: number; stdout: string; stderr: string };
-// `cwd` absent : le répertoire courant de forge, hérité.
-export type ExecOptions = { input?: string; env?: Record<string, string>; cwd?: string };
+// `timedOut` : présent, et vrai, seulement quand `timeoutMs` a coupé la commande.
+export type ExecResult = { code: number; stdout: string; stderr: string; timedOut?: boolean };
+// `cwd` absent : le répertoire courant de forge, hérité. `timeoutMs` : au-delà,
+// la commande est tuée (voir run).
+export type ExecOptions = { input?: string; env?: Record<string, string>; cwd?: string; timeoutMs?: number };
 export type AttachOptions = { env?: Record<string, string>; cwd?: string };
 
 export type Prompt = {
@@ -64,6 +66,13 @@ function exitCode(code: number | null, signal: NodeJS.Signals | null): number {
 // Ne rejette jamais sur un code non nul : plusieurs sondes (show-ref, test -e,
 // pkill) se servent du code de sortie comme réponse. Un binaire absent est
 // rapporté de la même façon, par un code non nul.
+//
+// Avec `timeoutMs`, l'enfant a son propre groupe de processus, et passé ce
+// délai tout le groupe est tué (SIGKILL) : l'enfant et ce qu'il a lancé, git
+// et son ssh par exemple. Le seul enfant ne suffirait pas : un petit-enfant
+// qui garde stdout ou stderr ouvert retiendrait la fin de la commande. Le
+// résultat porte alors le code 124, celui de timeout(1), et `timedOut`. Un
+// délai en Node plutôt que timeout(1), absent d'un macOS sans coreutils.
 function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
   return new Promise((resolve) => {
     const child = spawn(argv[0], argv.slice(1), {
@@ -71,7 +80,17 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
       // Les variables en plus se superposent à l'environnement hérité (PATH…).
       env: opts.env ? { ...process.env, ...opts.env } : process.env,
       cwd: opts.cwd,
+      detached: opts.timeoutMs !== undefined,
     });
+    let timedOut = false;
+    const timer = opts.timeoutMs === undefined ? undefined : setTimeout(() => {
+      timedOut = true;
+      try {
+        if (child.pid !== undefined) process.kill(-child.pid, "SIGKILL");
+      } catch {
+        // Le groupe a déjà fini.
+      }
+    }, opts.timeoutMs);
     let stdout = "";
     let stderr = "";
     // setEncoding AVANT toute concaténation : sans lui les chunks arrivent en
@@ -83,8 +102,14 @@ function run(argv: string[], opts: ExecOptions = {}): Promise<ExecResult> {
     child.stderr.setEncoding("utf8");
     child.stdout.on("data", (c) => (stdout += c));
     child.stderr.on("data", (c) => (stderr += c));
-    child.on("error", (e) => resolve({ code: 127, stdout, stderr: String(e) }));
-    child.on("close", (code, signal) => resolve({ code: exitCode(code, signal), stdout, stderr }));
+    child.on("error", (e) => {
+      clearTimeout(timer);
+      resolve({ code: 127, stdout, stderr: String(e) });
+    });
+    child.on("close", (code, signal) => {
+      clearTimeout(timer);
+      resolve(timedOut ? { code: 124, stdout, stderr, timedOut } : { code: exitCode(code, signal), stdout, stderr });
+    });
     if (opts.input !== undefined) child.stdin.end(opts.input);
     else child.stdin.end();
   });

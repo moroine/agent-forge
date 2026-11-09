@@ -51,10 +51,15 @@ export const RELAY_PATHS: RelayPaths = {
 // How the relay reaches github.com over SSH as the bot, for its pushes and its
 // setup check: with the push key alone (no agent, no other identity), no user
 // or system configuration, never a prompt, and only the GitHub host keys the
-// role pinned: a key not in that file is refused, never learned.
+// role pinned (no system-wide known_hosts either): a key not in that file is
+// refused, never learned. A connection that does not open within 30 s, or
+// that stops answering for a minute (4 keepalives 15 s apart), is dropped:
+// the mirror's HTTP stall limits do not apply to SSH.
 export function githubSsh(paths: Pick<RelayPaths, "pushKey" | "githubKnownHosts">): string[] {
   return [
     "ssh", "-F", "/dev/null", "-i", paths.pushKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-    "-o", `UserKnownHostsFile=${paths.githubKnownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+    "-o", `UserKnownHostsFile=${paths.githubKnownHosts}`, "-o", "GlobalKnownHostsFile=/dev/null",
+    "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
   ];
 }

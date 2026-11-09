@@ -201,15 +201,35 @@ test("publishes a new branch: signed commits on the fork, the agent's tree, reco
     }
   }
   // The push goes to pushBase over SSH, with the push key and GitHub's pinned
-  // host keys only.
+  // host keys only, and bounded in time: by ssh, and as a whole, well inside
+  // the state lock's 15 minutes.
   const push = ctx.calls.findIndex((argv) => argv.includes("push"));
   assert.equal(ctx.calls[push].at(-2), `${githubBase}/bot/widgets.git`);
   assert.ok(!ctx.calls[push].some((a) => a.startsWith("+") || a === "--force" || a === "-f"));
   assert.equal(ctx.execOptions[push]?.env?.GIT_SSH_COMMAND, [
     "ssh", "-F", "/dev/null", "-i", d.paths.pushKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
-    "-o", `UserKnownHostsFile=${d.paths.githubKnownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+    "-o", `UserKnownHostsFile=${d.paths.githubKnownHosts}`, "-o", "GlobalKnownHostsFile=/dev/null",
+    "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+    "-o", "ConnectTimeout=30", "-o", "ServerAliveInterval=15", "-o", "ServerAliveCountMax=4",
   ].map((a) => `'${a}'`).join(" "));
+  assert.equal(ctx.execOptions[push]?.timeoutMs, 600_000);
   assert.equal(RELAY_PATHS.pushBase, "git@github.com:");
+});
+
+test("a push cut short by its time bound is a failed push: never taken as a refusal, its pending head kept", async () => {
+  const d = relay();
+  work("t", "a.txt");
+  // What git printed before it was killed counts for nothing: the push may have landed.
+  intercept = async (argv, run) => (argv.includes("push")
+    ? { code: 124, stdout: "!\tHEAD:refs/heads/agent/t\t[rejected] (fetch first)\n", stderr: "", timedOut: true }
+    : run());
+  await assert.rejects(publish(d, { branch: "agent/t", bundle: bundle("t") }), (e) => {
+    assert.ok(!(e instanceof RelayError), String(e));
+    assert.match((e as Error).message, /^pushing agent\/t to the fork failed: it did not finish within 600 s/);
+    return true;
+  });
+  assert.deepEqual(Object.keys(stateOf(d).pending), ["t"]);
+  assert.deepEqual(stateOf(d).published, {});
 });
 
 test("a second publish replays only the new commits and fast-forwards", async () => {

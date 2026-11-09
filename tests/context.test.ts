@@ -46,6 +46,17 @@ test("exec reports a child killed by a signal as 128 + the signal number", async
   assert.equal(r.code, 137);
 });
 
+// Le groupe entier : `sleep`, petit-enfant de sh, garde stdout et stderr
+// ouverts ; s'il survivait, la commande ne finirait qu'avec lui, 30 s plus tard.
+test("exec past timeoutMs kills the child's whole process group and says it timed out", async () => {
+  const started = Date.now();
+  const r = await createContext().exec(["sh", "-c", "sleep 30; :"], { timeoutMs: 200 });
+  assert.equal(r.code, 124);
+  assert.equal(r.timedOut, true);
+  assert.ok(Date.now() - started < 5000, `${Date.now() - started} ms`);
+  assert.equal((await createContext().exec(["true"], { timeoutMs: 5000 })).timedOut, undefined);
+});
+
 test("attach reports a child killed by a signal as 128 + the signal number", async () => {
   assert.equal(await createContext().attach(["sh", "-c", "kill -TERM $$"]), 143);
 });

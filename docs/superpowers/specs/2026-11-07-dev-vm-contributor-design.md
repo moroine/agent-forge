@@ -167,8 +167,8 @@ Non-goals:
 
 Anti-goals (failure even if everything "works"):
 
-- **Any GitHub credential on the dev VM**: the bot's token or signing key, the
-  maintainer's forwarded SSH agent, a `gh` login.
+- **Any GitHub credential on the dev VM**: the bot's token, push key or
+  signing key, the maintainer's forwarded SSH agent, a `gh` login.
 - **An AWS credential reachable from either VM**: an instance profile, keys in
   a file, the metadata service handing out a role.
 - **A relay that is a generic GitHub proxy**: passing through arbitrary API
@@ -196,7 +196,7 @@ the Mac                              dedicated AWS account, one VPC
 │ AWS credentials    │               │          │ relay API, one port       │
 │ (never on a VM)    │  ssh (admin)  │          ▼                           │
 │                    │─────────────▶ │ relay VM (small)                     │──▶ GitHub, as the bot
-└────────────────────┘               │  bot token + signing key, policy     │
+└────────────────────┘               │  token, push + signing keys, policy  │
                                      └──────────────────────────────────────┘
 ```
 

@@ -157,8 +157,10 @@
 
 # The relay's own repository: upstream main, the fork's branches and the
 # dev VM's bundles are fetched into it. Every object fetched is checked
-# (fsck), no hook ever runs, and a GitHub transfer that stalls below 1000
-# bytes/s for 60 s is abandoned instead of holding the relay.
+# (fsck), no hook ever runs, and a fetch from GitHub (anonymous, over HTTPS)
+# that stalls below 1000 bytes/s for 60 s is abandoned instead of holding the
+# relay. These limits are HTTP's: the push, over SSH, is bounded by ssh's
+# keepalives and by forge-relay itself (cli/lib/relay/paths.ts, publish.ts).
 - name: Create the mirror  # noqa: command-instead-of-module
   become: true
   become_user: forge-relay

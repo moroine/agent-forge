@@ -26,9 +26,10 @@ yours and no AWS credential, and your SSH agent is never forwarded to it.
 that alone holds the bot's GitHub credentials: its token, its push key and
 its signing key. The agent publishes and answers through `forge relay` on the
 dev VM; the relay checks every request, signs the commits, pushes them to the
-bot's fork over SSH and opens the pull request. The `contributor` mode of the hook blocks `git push` and `gh`, and
-the dev VM holds no GitHub credential. Both VMs keep egress open (the proxy
-that would filter it is moroine/agent-forge#117).
+bot's fork over SSH and opens the pull request. The `contributor` mode of the
+hook blocks `git push` and `gh`, and the dev VM holds no GitHub credential.
+Both VMs keep egress open (the proxy that would filter it is
+moroine/agent-forge#117).
 
 ### How the agent publishes
 
@@ -174,6 +175,20 @@ A host created before the relay existed is migrated the same way:
 the new steps, and so does `stop`, since OpenTofu's plan would create the
 relay.
 
+#### GitHub's host keys
+
+The relay's SSH connections to GitHub accept only GitHub's host keys as the
+relay's role pins them (`forge_relay_github_known_hosts` in
+`ansible/roles/forge_relay/defaults/main.yml`), never a key learned on the
+way. If GitHub rotates one, a publish or the setup fails with
+`Host key verification failed`. Take the new keys from GitHub's published
+ones (`ssh_keys` in https://api.github.com/meta), check their fingerprints
+against GitHub's documentation ("GitHub's SSH key fingerprints"), update
+`forge_relay_github_known_hosts` and the fingerprints its unit test checks
+(`ansible/tests/unit/forge_relay.yml`), then run
+`forge cloud create --host <name>`: its playbook rewrites the relay's pinned
+keys.
+
 #### What the relay refuses
 
 The relay validates everything the dev VM sends before it touches git or
@@ -311,8 +326,9 @@ say), they refuse: run `forge cloud create --host <name>`, which shows
 OpenTofu's plan and applies it after your `yes`, then installs the VM again.
 
 `forge cloud start` needs a finished install. `forge cloud stop` needs only
-the VMs to exist: an install or an update that failed halfway, at the relay
-step say, never keeps them running.
+OpenTofu's state for the host and the SSH address forge recorded: an install,
+an update or a rebuild that failed halfway (waiting for SSH, at the relay
+step) never keeps the VMs running.
 
 A forgotten VM stops itself: the idle alarm stops it after two hours of low
 CPU (below 5 % on average). The stop is silent, with no email; the next

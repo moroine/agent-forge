@@ -36,6 +36,11 @@ const ref = (kind: (typeof KINDS)[number], task: string): string => `refs/relay/
 // No git command of the relay may wait for a password on a terminal.
 const NO_PROMPT = { GIT_TERMINAL_PROMPT: "0" };
 
+// The push runs under the state lock, which another request takes as stale
+// after 15 minutes: it is cut well before. ssh's keepalives drop a dead
+// connection; this bounds a slow one, and the whole push.
+const PUSH_TIMEOUT_MS = 600_000;
+
 const git = (ctx: Context, repo: string, step: string, ...args: string[]) => mustSucceed(step, ctx.exec(gitIn(repo, ...args)));
 
 // git's stderr, on one printable line.
@@ -253,7 +258,13 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         // is a local path (the tests').
         const pushed = await ctx.exec(gitIn(repo, "push", "--porcelain", `${paths.pushBase}${cfg.fork}.git`, `${head}:refs/heads/agent/${t}`), {
           env: { ...NO_PROMPT, GIT_SSH_COMMAND: githubSsh(paths).map(shellQuote).join(" ") },
+          timeoutMs: PUSH_TIMEOUT_MS,
         });
+        if (pushed.timedOut) {
+          // Cut short, whatever git printed before: the push may have landed,
+          // so pending stays, and the next publish recognizes the fork's head.
+          throw new ForgeError(`pushing agent/${t} to the fork failed: it did not finish within ${PUSH_TIMEOUT_MS / 1000} s`);
+        }
         if (pushed.code !== 0) {
           const refusal = pushRefusal(pushed.stdout, t);
           if (refusal !== null) {

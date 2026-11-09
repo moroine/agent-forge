@@ -66,6 +66,8 @@ function install(h: LaptopHost = host()): void {
   saveCloudSettings(h.name, SETTINGS);
   writeFileSync(forgeKeyPath(h.name), `${KEY}\n`);
   writeFileSync(knownHostsPath(), `203.0.113.20 ${hostKeyOf("203.0.113.20")}\n203.0.113.21 ${hostKeyOf("203.0.113.21")}\n`);
+  // OpenTofu's state, as the first apply left it.
+  writeFileSync(join(hostDir(h.name), "terraform.tfstate"), "{}\n");
 }
 // `ssh -G <alias>` as ssh answers it once forge's file is included: that file's block for the alias.
 function sshG(name: string): string {
@@ -262,11 +264,16 @@ test("no cloud host: start fails, and a remote host is never offered", async () 
 });
 
 // An unfinished install (the token never pasted, say) has nothing start
-// should touch on its own: the install resumes first. Stop needs only the
-// instances, in OpenTofu's state once the `vm` step is done.
-test("start refuses a host whose install is not finished, stop one without its VM, before any command", async () => {
-  for (const [sub, done] of [["start", ["vm", "inventory", "playbook", "ssh"]], ["stop", []]] as const) {
-    install(host({ done: [...done] }));
+// should touch on its own: the install resumes first. Stop needs only what
+// OpenTofu acts on: its state, and the SSH address its variables carry.
+test("start refuses an unfinished install, stop a host with no OpenTofu state or no SSH address, before any command", async () => {
+  const cases: [string, () => void][] = [
+    ["start", () => install(host({ done: ["vm", "inventory", "playbook", "ssh"] }))],
+    ["stop", () => { install(); rmSync(join(hostDir("forge-dev"), "terraform.tfstate")); }],
+    ["stop", () => { install(); saveCloudSettings("forge-dev", { ...SETTINGS, sshCidr: undefined }); }],
+  ];
+  for (const [sub, prepare] of cases) {
+    prepare();
     const ctx = fakeContext({ rules: RULES });
     await assert.rejects(cmdCloud(ctx, sub, { checkout: CHECKOUT, sleep: noWait }), (e: Error) =>
       e instanceof ForgeError && /forge cloud create --host forge-dev/.test(e.message), sub);
@@ -274,9 +281,11 @@ test("start refuses a host whose install is not finished, stop one without its V
   }
 });
 
-// A failed update, its relay step included, never keeps the machines running.
-test("stop: a host whose relay step did not finish is stopped", async () => {
-  install(host({ done: ["vm", "inventory", "playbook", "ssh", "claude"] }));
+// Running instances cost money: whatever step an install or an update
+// stopped at (the SSH wait of a first create, the relay step, the reinstall
+// of a rebuild), stop stops them once OpenTofu's state exists.
+test("stop: a host whose install recorded no step is stopped", async () => {
+  install(host({ done: [] }));
   const ctx = fakeContext({ rules: RULES });
   assert.equal(await cmdCloud(ctx, "stop", { checkout: CHECKOUT, sleep: noWait }), 0);
   assert.equal(tfvars().running, false);
