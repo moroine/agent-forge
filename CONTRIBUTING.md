@@ -120,6 +120,15 @@ Claude Code sessions in this repository follow `CLAUDE.md`, and the hook in
 An agent can also develop agent-forge on its own AWS VM, as a contributor: see
 [docs/contributor-model.md](docs/contributor-model.md).
 
+Its pull requests come from a bot's fork, through a relay that holds the bot's
+credentials. A pull request that changes the files below changes that
+boundary once merged and deployed, so they get extra scrutiny in review:
+`cli/lib/relay/`, `cli/forge-relay*`, `ansible/roles/forge_relay/`,
+`ansible/relay.yml`, `container/pre-bash.sh`, `CLAUDE.md` and
+`.github/workflows/`. In the repository's settings, Actions, General, set
+"Require approval for all outside collaborators", so that every workflow run
+of such a pull request waits for the maintainer.
+
 ## License
 
 By contributing, you agree that your contribution is licensed under the

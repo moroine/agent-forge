@@ -101,6 +101,25 @@ and so did handing laptop work in progress to an agent
   security architecture).
 - **Order:** this project, then DX 5 (#92), then host auto-stop (#99).
 
+**Decisions of 2026-11-09** (made while building the relay; they override the
+text below where they differ):
+
+- **The fork is created by the relay.** The bot works on a fork, never as a
+  collaborator. The relay creates the fork when it is missing (GitHub's fork
+  API) and checks that an existing repository of that name is a fork of
+  upstream, so the bot account setup has no fork step.
+- **`claude setup-token` is kept** as the dev VM's Claude credential: no
+  Remote Control, revoked only by a global log out (§5.3).
+- **A deny rule in the dev VM's managed settings** on the Claude token file and
+  on `/proc/*/environ`. Defense in depth only: the same user can read both by
+  other means, and the guide says so.
+- **The relay also scans the text the bot publishes** (pull request titles and
+  bodies, comments, replies) with Betterleaks, and refuses on a finding.
+- **The metadata service and cloud-init are off after the first boot** on both
+  VMs, held by the OpenTofu configuration and Ansible.
+- **Egress stays open on both VMs** (§9). A filtering proxy outside the dev VM,
+  possibly on the relay, is left for later (moroine/agent-forge#117).
+
 ## 4. Goals, non-goals, anti-goals
 
 Goals:
@@ -292,6 +311,11 @@ the dev VM to GitHub other than anonymous reads.
   operations with validated arguments; git objects transferred with git's own
   protocol. An SSH forced command, as `forge upload-pack` already does, is a
   natural fit.
+  **Chosen (2026-11-09):** an SSH forced command; one JSON request per
+  connection; the git objects travel in a bundle, which the relay fetches into
+  its mirror with fsck on; and the relay replays the commits
+  deterministically with `commit-tree`, preserving merges, so the signed
+  commits have the same trees and the same fingerprints on every replay.
 - **Operations, the complete list:**
   1. **Publish a branch.** The dev VM sends the commits of `agent/<task>`.
      The relay:
@@ -442,9 +466,9 @@ so the commands need no AWS CLI. The builder chooses.
 | Maintainer's SSH key | the Mac (a hardware key) | never forwarded | — | — |
 
 - **Bot account setup** (manual, documented): create the GitHub account
-  (two-factor on), fork the repository, create the token, register the
-  relay's signing key, note its no-reply email for the git identity. Never add
-  it as a collaborator.
+  (two-factor on), create the token, register the relay's signing key, note
+  its no-reply email for the git identity. Never add it as a collaborator. The
+  fork is no longer a manual step: the relay creates it (2026-11-09).
 - **Suspected dev VM compromise:** stop it, revoke the Claude credential,
   rebuild it; look at the bot's recent activity on GitHub and the relay's
   audit log. The bot's credentials were never on it.
