@@ -35,8 +35,11 @@ stays on the VM, where you read it: in herdr, or over `ssh <host>`.
   The profile needs rights on EC2 (instances, volumes, Elastic IPs, the VPC,
   subnets, internet gateways, route tables, security groups and tags, and
   describing instance types), CloudWatch alarms, AWS Budgets, and reading SSM
-  parameters (Canonical publishes the Ubuntu image's ID there). It needs no
-  IAM rights: forge creates no role.
+  parameters (Canonical publishes the Ubuntu image's ID there). forge creates
+  no IAM role, but CloudWatch does: the idle alarm stops the instance through
+  the service-linked role `AWSServiceRoleForCloudWatchEvents`, which CloudWatch
+  creates with the account's first such alarm. On an account that does not
+  have it yet, the profile needs `iam:CreateServiceLinkedRole`.
 - Enough EC2 vCPUs. An `m7i.2xlarge` needs 8 vCPUs of the "Running On-Demand
   Standard (A, C, D, H, I, M, R, T, Z) instances" quota, and a new account may
   have less. Check it in the region you will use:
@@ -95,11 +98,19 @@ it over ssh's standard input and stores it on the VM at
 `~/.config/agent-forge/claude-token`, mode 0600. The `forge-contributor`
 launcher exports it as `CLAUDE_CODE_OAUTH_TOKEN`.
 
-The token lasts one year and can be revoked:
+In a narrow terminal, `claude setup-token` prints the token over two lines,
+the second one indented. Paste it as one line, without the line break or the
+spaces: the prompt reads one line, and a token cut there makes the agent's
+requests fail with `401 OAuth access token is invalid`.
 
-- claude.ai, Settings, Claude Code: the trash icon next to the token; or
-- Settings, Account, Log Out of all sessions, which includes setup-tokens (see
-  [the Claude Help Center](https://support.claude.com/en/articles/10310342)).
+The token lasts one year. It can only make model requests: no Remote Control,
+no claude.ai connectors. Revoking it alone may not be possible: the
+[Claude Help Center](https://support.claude.com/en/articles/10310342) lists
+sign-ins under Settings, Account, and other tokens under Settings, Claude
+Code, but in November 2026 the token showed in neither list. The one sure way
+is Settings, Account, Log Out, which ends every session of the account,
+setup-tokens included: you then log in again on your own machines and give
+the VM a new token.
 
 To replace an expired or revoked token there is no forge command yet. Make a
 new one with `claude setup-token`, then:
@@ -119,7 +130,9 @@ forge cloud stop      # stops the VM; the disk, the clone and the branches stay
 ```
 
 `forge cloud start` reads your current public address, so it works after you
-move networks. In herdr on the VM, run `forge-contributor` in a pane: it
+move networks. It opens SSH to that one address: on a mobile connection whose
+public address changes from one connection to the next, SSH may never answer.
+Start the VM from a connection with a stable address. In herdr on the VM, run `forge-contributor` in a pane: it
 starts Claude Code in the clone, and continues the last conversation if there
 is one.
 
