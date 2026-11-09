@@ -15,7 +15,7 @@ import { ForgeError, type Context } from "../context.ts";
 import { addLaptopBlock, laptopToasts, readConfig } from "../herdr-config.ts";
 import { forgeHome, herdrConfigPath, laptopDataDir, limaHome, repoRoot, sshDir } from "../paths.ts";
 import {
-  applyInteractive, askCloudSettings, checkNestedVirt, currentPublicIp, infraAddress, infraFor, loadCloudSettings,
+  applyInteractive, askCloudSettings, checkNestedVirt, currentPublicIp, infraFor, infraOutputs, loadCloudSettings,
   saveCloudSettings,
 } from "../laptop/cloud.ts";
 import { ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, runSetup } from "../laptop/host-steps.ts";
@@ -409,7 +409,8 @@ async function limaVm(ctx: Context, host: LaptopHost, checkout: string, lima?: L
 // plan asks nothing); SSH is opened to this machine's current address only.
 // Then, once sshd answers, the first connection, as for a remote, unless an
 // earlier run made it (`reached`). Run on every install: OpenTofu's state
-// knows what exists.
+// knows what exists. The metadata services stay on until the first
+// connection: cloud-init reads the admin key from them on the first boot.
 async function cloudVm(
   ctx: Context, host: LaptopHost, checkout: string, sleep: (ms: number) => Promise<void>, reached: boolean,
 ): Promise<Outcome> {
@@ -417,8 +418,8 @@ async function cloudVm(
   await checkNestedVirt(ctx, settings);
   saveCloudSettings(host.name, { ...settings, sshCidr: `${await currentPublicIp(ctx)}/32` });
   const infra = infraFor(host.name, checkout);
-  await applyInteractive(ctx, infra);
-  host.address = await infraAddress(ctx, infra);
+  await applyInteractive(ctx, infra, { dev: !reached, relay: !reached });
+  host.address = (await infraOutputs(ctx, infra)).address;
   await waitForSsh(ctx, host, sleep, reached);
   return reached ? "done" : firstConnection(ctx, host);
 }

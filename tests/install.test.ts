@@ -1038,7 +1038,10 @@ const CLOUD_RULES: ExecRule[] = [
   { match: "aws --version", stdout: "aws-cli/2.31.0 Python/3.13.7\n" },
   { match: "describe-instance-types", stdout: '["nested-virtualization"]' },
   { match: "checkip.amazonaws.com", stdout: "198.51.100.7\n" },
-  { match: "output -raw address", stdout: "203.0.113.20\n" },
+  { match: " output -json", stdout: JSON.stringify({
+    address: { value: "203.0.113.20" }, relay_address: { value: "203.0.113.21" },
+    relay_private_ip: { value: "10.100.1.11" }, subnet_cidr: { value: "10.100.1.0/24" },
+  }) },
   { match: "ssh-keyscan", stdout: "203.0.113.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKey\n" },
   { match: "'test' '-s' '.config/agent-forge/claude-token'", code: 1 },
 ];
@@ -1047,6 +1050,10 @@ const cloudHost = (): LaptopHost => ({
   adminKey: forgeKeyPath("forge-dev"), exposure: "public", done: [],
 });
 const noWait = async (): Promise<void> => {};
+const metadataFlags = (): unknown[] => {
+  const vars = JSON.parse(readFileSync(join(hostDir("forge-dev"), "tofu.tfvars.json"), "utf8"));
+  return [vars.dev_metadata_enabled, vars.relay_metadata_enabled];
+};
 
 // A new cloud host from its questions to herdr: the Include accepted, the
 // token pasted, the link and herdr's notifications declined.
@@ -1065,6 +1072,8 @@ test("a new cloud host: settings asked, infra applied, address recorded, contrib
   assert.equal(host.adminKey, forgeKeyPath("forge-dev"));
   assert.deepEqual(host.done, CLOUD_ALL);
   assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.7/32");
+  // New instances: cloud-init reads the admin key from the metadata services.
+  assert.deepEqual(metadataFlags(), [true, true]);
   // OpenTofu, the first connection once sshd answers, the contributor playbook, herdr.
   assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.20"), called(ctx).join("\n"));
   assert.deepEqual(attached(ctx), [
@@ -1146,6 +1155,8 @@ test("a re-run of a finished cloud host applies OpenTofu and the playbook again,
   ]);
   // This machine's address may have moved since the last run.
   assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.8/32");
+  // Reached once, the VMs no longer need their metadata services.
+  assert.deepEqual(metadataFlags(), [false, false]);
   // Installed, the host runs fail2ban in aggressive mode, which bans this
   // machine for ssh-keyscan's connections: the wait is the admin's login.
   assert.ok(!called(ctx).some((c) => c.startsWith("ssh-keyscan")), called(ctx).join("\n"));

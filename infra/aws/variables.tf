@@ -55,6 +55,35 @@ variable "disk_gb" {
   }
 }
 
+variable "relay_instance_type" {
+  description = "Instance type of the relay."
+  type        = string
+  default     = "t3.small"
+}
+
+variable "relay_disk_gb" {
+  description = "Root volume size of the relay in GB."
+  type        = number
+  default     = 20
+
+  validation {
+    condition     = var.relay_disk_gb >= 10
+    error_message = "relay_disk_gb must be at least 10."
+  }
+}
+
+# cloud-init reads the admin key from the metadata service on an instance's
+# first boot; forge sets these to false once the instance was reached.
+variable "dev_metadata_enabled" {
+  description = "Whether the dev VM's metadata service answers."
+  type        = bool
+}
+
+variable "relay_metadata_enabled" {
+  description = "Whether the relay's metadata service answers."
+  type        = bool
+}
+
 variable "budget_usd" {
   description = "Monthly cost budget in USD."
   type        = number

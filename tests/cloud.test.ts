@@ -42,7 +42,10 @@ const RULES: ExecRule[] = [
   { match: "describe-instance-types", stdout: '["nested-virtualization"]' },
   { match: "checkip.amazonaws.com", stdout: "198.51.100.7\n" },
   { match: "show -json", stdout: '{"resource_changes":[{"address":"aws_ec2_instance_state.dev","change":{"actions":["update"]}}]}' },
-  { match: "output -raw address", stdout: "203.0.113.20\n" },
+  { match: " output -json", stdout: JSON.stringify({
+    address: { value: "203.0.113.20" }, relay_address: { value: "203.0.113.21" },
+    relay_private_ip: { value: "10.100.1.11" }, subnet_cidr: { value: "10.100.1.0/24" },
+  }) },
   { match: "ssh-keyscan", stdout: "203.0.113.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKey\n" },
   { match: "'test' '-s' '.config/agent-forge/claude-token'", code: 1 },
   { match: "ssh-add -L", stdout: `${KEY}\n` },
@@ -84,6 +87,7 @@ const called = (ctx: FakeContext) => ctx.calls.map((c) => c.join(" "));
 const attached = (ctx: FakeContext) => ctx.attachCalls.map((a) => a.argv.join(" "));
 const noWait = async (): Promise<void> => {};
 const tfvars = () => JSON.parse(readFileSync(join(hostDir("forge-dev"), "tofu.tfvars.json"), "utf8"));
+const metadataFlags = (): unknown[] => [tfvars().dev_metadata_enabled, tfvars().relay_metadata_enabled];
 
 test("start: records this machine's address, starts the VM, waits for SSH, opens herdr", async () => {
   install();
@@ -100,6 +104,7 @@ test("start: records this machine's address, starts the VM, waits for SSH, opens
   assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.7/32");
   assert.equal(tfvars().running, true);
   assert.equal(tfvars().ssh_cidr, "198.51.100.7/32");
+  assert.deepEqual(metadataFlags(), [false, false]);
   assert.deepEqual(slept, [5000, 5000]);
   assert.equal(attached(ctx).at(-1), "herdr --remote forge-dev --remote-keybindings server");
 });
@@ -118,6 +123,7 @@ test("stop: stops the VM with the saved address, without looking up this machine
   assert.equal(await cmdCloud(ctx, "stop", { checkout: CHECKOUT, sleep: noWait }), 0);
   assert.equal(tfvars().running, false);
   assert.equal(tfvars().ssh_cidr, "192.0.2.9/32");
+  assert.deepEqual(metadataFlags(), [false, false]);
   assert.ok(!called(ctx).some((c) => c.includes("checkip")));
   assert.ok(ctx.out_lines.some((l) => /disks are kept/.test(l)), ctx.out_lines.join("\n"));
 });
@@ -134,9 +140,18 @@ test("rebuild: replaces the instance, forgets both host keys, installs again", a
   writeFileSync(knownHostsPath(), "forge-dev ssh-ed25519 AAAA\n");
   // Confirm, accept the SSH Include, the Claude token, decline the link and herdr's notifications.
   const ctx = laptop({ answers: [1, 1, "tok-abc", 2, 2] });
+  // The variables of the replacing apply, read as it runs: the install's own apply rewrites them.
+  let replacing: unknown[] = [];
+  const attach = ctx.attach;
+  ctx.attach = async (argv, o) => {
+    if (argv.includes("-replace=aws_instance.dev")) replacing = metadataFlags();
+    return attach(argv, o);
+  };
   assert.equal(await cmdCloud(ctx, "rebuild", { checkout: CHECKOUT, sleep: noWait }), 0);
   const replace = attached(ctx).findIndex((a) => a.startsWith("tofu ") && a.includes("apply") && a.includes("-replace=aws_instance.dev"));
   assert.ok(replace >= 0, attached(ctx).join("\n"));
+  // The new dev VM's cloud-init needs its metadata service; the relay's stays off.
+  assert.deepEqual(replacing, [true, false]);
   const keygen = called(ctx).filter((c) => c.startsWith("ssh-keygen -R"));
   assert.deepEqual(keygen.map((c) => c.split(" ")[2]), ["forge-dev", "203.0.113.20"]);
   assert.ok(keygen.every((c) => c.endsWith(knownHostsPath())));

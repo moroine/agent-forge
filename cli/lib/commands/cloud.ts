@@ -88,7 +88,8 @@ async function rebuild(ctx: Context, host: LaptopHost, checkout: string, sleep: 
     ["rebuild it", "stop"],
   );
   if (i !== 1) throw new ForgeError(`${host.name} is left as it is`);
-  await applyInteractive(ctx, infraFor(host.name, checkout), [`-replace=${DEV_INSTANCE}`]);
+  // The new instance's cloud-init needs its metadata service; the relay's stays off.
+  await applyInteractive(ctx, infraFor(host.name, checkout), { dev: true, relay: false }, [`-replace=${DEV_INSTANCE}`]);
   // The Elastic IP stays, the instance gets new host keys: the old entries would refuse them.
   await forgetHostKeys(ctx, [host.name, host.address]);
   host.done = ["inventory"];
