@@ -721,7 +721,8 @@ test("a host defined by hand after its install still stops at the SSH step", asy
 
 test("declining the Include stops the install, ~/.ssh/config unchanged", async () => {
   const config = join(home, ".ssh/config");
-  writeFileSync(config, "Host *\n  ServerAliveInterval 60\n", { mode: 0o644 });
+  writeFileSync(config, "Host *\n  ServerAliveInterval 60\n");
+  chmodSync(config, 0o644); // not writeFileSync's mode, which a hardened umask (027) narrows
   const ctx = laptop({ vm: null }, { answers: [2] });
   await assert.rejects(cmdInstall(ctx, OPTS), (e: Error) =>
     e instanceof ForgeError && /Include config\.d\/agent-forge\.config/.test(e.message) && /forge-local/.test(e.message));
@@ -744,7 +745,8 @@ test("an accepted Include keeps the rest of ~/.ssh/config and its mode", async (
 test("an existing Include under Match all covers forge's file: ~/.ssh/config untouched", async () => {
   const config = join(home, ".ssh/config");
   const text = 'Host *\n  IdentityAgent "/run/user agent.sock"\n\nMatch All\nInclude ~/.ssh/config.d/*.config\n';
-  writeFileSync(config, text, { mode: 0o644 });
+  writeFileSync(config, text);
+  chmodSync(config, 0o644); // not writeFileSync's mode, which a hardened umask (027) narrows
   const ctx = laptop({ vm: null }, { answers: [2] });
   assert.equal(await cmdInstall(ctx, OPTS), 0);
   assert.ok(!asked(ctx).includes(INCLUDE), asked(ctx).join("\n"));
