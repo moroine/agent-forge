@@ -1,0 +1,11 @@
+#!/bin/bash
+# Same guard as `forge`: the type-stripping of Node starts at Node 24, and an
+# older Node would print a raw SyntaxError instead of what to do.
+version="$(node -v 2>/dev/null)" || { echo "forge-relay requires Node 24+ (node not found)" >&2; exit 1; }
+major="${version#v}"
+major="${major%%.*}"
+if ! [ "$major" -ge 24 ] 2>/dev/null; then
+  echo "forge-relay requires Node 24+ (found $version)" >&2
+  exit 1
+fi
+exec node "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/forge-relay.ts" "$@"
