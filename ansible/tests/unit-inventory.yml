@@ -129,6 +129,9 @@ all:
         forge_contributor_fork: bot-example/agent-forge
         forge_contributor_git_name: Example Bot
         forge_contributor_git_email: 1+bot-example@users.noreply.github.com
+        forge_contributor_relay_address: 10.100.1.11
+        forge_contributor_relay_host_key: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIExampleExampleExampleExampleExampleExample00
+        forge_contributor_relay_client_pub_dest: /tmp/relay-client.pub
       hosts:
         contributor_valid:
           unit_expect: passed
@@ -140,6 +143,14 @@ all:
           forge_contributor_git_email: ""
           unit_expect: failed
           unit_expect_message: forge_contributor_git_email
+        contributor_relay_key_not_ed25519:
+          forge_contributor_relay_host_key: ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQExample
+          unit_expect: failed
+          unit_expect_message: forge_contributor_relay_host_key
+        contributor_relay_address_not_ipv4:
+          forge_contributor_relay_address: relay.example.com
+          unit_expect: failed
+          unit_expect_message: forge_contributor_relay_address
     relay_cases:
       # The relay's inventory has no forge_users: preflight/inputs.yml must
       # pass without them.

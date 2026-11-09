@@ -26,3 +26,30 @@
     that:
       - forge_contributor_git_email | default('') is search('@')
     fail_msg: forge_contributor_git_email must be an email address.
+
+# The relay's address goes into known_hosts and relay.json, its host key into
+# known_hosts: one IPv4 address and one ssh-ed25519 key, so no space, comma or
+# newline can add a host or an option. \Z, not $: $ also matches before a
+# final newline.
+- name: Check the relay's address
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_relay_address | default('') is match(forge_contributor_octet_re)
+    fail_msg: "forge_contributor_relay_address must be an IPv4 address (got: {{ forge_contributor_relay_address | default('nothing') }})."
+    quiet: true
+  vars:
+    forge_contributor_octet_re: '^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\Z'
+
+- name: Check the relay's host key
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_relay_host_key | default('') is match('^ssh-ed25519 [A-Za-z0-9+/=]+\\Z')
+    fail_msg: forge_contributor_relay_host_key must be "ssh-ed25519 <base64>".
+    quiet: true
+
+- name: Check the controller path for the client's public key
+  ansible.builtin.assert:
+    that:
+      - forge_contributor_relay_client_pub_dest | default('') | length > 0
+    fail_msg: forge_contributor_relay_client_pub_dest must name a path on the controller.
+    quiet: true

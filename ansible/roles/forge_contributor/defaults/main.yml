@@ -41,3 +41,8 @@ forge_contributor_betterleaks_url: "https://github.com/betterleaks/betterleaks/r
   v{{ forge_contributor_betterleaks_version }}/\
   betterleaks_{{ forge_contributor_betterleaks_version }}_linux_x64.tar.gz"
 forge_contributor_betterleaks_sha256: 9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe
+
+# Inputs from the laptop (-e @relay-link.json), with no default:
+# forge_contributor_relay_address, forge_contributor_relay_host_key and
+# forge_contributor_relay_client_pub_dest (a path on the controller).
+forge_contributor_relay_dir: "{{ forge_contributor_home }}/.config/agent-forge/relay"

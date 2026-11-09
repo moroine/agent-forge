@@ -5,3 +5,5 @@
   ansible.builtin.import_tasks: toolchain.yml
 - name: Contributor's clone, identity and launcher
   ansible.builtin.import_tasks: agent.yml
+- name: Contributor's link to the relay
+  ansible.builtin.import_tasks: relay.yml

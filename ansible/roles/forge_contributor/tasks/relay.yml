@@ -1,0 +1,93 @@
+---
+# The dev VM's side of the relay link: the client key, the relay's pinned host
+# key, the client's config file, a deny rule on the Claude token, and
+# cloud-init off. Tasks for the forge user's files run as it (become_user), as
+# in agent.yml.
+- name: Create ~/.config/agent-forge
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.file:
+    path: "{{ forge_contributor_home }}/.config/agent-forge"
+    state: directory
+    mode: "0755"
+
+# 0700 matters: ssh's ControlPath sockets live next to the key
+# (cli/lib/relay/client.ts), and no other user may reach them.
+- name: Create the relay's directory
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.file:
+    path: "{{ forge_contributor_relay_dir }}"
+    state: directory
+    mode: "0700"
+
+# No passphrase: the agent's commands run unattended. The relay's forced
+# command and the dev VM's subnet are what limit the key, not its secrecy.
+# creates: a re-run keeps the key the relay already trusts.
+- name: Generate the relay client key
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.command: >-
+    ssh-keygen -q -t ed25519 -N "" -C forge-relay-client
+    -f "{{ forge_contributor_relay_dir }}/key"
+  args:
+    creates: "{{ forge_contributor_relay_dir }}/key"
+
+# The laptop hands this public half to the relay's playbook
+# (forge_relay_client_key_file). flat: the file lands exactly at dest.
+- name: Fetch the client's public key to the controller
+  ansible.builtin.fetch:
+    src: "{{ forge_contributor_relay_dir }}/key.pub"
+    dest: "{{ forge_contributor_relay_client_pub_dest }}"
+    flat: true
+
+# StrictHostKeyChecking=yes with this file alone: the relay is trusted by this
+# key, never by first use.
+- name: Pin the relay's host key
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.copy:
+    content: "{{ forge_contributor_relay_address }} {{ forge_contributor_relay_host_key }}\n"
+    dest: "{{ forge_contributor_relay_dir }}/known_hosts"
+    mode: "0644"
+
+- name: Write the relay client's config
+  become: true
+  become_user: "{{ forge_contributor_user }}"
+  ansible.builtin.template:
+    src: relay.json.j2
+    dest: "{{ forge_contributor_home }}/.config/agent-forge/relay.json"
+    mode: "0644"
+
+# Defense in depth only: the agent's user can read the token file and
+# /proc/*/environ by other means (a shell, a script), so this rule only stops
+# Claude Code's own Read tool. The boundary is the relay, which holds the
+# bot's token and signing key. In permission rules, // marks an absolute path.
+# A file already there is replaced: this VM is built only by this playbook.
+- name: Create /etc/claude-code
+  ansible.builtin.file:
+    path: /etc/claude-code
+    state: directory
+    owner: root
+    group: root
+    mode: "0755"
+
+- name: Deny Claude Code's Read tool on the Claude token and process environments
+  ansible.builtin.template:
+    src: managed-settings.json.j2
+    dest: /etc/claude-code/managed-settings.json
+    owner: root
+    group: root
+    mode: "0644"
+
+# The first boot has run: cloud-init must not rewrite the VM's configuration
+# or fetch instructions from the metadata service afterwards.
+- name: Turn cloud-init off
+  ansible.builtin.file:
+    path: /etc/cloud/cloud-init.disabled
+    state: touch
+    owner: root
+    group: root
+    mode: "0644"
+    modification_time: preserve
+    access_time: preserve
