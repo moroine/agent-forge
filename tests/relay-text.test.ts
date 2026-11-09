@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { parseRelayConfig } from "../cli/lib/relay/config.ts";
-import { checkPublicText, crossReferences, neutralizeMentions } from "../cli/lib/relay/text.ts";
+import { checkPublicText, codeSpans, crossReferences, neutralizeMentions } from "../cli/lib/relay/text.ts";
 import { printableText } from "../cli/lib/printable.ts";
 
 const raw = {
@@ -56,6 +56,26 @@ test("an escaped backtick opens no span, an escaped backslash does not escape", 
   assert.equal(neutralizeMentions("\\`@evil`", allowed), "\\` ``@evil`` `");
   assert.equal(neutralizeMentions("\\\\`@x`", allowed), "\\\\`@x`");
   assert.equal(neutralizeMentions("`a\\`@x", allowed), "`a\\` ``@x``");
+});
+
+test("adjacent mentions are wrapped together, a lone trusted one stays", () => {
+  assert.equal(neutralizeMentions("@evil@x", allowed), "`@evil@x`");
+  assert.equal(neutralizeMentions("@maint@evil", allowed), "`@maint@evil`");
+  assert.equal(neutralizeMentions("@maint", allowed), "@maint");
+  assert.equal(neutralizeMentions("a@b.com", allowed), "a@b.com");
+});
+
+test("no mention is left outside code for tricky inputs", () => {
+  const inputs = ["@a@b", "`@a@b", "\\`@a@b`", "``x`@a@b``", "`a\n@b`@c", "@a`@b`@c", "x`@a\n@b", "\\@a@b", "`\\`@a@b", "@a/t@b@c`", "```\n@a\n```@b"];
+  for (const t of inputs) {
+    const out = neutralizeMentions(t, allowed);
+    const spans = codeSpans(out);
+    for (const m of out.matchAll(/@(?=[A-Za-z0-9])/g)) {
+      const inCode = spans.some(([s, e]) => m.index >= s && m.index < e);
+      const afterWord = m.index > 0 && /\w/.test(out[m.index - 1]);
+      assert.ok(inCode || afterWord, `${JSON.stringify(t)} -> ${JSON.stringify(out)}: bare @ at ${m.index}`);
+    }
+  }
 });
 
 test("references through any spelling of a github.com URL are found, upstream ones are not", () => {

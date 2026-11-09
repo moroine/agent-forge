@@ -10,9 +10,9 @@ import { RelayError } from "./config.ts";
 // un guillemet précédé d'un nombre impair d'antislashs est échappé : texte
 // littéral, il n'ouvre rien (le reste de sa suite, si elle continue, ouvre
 // normalement). Dans un span les antislashs sont littéraux : une fermeture
-// n'est jamais échappée. Ce qu'un span
-// contient ne notifie personne, on n'y touche pas. Rend les spans [début, fin[.
-function codeSpans(text: string): [number, number][] {
+// n'est jamais échappée. Ce qu'un span contient ne notifie personne, on n'y
+// touche pas. Rend les spans [début, fin[.
+export function codeSpans(text: string): [number, number][] {
   const runs = [...text.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
   const spans: [number, number][] = [];
   for (let i = 0; i < runs.length; i++) {
@@ -35,7 +35,11 @@ function codeSpans(text: string): [number, number][] {
 // Un `@` qui n'est pas précédé d'un caractère de mot (une adresse e-mail),
 // suivi d'un login ou de `org/team`. Un guillemet inversé avant lui ne le
 // protège pas : seul un vrai span (codeSpans) le fait.
-const MENTION = /(?<!\w)@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9_.-]+)?)/g;
+// Une mention collée à d'autres (`@a@b`) forme une seule chaîne : le `@` suivant
+// un mot n'en serait pas une, mais il en devient une dès que la chaîne est mise
+// en code et que le texte reprend après le span.
+const SEGMENT = String.raw`[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9_.-]+)?`;
+const MENTION = new RegExp(String.raw`(?<!\w)@${SEGMENT}(?:@${SEGMENT})*`, "g");
 
 // Les mentions hors code d'inconnus (et toute équipe) passent dans un span de
 // code, qui ne notifie pas. `allowed` est en minuscules.
@@ -43,11 +47,13 @@ export function neutralizeMentions(text: string, allowed: readonly string[]): st
   // Une suite de guillemets plus longue que toutes celles du texte ne peut se
   // fermer sur aucune autre : le span qu'on ajoute reste un span.
   const fence = "`".repeat(Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
-  // Entre deux spans, `after` dit si un span suit : une mention collée à un
-  // guillemet inversé ou à un antislash (qui échapperait notre ouverture) reçoit une espace, sinon sa clôture se fondrait dans la suite.
+  // `spanBefore` et `spanAfter` disent si un span encadre ce morceau. Une
+  // mention collée à un guillemet inversé, ou à un antislash (qui échapperait
+  // notre ouverture), reçoit une espace : sinon sa clôture se fondrait dans la suite.
   const fix = (s: string, spanBefore: boolean, spanAfter: boolean) =>
-    s.replace(MENTION, (m, name: string, at: number) => {
-      if (!name.includes("/") && allowed.includes(name.toLowerCase())) return m;
+    s.replace(MENTION, (m, at: number) => {
+      // De confiance : un seul segment, un login (pas une équipe) de la liste.
+      if (!m.includes("/") && !m.includes("@", 1) && allowed.includes(m.slice(1).toLowerCase())) return m;
       const prev = at > 0 ? s[at - 1] : spanBefore ? "`" : "";
       const next = at + m.length < s.length ? s[at + m.length] : spanAfter ? "`" : "";
       return `${prev === "`" || prev === "\\" ? " " : ""}${fence}${m}${fence}${next === "`" ? " " : ""}`;
