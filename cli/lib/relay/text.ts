@@ -24,8 +24,11 @@ export function codeSpans(text: string): [number, number][] {
       len--;
       if (len === 0) continue;
     }
-    const close = runs.findIndex((r, j) => j > i && r.len === len);
-    if (close === -1) continue;
+    // La fermeture se cherche après l'ouverture seulement : une recherche
+    // depuis le début rendrait le coût quadratique en nombre de suites.
+    let close = i + 1;
+    while (close < runs.length && runs[close].len !== len) close++;
+    if (close === runs.length) continue;
     spans.push([at, runs[close].at + runs[close].len]);
     i = close;
   }

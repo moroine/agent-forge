@@ -1,7 +1,8 @@
 ---
-# Provisions the relay: the small VM that alone holds the GitHub bot's token
-# and signing key, and publishes the dev VM's work (contributor model spec,
-# §5.4). Hardened like a forge host, with no Incus and no forge user.
+# Provisions the relay: the small VM that alone holds the GitHub bot's token,
+# push key and signing key, and publishes the dev VM's work (contributor
+# model spec, §5.4). Hardened like a forge host, with no Incus and no forge
+# user.
 # `forge cloud create` runs it after contributor.yml. By hand, from a checkout:
 #   ansible-galaxy collection install -r ansible/requirements.yml
 #   ansible-playbook -i relay-inventory.yml ansible/relay.yml \

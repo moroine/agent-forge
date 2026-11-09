@@ -86,7 +86,7 @@ test("publish aligns the local branch on the published head", async () => {
   assert.equal(git(dev, "rev-parse", "refs/heads/agent/t"), head);
   assert.equal(git(dev, "rev-parse", "refs/remotes/fork/agent/t"), head);
   assert.equal(git(dev, "status", "--porcelain"), "");
-  assert.ok(ctx.out_lines.join("\n").includes("https://github.com/bot/widgets/tree/agent/t"));
+  assert.deepEqual(ctx.out_lines.slice(-2), [`published ${head}`, "https://github.com/bot/widgets/tree/agent/t"]);
 });
 
 test("a commit made during the publish is kept, and the message gives commands the hook allows", async () => {

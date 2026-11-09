@@ -179,7 +179,7 @@ test("publishes a new branch: signed commits on the fork, the agent's tree, reco
   for (const c of published) {
     const raw = git(fork, "cat-file", "commit", c);
     assert.match(raw, /^gpgsig /m);
-    assert.match(raw, new RegExp(`^author ${cfg.botName} <${cfg.botEmail.replace(/[.+]/g, "\\$&")}>`, "m"));
+    assert.ok(raw.split("\n").some((l) => l.startsWith(`author ${cfg.botName} <${cfg.botEmail}> `)), raw);
   }
   assert.deepEqual(stateOf(d).published, { t: res.head });
   assert.equal(res.url, "https://github.com/bot/widgets/tree/agent/t");

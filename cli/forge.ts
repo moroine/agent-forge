@@ -72,7 +72,8 @@ On your laptop:
                                     Start the VMs and open herdr, stop them (disks kept), or replace
                                     the dev VM with a new one (its disk is lost)
   cloud rebuild-relay [--host <name>]
-                                    Replace the relay with a new one: a new bot token and signing key
+                                    Replace the relay with a new one: a new bot token, push key and
+                                    signing key
   fetch [--host <name>]             Fetch the agents' branches into this clone and list the tasks
   ship <task> [--host <name>]       Re-sign a task's new commits, push agent/<task> and open its PR
                                     (a stacked task ships with the tasks under it, bottom first)
