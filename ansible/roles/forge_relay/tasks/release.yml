@@ -1,0 +1,198 @@
+---
+# forge-relay comes from the controller's HEAD, as forge does on a forge host
+# (forge_users/tasks/forge.yml): it always matches the playbook that installs
+# it, and the relay needs no GitHub access to get it. One version per relay,
+# root-owned: the service cannot change its own code.
+
+# Read-only git queries: the git module only clones and updates.
+- name: Read the controller's HEAD  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ forge_relay_repo_root }}" rev-parse HEAD
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: forge_relay_head
+  changed_when: false
+
+- name: Read whether the controller's checkout has uncommitted changes  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ forge_relay_repo_root }}" status --porcelain
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: forge_relay_status
+  changed_when: false
+
+- name: Warn that HEAD is deployed, not the working tree
+  ansible.builtin.debug:
+    msg: >-
+      The controller's checkout has uncommitted changes: forge-relay is
+      deployed from HEAD ({{ forge_relay_head.stdout[:12] }}), not from the
+      working tree.
+  when: forge_relay_status.stdout | length > 0
+  run_once: true
+
+# The relay's code lives in the repository the bot edits: a bot pull request
+# that changed it would change the relay's own boundary once merged and
+# deployed (spec §5.8). Code that is not on origin/main has not even been
+# reviewed and merged. Exit 1 means "not an ancestor"; any other failure (no
+# origin/main) gets the same warning.
+- name: Read whether HEAD is on origin/main  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git -C "{{ forge_relay_repo_root }}" merge-base --is-ancestor HEAD origin/main
+  delegate_to: localhost
+  become: false
+  run_once: true
+  register: forge_relay_on_main
+  changed_when: false
+  failed_when: false
+
+- name: Warn that the relay gets code that is not on origin/main
+  ansible.builtin.debug:
+    msg: >-
+      The controller's HEAD ({{ forge_relay_head.stdout[:12] }}) is not on
+      origin/main as last fetched: the relay gets code that main has not
+      merged. Read the changes to cli/lib/relay/, cli/forge-relay* and
+      ansible/ first, or deploy from an up-to-date main.
+  when: forge_relay_on_main.rc != 0
+  run_once: true
+
+- name: Set the release's paths
+  ansible.builtin.set_fact:
+    forge_relay_sha: "{{ forge_relay_head.stdout }}"
+    forge_relay_release: "{{ forge_relay_install_root }}/releases/{{ forge_relay_head.stdout }}"
+
+- name: Create the releases directory
+  ansible.builtin.file:
+    path: "{{ forge_relay_install_root }}/releases"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+- name: Look for this release on the relay
+  ansible.builtin.stat:
+    path: "{{ forge_relay_release }}"
+  register: forge_relay_release_stat
+
+- name: Install this release
+  when: not forge_relay_release_stat.stat.exists
+  block:
+    - name: Make a scratch directory on the controller
+      ansible.builtin.tempfile:
+        state: directory
+      delegate_to: localhost
+      become: false
+      run_once: true
+      register: forge_relay_scratch
+
+    # The git module has no archive action. The archive of HEAD holds cli/
+    # whole, so everything cli/forge-relay.ts imports. tar.umask=0022: git's
+    # default (0002) would leave the root-owned release group-writable.
+    - name: Archive HEAD on the controller  # noqa: command-instead-of-module
+      ansible.builtin.command:
+        cmd: >-
+          git -C "{{ forge_relay_repo_root }}" -c tar.umask=0022 archive
+          --format=tar.gz -o "{{ forge_relay_scratch.path }}/forge-relay.tar.gz" HEAD
+      delegate_to: localhost
+      become: false
+      run_once: true
+      changed_when: true
+
+    # Unpack into a staging directory and rename it at the end: a release
+    # directory that exists is always complete.
+    - name: Remove a staging directory left by an interrupted run
+      ansible.builtin.file:
+        path: "{{ forge_relay_release }}.partial"
+        state: absent
+
+    - name: Create the staging directory
+      ansible.builtin.file:
+        path: "{{ forge_relay_release }}.partial"
+        state: directory
+        mode: "0755"
+        owner: root
+        group: root
+
+    - name: Unpack the release
+      ansible.builtin.unarchive:
+        src: "{{ forge_relay_scratch.path }}/forge-relay.tar.gz"
+        dest: "{{ forge_relay_release }}.partial"
+        owner: root
+        group: root
+
+    # Which commit the relay runs, for the maintainer.
+    - name: Record the release's commit
+      ansible.builtin.copy:
+        content: "{{ forge_relay_sha }}\n"
+        dest: "{{ forge_relay_release }}.partial/COMMIT"
+        mode: "0644"
+        owner: root
+        group: root
+
+    - name: Move the release into place
+      ansible.builtin.command:
+        cmd: mv "{{ forge_relay_release }}.partial" "{{ forge_relay_release }}"
+        creates: "{{ forge_relay_release }}"
+  always:
+    - name: Remove the controller's scratch directory
+      ansible.builtin.file:
+        path: "{{ forge_relay_scratch.path }}"
+        state: absent
+      delegate_to: localhost
+      become: false
+      run_once: true
+      when: forge_relay_scratch.path is defined
+
+- name: Read the current release
+  ansible.builtin.stat:
+    path: "{{ forge_relay_install_root }}/current"
+  register: forge_relay_current
+
+- name: Keep the outgoing release as previous
+  ansible.builtin.file:
+    src: "{{ forge_relay_current.stat.lnk_source }}"
+    dest: "{{ forge_relay_install_root }}/previous"
+    state: link
+    force: true
+  when:
+    - forge_relay_current.stat.islnk | default(false)
+    - forge_relay_current.stat.lnk_source != forge_relay_release
+
+# The file module replaces an existing link through a temporary link and a
+# rename, so `current` is never missing. A request already running keeps the
+# release it started from: the shim resolves its own path.
+- name: Switch current to this release
+  ansible.builtin.file:
+    src: "{{ forge_relay_release }}"
+    dest: "{{ forge_relay_install_root }}/current"
+    state: link
+    force: true
+
+# The path the dev VM's key runs (authorized_keys' command=).
+- name: Put forge-relay on the PATH
+  ansible.builtin.file:
+    src: "{{ forge_relay_install_root }}/current/{{ forge_relay_cli_entrypoint }}"
+    dest: /usr/local/bin/forge-relay
+    state: link
+    force: true
+
+- name: Read the previous release
+  ansible.builtin.stat:
+    path: "{{ forge_relay_install_root }}/previous"
+  register: forge_relay_previous
+
+- name: List the installed releases
+  ansible.builtin.find:
+    paths: "{{ forge_relay_install_root }}/releases"
+    file_type: directory
+  register: forge_relay_releases
+
+- name: Remove releases older than the previous one
+  ansible.builtin.file:
+    path: "{{ item.path }}"
+    state: absent
+  loop: "{{ forge_relay_releases.files }}"
+  loop_control:
+    label: "{{ item.path | basename }}"
+  when: item.path not in [forge_relay_release, forge_relay_previous.stat.lnk_source | default('')]

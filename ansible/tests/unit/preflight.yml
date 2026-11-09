@@ -7,6 +7,8 @@
       block:
         - name: Include the input checks
           ansible.builtin.include_tasks: "{{ playbook_dir }}/../../preflight/inputs.yml"
+        - name: Include the forge user's checks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../preflight/forge_users.yml"
         - name: Record success
           ansible.builtin.set_fact:
             unit_outcome: passed

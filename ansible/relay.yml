@@ -1,0 +1,71 @@
+---
+# Provisions the relay: the small VM that alone holds the GitHub bot's token
+# and signing key, and publishes the dev VM's work (contributor model spec,
+# §5.4). Hardened like a forge host, with no Incus and no forge user.
+# `forge cloud create` runs it after contributor.yml. By hand, from a checkout:
+#   ansible-galaxy collection install -r ansible/requirements.yml
+#   ansible-playbook -i relay-inventory.yml ansible/relay.yml \
+#     -e forge_relay_client_key_file=<the dev VM's relay key, public half>
+# The inventory sets forge_exposure and the forge_relay_* inputs (see
+# roles/forge_relay/defaults/main.yml).
+- name: Preflight
+  hosts: all
+  gather_facts: false
+  tasks:
+    - name: Check and normalize the inventory's variables
+      ansible.builtin.import_tasks: preflight/inputs.yml
+    - name: Check the controller
+      ansible.builtin.import_tasks: preflight/controller.yml
+    - name: Resolve the SSH port to connect to
+      ansible.builtin.import_tasks: preflight/port.yml
+    - name: Check the target
+      ansible.builtin.import_tasks: preflight/target.yml
+    - name: Check the relay's inputs
+      ansible.builtin.import_role:
+        name: forge_relay
+        tasks_from: inputs.yml
+
+- name: Provision the relay
+  hosts: all
+  become: true
+  gather_facts: false   # the preflight play gathered them
+  # As in site.yml: forced handlers keep sshd's port and the firewall in
+  # agreement even when a later task fails.
+  force_handlers: true
+  module_defaults:
+    # A fresh cloud VM often runs apt-daily at boot and holds the dpkg lock.
+    ansible.builtin.apt:
+      lock_timeout: 600
+  # The hardening role's defaults, set for a machine with no Incus and no
+  # forge user.
+  vars:
+    # devsec's sysctls as they are: no container traffic to route, no user
+    # namespaces to allow.
+    hardening_sysctl_overwrite: {}
+    # The admin, and the service's account for the dev VM's key.
+    hardening_ssh_allow_users: "{{ forge_admin_user }} forge-relay"
+    # No agent forwarding for anyone.
+    hardening_ssh_match_user: []
+    # From the dev VM's subnet, the service's account only: the dev VM cannot
+    # even try the admin's.
+    hardening_ssh_match_address:
+      - address: "{{ forge_relay_client_cidr }}"
+        rules: ["AllowUsers forge-relay"]
+  # Ordered import_role tasks, not a roles: section, for the handlers' order
+  # (see site.yml). tests/unit/site_structure.yml pins this.
+  tasks:
+    - name: Base system
+      ansible.builtin.import_role:
+        name: base
+    - name: Hardening
+      ansible.builtin.import_role:
+        name: hardening
+    - name: Host firewall
+      ansible.builtin.import_role:
+        name: firewall
+    - name: Fail2ban
+      ansible.builtin.import_role:
+        name: fail2ban
+    - name: Relay service
+      ansible.builtin.import_role:
+        name: forge_relay

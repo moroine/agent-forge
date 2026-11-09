@@ -20,3 +20,5 @@
   ansible.builtin.import_playbook: unit/site_structure.yml
 - name: Forge contributor
   ansible.builtin.import_playbook: unit/forge_contributor.yml
+- name: Forge relay
+  ansible.builtin.import_playbook: unit/forge_relay.yml

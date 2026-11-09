@@ -1,0 +1,170 @@
+---
+# The relay's service: forge-relay, run by the dev VM's key as an SSH forced
+# command, as the account forge-relay. relay.yml's preflight already ran
+# tasks/inputs.yml. The paths below are RELAY_PATHS (cli/lib/relay/paths.ts):
+# keep them in step. The bot's token, /etc/forge-relay/github-token, is never
+# written here: the laptop writes it (forge cloud create).
+
+- name: Add the NodeSource Node 24 repository
+  ansible.builtin.include_role:
+    name: base
+    tasks_from: apt_repo.yml
+  vars:
+    base_apt_repo_name: nodesource
+    base_apt_repo_key_url: "{{ forge_relay_nodesource_key_url }}"
+    base_apt_repo_fingerprint: "{{ forge_relay_nodesource_fingerprint }}"
+    base_apt_repo_uris: ["{{ forge_relay_nodesource_uri }}"]
+    base_apt_repo_suites: [nodistro]
+    base_apt_repo_components: [main]
+
+- name: Install git, the SSH tools, acl and Node 24
+  ansible.builtin.apt:
+    name: "{{ forge_relay_packages }}"
+    state: present
+
+# A read-only query: the git module only clones and updates.
+- name: Read git's version  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: git --version
+  register: forge_relay_git_version
+  changed_when: false
+
+# The dev VM's commits arrive as a bundle, and git fetches a bundle with
+# transfer.fsckObjects only from 2.46 on: an older git would take its objects
+# unchecked.
+- name: Check git is 2.46 or newer
+  ansible.builtin.assert:
+    that:
+      - forge_relay_git is version('2.46', '>=')
+    fail_msg: >-
+      The relay needs git 2.46 or newer, which checks the objects of a fetched
+      bundle (found: {{ forge_relay_git_version.stdout }}).
+    quiet: true
+  vars:
+    forge_relay_git: "{{ forge_relay_git_version.stdout | regex_search('[0-9]+([.][0-9]+)+') | default('0', true) }}"
+
+- name: Download Betterleaks
+  ansible.builtin.get_url:
+    url: "{{ forge_relay_betterleaks_url }}"
+    dest: "/var/tmp/betterleaks-{{ forge_relay_betterleaks_version }}.tar.gz"
+    checksum: "sha256:{{ forge_relay_betterleaks_sha256 }}"
+    mode: "0644"
+
+- name: Install the betterleaks binary
+  ansible.builtin.unarchive:
+    src: "/var/tmp/betterleaks-{{ forge_relay_betterleaks_version }}.tar.gz"
+    dest: /usr/local/bin
+    remote_src: true
+    include: [betterleaks]
+    owner: root
+    group: root
+
+# An ordinary account (UID >= 1000): devsec gives every account below UID_MIN
+# a nologin shell, and sshd runs the forced command through the login shell.
+- name: Create the forge-relay account
+  ansible.builtin.user:
+    name: forge-relay
+    shell: /bin/sh
+    home: /var/lib/forge-relay
+    create_home: true
+    password: "!"   # locked: SSH keys only
+    # useradd copies devsec's PASS_MAX_DAYS (60) onto a new account. Past it,
+    # sshd would demand a password change, which a forced command has no
+    # terminal for, and refuse every request.
+    password_expire_max: -1
+
+# The state directory too (state.json and its lock, the signing key, the
+# mirror). os_hardening sets existing homes to 0700 on every run.
+- name: Keep forge-relay's home private
+  ansible.builtin.file:
+    path: /var/lib/forge-relay
+    state: directory
+    mode: "0700"
+    owner: forge-relay
+    group: forge-relay
+
+# The configuration and the token, readable by the service, which cannot
+# change them.
+- name: Create the configuration directory
+  ansible.builtin.file:
+    path: /etc/forge-relay
+    state: directory
+    mode: "0750"
+    owner: root
+    group: forge-relay
+
+- name: Create the audit log's directory
+  ansible.builtin.file:
+    path: /var/log/forge-relay
+    state: directory
+    mode: "0700"
+    owner: forge-relay
+    group: forge-relay
+
+- name: Install forge-relay
+  ansible.builtin.import_tasks: release.yml
+
+- name: Write the relay's configuration
+  ansible.builtin.template:
+    src: config.json.j2
+    dest: /etc/forge-relay/config.json
+    mode: "0640"
+    owner: root
+    group: forge-relay
+
+# The bot's commits are signed with this key; the maintainer registers its
+# public half on the bot's account (forge-relay setup says so). Made once: a
+# new key would need registering again.
+- name: Create the signing key
+  become: true
+  become_user: forge-relay
+  ansible.builtin.command:
+    argv: [ssh-keygen, -q, -t, ed25519, -N, "", -C, forge-relay-signing, -f, /var/lib/forge-relay/signing-key]
+    creates: /var/lib/forge-relay/signing-key
+
+# The relay's own repository: upstream main, the fork's branches and the
+# dev VM's bundles are fetched into it. Every object fetched is checked
+# (fsck), no hook ever runs, and a GitHub transfer that stalls below 1000
+# bytes/s for 60 s is abandoned instead of holding the relay.
+- name: Create the mirror  # noqa: command-instead-of-module
+  become: true
+  become_user: forge-relay
+  ansible.builtin.command:
+    argv: [git, init, -q, --bare, /var/lib/forge-relay/mirror.git]
+    creates: /var/lib/forge-relay/mirror.git/HEAD
+
+- name: Configure the mirror
+  become: true
+  become_user: forge-relay
+  community.general.git_config:
+    name: "{{ item.name }}"
+    value: "{{ item.value }}"
+    scope: local
+    repo: /var/lib/forge-relay/mirror.git
+  loop:
+    - {name: transfer.fsckObjects, value: "true"}
+    - {name: core.hooksPath, value: /dev/null}
+    - {name: http.lowSpeedLimit, value: "1000"}
+    - {name: http.lowSpeedTime, value: "60"}
+
+# Last, once forge-relay exists. The dev VM's relay key runs forge-relay serve
+# and nothing else: restrict turns off forwarding, the terminal and
+# ~/.ssh/rc, and from= accepts the key from the dev VM's subnet only.
+# exclusive: it is the account's only key.
+- name: Authorize the dev VM's relay key, for the forced command only
+  ansible.posix.authorized_key:
+    user: forge-relay
+    key: "{{ forge_relay_client_key }}"
+    key_options: 'restrict,command="/usr/local/bin/forge-relay serve",from="{{ forge_relay_client_cidr }}"'
+    exclusive: true
+
+# The metadata service is off after the first boot (infra/aws), and cloud-init
+# would wait for it at every later boot. What it set up at the first boot (the
+# admin's key, the network) stays.
+- name: Turn cloud-init off for the next boots
+  ansible.builtin.copy:
+    content: ""
+    dest: /etc/cloud/cloud-init.disabled
+    mode: "0644"
+    owner: root
+    group: root

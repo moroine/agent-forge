@@ -6,6 +6,7 @@
     forge_admin_user: ubuntu
     forge_users: [{name: alice, ssh_keys: ["ssh-ed25519 AAAA alice@test"]}]
   vars_files:
+    - ../../roles/hardening/defaults/main.yml
     - ../../roles/hardening/vars/main.yml
   tasks:
     - name: Check the sysctl overrides

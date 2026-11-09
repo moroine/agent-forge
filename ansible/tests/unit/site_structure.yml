@@ -1,31 +1,56 @@
 ---
-# Pins how site.yml's provisioning play loads its roles. Handlers run in the
-# order they are loaded, and handlers of roles listed under `roles:` load
-# before those that a role brings in with import_role, such as devsec's
-# "Restart sshd". So `roles:` would load the firewall before sshd moves: if a
-# handler in between failed, the firewall would accept only the new port
-# while sshd stayed on the old one, and the host would be locked out. Ordered
-# import_role tasks put "Restart sshd" right before "Load the host firewall".
+# Pins how site.yml's and relay.yml's provisioning plays load their roles.
+# Handlers run in the order they are loaded, and handlers of roles listed under
+# `roles:` load before those that a role brings in with import_role, such as
+# devsec's "Restart sshd". So `roles:` would load the firewall before sshd
+# moves: if a handler in between failed, the firewall would accept only the
+# new port while sshd stayed on the old one, and the host would be locked out.
+# Ordered import_role tasks put "Restart sshd" right before "Load the host
+# firewall".
 - name: Site playbook structure
   hosts: render
   gather_facts: false
-  vars:
-    unit_site: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../site.yml') | from_yaml }}"
-    unit_provision: "{{ unit_site | selectattr('name', 'equalto', 'Provision the host') | first }}"
   tasks:
-    - name: Check the provisioning play imports its roles in order, as tasks
+    - name: Check the provisioning plays import their roles in order, as tasks
       ansible.builtin.assert:
         that:
           - "'roles' not in unit_provision"
           - unit_provision.force_handlers
-          - unit_imported == ['base', 'hardening', 'firewall', 'fail2ban', 'incus', 'forge_users']
+          - unit_imported == item.roles
         fail_msg: >-
-          The provisioning play must import base, hardening, firewall, fail2ban,
-          incus and forge_users, in this order, with ansible.builtin.import_role
-          tasks and no roles: section (got {{ unit_provision.roles | default(unit_imported) }}).
+          {{ item.file }}'s provisioning play must import {{ item.roles | join(', ') }},
+          in this order, with ansible.builtin.import_role tasks and no roles:
+          section (got {{ unit_provision.roles | default(unit_imported) }}).
+      loop:
+        - {file: site.yml, play: Provision the host, roles: [base, hardening, firewall, fail2ban, incus, forge_users]}
+        - {file: relay.yml, play: Provision the relay, roles: [base, hardening, firewall, fail2ban, forge_relay]}
+      loop_control:
+        label: "{{ item.file }}"
       vars:
+        unit_provision: >-
+          {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../' ~ item.file) | from_yaml
+             | selectattr('name', 'equalto', item.play) | first }}
         unit_imported: >-
           {{ unit_provision.tasks | default([])
              | map('dict2items') | flatten
              | selectattr('key', 'equalto', 'ansible.builtin.import_role')
              | map(attribute='value.name') | list }}
+
+    # The forge user's checks left inputs.yml so that the relay can share it.
+    # site.yml must still run them before anything changes on the host: a
+    # forge user named like the admin would take the admin's groups, sudo
+    # included.
+    - name: Check site.yml's preflight checks the forge user right after the inputs
+      ansible.builtin.assert:
+        that:
+          - unit_imports[:2] == ['preflight/inputs.yml', 'preflight/forge_users.yml']
+        fail_msg: "site.yml's preflight imports {{ unit_imports }}"
+      vars:
+        unit_preflight: >-
+          {{ lookup('ansible.builtin.file', playbook_dir ~ '/../../site.yml') | from_yaml
+             | selectattr('name', 'equalto', 'Preflight') | first }}
+        unit_imports: >-
+          {{ unit_preflight.tasks
+             | map('dict2items') | flatten
+             | selectattr('key', 'equalto', 'ansible.builtin.import_tasks')
+             | map(attribute='value') | list }}

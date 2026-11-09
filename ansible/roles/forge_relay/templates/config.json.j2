@@ -1,0 +1,14 @@
+{#- Managed by agent-forge (ansible/roles/forge_relay). Read by
+    cli/lib/relay/config.ts, which refuses any other shape. The object is
+    rendered whole by to_nice_json, never assembled from strings, so no input
+    can break out of its value. -#}
+{{ {
+    'upstream': forge_relay_upstream,
+    'fork': forge_relay_fork,
+    'botLogin': forge_relay_bot_login,
+    'botName': forge_relay_bot_name,
+    'botEmail': forge_relay_bot_email,
+    'trustedLogins': forge_relay_trusted_logins | list,
+    'coAuthorEmails': forge_relay_co_author_emails | list,
+    'writesPerHour': forge_relay_writes_per_hour | int,
+} | to_nice_json }}

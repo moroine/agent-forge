@@ -10,6 +10,8 @@
   tasks:
     - name: Check and normalize the inventory's variables
       ansible.builtin.import_tasks: preflight/inputs.yml
+    - name: Check the forge user
+      ansible.builtin.import_tasks: preflight/forge_users.yml
     - name: Check the controller
       ansible.builtin.import_tasks: preflight/controller.yml
     - name: Resolve the SSH port to connect to

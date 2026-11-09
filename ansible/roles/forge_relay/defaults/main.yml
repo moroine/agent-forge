@@ -1,0 +1,41 @@
+---
+# Inputs, with no default (the inventory sets them, tasks/inputs.yml checks
+# them):
+#   forge_relay_upstream, forge_relay_fork   owner/repo; the fork is the bot's
+#   forge_relay_bot_login, forge_relay_bot_name, forge_relay_bot_email
+#   forge_relay_trusted_logins               the maintainer's GitHub logins (a list)
+#   forge_relay_client_cidr                  the dev VM's subnet (IPv4)
+# and an extra var from the laptop: forge_relay_client_key_file, the
+# controller path of the dev VM's relay key, public half.
+forge_relay_co_author_emails: ["noreply@anthropic.com"]
+forge_relay_writes_per_hour: 20
+
+# The client key's line, read on the controller.
+forge_relay_client_key: "{{ lookup('ansible.builtin.file', forge_relay_client_key_file) }}"
+
+forge_relay_install_root: /opt/forge-relay
+# The entry point inside a release: a shim that runs cli/forge-relay.ts.
+forge_relay_cli_entrypoint: cli/forge-relay
+# The repository root on the controller (relay.yml lives in ansible/).
+forge_relay_repo_root: "{{ playbook_dir | dirname }}"
+
+# Keep in step with forge_users' defaults.
+forge_relay_nodesource_key_url: https://deb.nodesource.com/gpgkey/nodesource-repo.gpg.key
+forge_relay_nodesource_fingerprint: 6F71F525282841EEDAF851B42F59B5F99B1BE0B4
+forge_relay_nodesource_uri: https://deb.nodesource.com/node_24.x
+# nodejs carries cli/forge-relay's floor as its minimum, as in forge_users: a
+# bare name would keep a Node already installed from Ubuntu (22 on 26.04).
+# ssh-keygen (openssh-client) makes and uses the signing key; acl lets
+# Ansible run tasks as forge-relay.
+forge_relay_packages:
+  - git
+  - openssh-client
+  - acl
+  - nodejs>=24
+
+# Keep in step with .github/workflows/ci.yml and forge_contributor's defaults.
+forge_relay_betterleaks_version: "1.10.0"
+forge_relay_betterleaks_url: "https://github.com/betterleaks/betterleaks/releases/download/\
+  v{{ forge_relay_betterleaks_version }}/\
+  betterleaks_{{ forge_relay_betterleaks_version }}_linux_x64.tar.gz"
+forge_relay_betterleaks_sha256: 9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe

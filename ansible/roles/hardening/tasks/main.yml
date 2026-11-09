@@ -51,6 +51,7 @@
     ssh_permit_root_login: "no"
     ssh_allow_agent_forwarding: false
     ssh_server_match_user: "{{ hardening_ssh_match_user }}"
+    ssh_server_match_address: "{{ hardening_ssh_match_address }}"
     # devsec does not template this one, and OpenSSH defaults it to yes.
     sshd_custom_options:
       - AllowStreamLocalForwarding no

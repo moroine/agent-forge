@@ -1,0 +1,80 @@
+---
+# The relay's preflight as relay.yml runs it: the shared input checks, without
+# the forge user's (the relay has none), then the role's own.
+- name: Forge relay input checks
+  hosts: relay_cases
+  gather_facts: false
+  # The role's defaults. vars_files win over the inventory's variables: a case
+  # cannot change a default here.
+  vars_files:
+    - ../../roles/forge_relay/defaults/main.yml
+  tasks:
+    - name: Run the input checks
+      block:
+        - name: Include the shared input checks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../preflight/inputs.yml"
+        - name: Include the relay's input checks
+          ansible.builtin.include_tasks: "{{ playbook_dir }}/../../roles/forge_relay/tasks/inputs.yml"
+        - name: Record success
+          ansible.builtin.set_fact:
+            unit_outcome: passed
+      rescue:
+        - name: Record failure
+          ansible.builtin.set_fact:
+            unit_outcome: failed
+            unit_message: "{{ ansible_failed_result.msg | default('') }}"
+
+    - name: Check the outcome
+      ansible.builtin.assert:
+        that:
+          - unit_outcome == unit_expect
+          - unit_expect == 'passed' or unit_expect_message in unit_message
+        fail_msg: >-
+          {{ inventory_hostname }}: expected {{ unit_expect }}
+          ({{ unit_expect_message | default('') }}), got {{ unit_outcome }}:
+          {{ unit_message | default('') }}
+
+# cli/lib/relay/config.ts refuses a configuration with a missing key or a
+# writesPerHour that is not an integer, and the relay then refuses every
+# request.
+- name: Forge relay configuration
+  hosts: render
+  gather_facts: false
+  vars_files:
+    - ../../roles/forge_relay/defaults/main.yml
+  vars:
+    forge_relay_upstream: example/agent-forge
+    forge_relay_fork: bot-example/agent-forge
+    forge_relay_bot_login: bot-example
+    forge_relay_bot_name: Example Bot
+    forge_relay_bot_email: 1+bot-example@users.noreply.github.com
+    forge_relay_trusted_logins: [maintainer-example]
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render config.json
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/forge_relay/templates/config.json.j2"
+        dest: "{{ unit_tmp.path }}/config.json"
+        mode: "0644"
+
+    - name: Check it holds exactly the relay's keys, writesPerHour as an integer
+      ansible.builtin.assert:
+        that:
+          - unit_config.keys() | sort == unit_keys | sort
+          - unit_config.writesPerHour is integer
+          - unit_config.writesPerHour == 20
+          - unit_config.trustedLogins == ['maintainer-example']
+          - unit_config.coAuthorEmails == ['noreply@anthropic.com']
+        fail_msg: "config.json: {{ unit_config }}"
+      vars:
+        unit_config: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/config.json') | from_json }}"
+        unit_keys: [upstream, fork, botLogin, botName, botEmail, trustedLogins, coAuthorEmails, writesPerHour]
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent

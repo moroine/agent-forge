@@ -2,6 +2,8 @@
 # Validates the inventory's user-facing variables and normalizes the optional
 # ones to their defaults, as facts. Every forge_* variable the roles read is
 # listed here: this file is the single reference for their defaults.
+# forge_users, which has none, is checked in forge_users.yml: relay.yml shares
+# this file and has no forge user.
 - name: Normalize the optional variables to their defaults
   ansible.builtin.set_fact:
     forge_ssh_port: "{{ forge_ssh_port | default(22) | int }}"
@@ -40,32 +42,6 @@
       sets PermitRootLogin no, which would lock the next run out.
     quiet: true
 
-- name: Check forge_users
-  ansible.builtin.assert:
-    that:
-      - forge_users is defined
-      - forge_users is sequence
-      - forge_users is not string
-      - forge_users | length == 1
-    fail_msg: >-
-      forge_users must list exactly one user in v2.0: several forge users
-      would share one Incus project and bridge.
-    quiet: true
-
-- name: Check the forge user
-  ansible.builtin.assert:
-    that:
-      - forge_users[0].name is defined
-      - forge_users[0].name is match('^[a-z_][a-z0-9_-]*$')
-      - forge_users[0].name != forge_admin_user
-      - forge_users[0].ssh_keys | default([]) is sequence
-      - forge_users[0].ssh_keys | default([]) is not string
-      - forge_users[0].ssh_keys | default([]) | length > 0
-    fail_msg: >-
-      forge_users[0] needs a valid name, different from ansible_user
-      ({{ forge_admin_user }}), and ssh_keys as a list of at least one key.
-    quiet: true
-
 - name: Check the optional variables
   ansible.builtin.assert:
     that:
@@ -92,7 +68,3 @@
       (a disk), not both; forge_incus_storage_size needs a unit, e.g. "100GiB"
       (a bare number would mean bytes).
     quiet: true
-
-- name: Remember the forge user
-  ansible.builtin.set_fact:
-    forge_user: "{{ forge_users[0] }}"

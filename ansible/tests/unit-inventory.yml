@@ -140,3 +140,37 @@ all:
           forge_contributor_git_email: ""
           unit_expect: failed
           unit_expect_message: forge_contributor_git_email
+    relay_cases:
+      # The relay's inventory has no forge_users: preflight/inputs.yml must
+      # pass without them.
+      vars:
+        ansible_user: ubuntu
+        forge_exposure: public
+        forge_relay_upstream: example/agent-forge
+        forge_relay_fork: bot-example/agent-forge
+        forge_relay_bot_login: bot-example
+        forge_relay_bot_name: Example Bot
+        forge_relay_bot_email: 1+bot-example@users.noreply.github.com
+        forge_relay_trusted_logins: [maintainer-example]
+        forge_relay_client_cidr: 10.100.1.0/24
+        forge_relay_client_key_file: "{{ inventory_dir }}/files/relay-client.pub"
+      hosts:
+        relay_valid:
+          unit_expect: passed
+        relay_fork_not_bot:
+          forge_relay_fork: someone-else/agent-forge
+          unit_expect: failed
+          unit_expect_message: forge_relay_fork
+        relay_no_trusted:
+          forge_relay_trusted_logins: []
+          unit_expect: failed
+          unit_expect_message: forge_relay_trusted_logins
+        # A list would widen the key's from= and sshd's Match Address.
+        relay_bad_cidr:
+          forge_relay_client_cidr: 10.100.1.0/24,0.0.0.0/0
+          unit_expect: failed
+          unit_expect_message: forge_relay_client_cidr
+        relay_two_keys:
+          forge_relay_client_key_file: "{{ inventory_dir }}/files/relay-client-two-keys.pub"
+          unit_expect: failed
+          unit_expect_message: forge_relay_client_key_file

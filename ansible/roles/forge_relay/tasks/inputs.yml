@@ -1,0 +1,107 @@
+---
+# Checks the relay's inputs before anything changes on the relay: relay.yml's
+# preflight runs this file through the role, so the defaults apply.
+# cli/lib/relay/config.ts checks config.json again with the same rules: a
+# value it would refuse fails here, at install time, rather than on the
+# agent's first request. \Z, not $: $ also matches before a final newline.
+
+- name: Check the bot's login, name and email
+  ansible.builtin.assert:
+    that:
+      - forge_relay_bot_login | default('') is match('^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\Z')
+      - forge_relay_bot_name | default('') | trim | length > 0
+      - forge_relay_bot_email | default('') is search('@')
+    fail_msg: >-
+      forge_relay_bot_login must be a GitHub login, forge_relay_bot_name must
+      not be empty, and forge_relay_bot_email must be an email address.
+    quiet: true
+
+# The relay builds every GitHub URL from these names, so no URL, let alone one
+# carrying a credential, reaches its git commands.
+- name: Check the upstream repository is an owner/repo name
+  ansible.builtin.assert:
+    that:
+      - forge_relay_upstream | default('') is match('^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]+\\Z')
+    fail_msg: "forge_relay_upstream must be owner/repo (got: {{ forge_relay_upstream | default('nothing') }})."
+    quiet: true
+
+# The bot works on its own fork, never as a collaborator of another account's
+# repository.
+- name: Check the fork is the bot's
+  ansible.builtin.assert:
+    that:
+      - forge_relay_fork | default('') is match('^[A-Za-z0-9][A-Za-z0-9-]{0,38}/[A-Za-z0-9._-]+\\Z')
+      - (forge_relay_fork.split('/') | first | lower) == (forge_relay_bot_login | lower)
+    fail_msg: >-
+      forge_relay_fork must be owner/repo, owned by the bot
+      ({{ forge_relay_bot_login }}) (got: {{ forge_relay_fork | default('nothing') }}).
+    quiet: true
+
+# The relay takes instructions only from these logins and the bot's own.
+- name: Check the trusted logins
+  ansible.builtin.assert:
+    that:
+      - forge_relay_trusted_logins is defined
+      - forge_relay_trusted_logins is sequence
+      - forge_relay_trusted_logins is not string
+      - forge_relay_trusted_logins | length > 0
+      - forge_relay_trusted_logins | reject('match', '^[A-Za-z0-9][A-Za-z0-9-]{0,38}\\Z') | list | length == 0
+    fail_msg: >-
+      forge_relay_trusted_logins must be a non-empty list of GitHub logins (the
+      maintainer's).
+    quiet: true
+
+- name: Check the co-author emails and the write cap
+  ansible.builtin.assert:
+    that:
+      - forge_relay_co_author_emails is sequence
+      - forge_relay_co_author_emails is not string
+      - forge_relay_co_author_emails | reject('search', '@') | list | length == 0
+      - forge_relay_writes_per_hour | string is match('^[0-9]+\\Z')
+      - forge_relay_writes_per_hour | int >= 1
+    fail_msg: >-
+      forge_relay_co_author_emails must be a list of email addresses, and
+      forge_relay_writes_per_hour an integer of at least 1.
+    quiet: true
+
+# The dev VM's subnet goes into the key's from= and into sshd's Match Address:
+# one IPv4 network and nothing else (a comma would add another), with no host
+# bits set, which sshd refuses.
+- name: Check the client CIDR
+  ansible.builtin.assert:
+    that:
+      - forge_relay_client_cidr | default('') is match(forge_relay_cidr_re)
+      - (forge_relay_cidr_address | int) % (2 ** (32 - (forge_relay_cidr_prefix | int))) == 0
+    fail_msg: >-
+      forge_relay_client_cidr must be one IPv4 network, such as 10.100.1.0/24
+      (got: {{ forge_relay_client_cidr | default('nothing') }}).
+    quiet: true
+  vars:
+    forge_relay_octet_re: '(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])'
+    forge_relay_cidr_re: '^({{ forge_relay_octet_re }}\.){3}{{ forge_relay_octet_re }}/(3[0-2]|[12]?[0-9])\Z'
+    forge_relay_cidr_octets: "{{ (forge_relay_client_cidr.split('/') | first).split('.') | map('int') | list }}"
+    forge_relay_cidr_address: >-
+      {{ forge_relay_cidr_octets[0] * 16777216 + forge_relay_cidr_octets[1] * 65536
+         + forge_relay_cidr_octets[2] * 256 + forge_relay_cidr_octets[3] }}
+    forge_relay_cidr_prefix: "{{ forge_relay_client_cidr.split('/') | last }}"
+
+- name: Check the client key file is given
+  ansible.builtin.assert:
+    that:
+      - forge_relay_client_key_file is defined
+      - forge_relay_client_key_file is file
+    fail_msg: >-
+      forge_relay_client_key_file must name the dev VM's relay key, public
+      half, on the controller (got: {{ forge_relay_client_key_file | default('nothing') }}).
+    quiet: true
+
+# The line follows the forced command's options in authorized_keys: one
+# ed25519 key, with no options of its own, on one line.
+- name: Check the client key file holds one ssh-ed25519 key
+  ansible.builtin.assert:
+    that:
+      - forge_relay_client_key is match('^ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI[A-Za-z0-9+/]{43}( [ -~]*)?\\Z')
+    fail_msg: >-
+      forge_relay_client_key_file ({{ forge_relay_client_key_file }}) must hold
+      one line, "ssh-ed25519 <base64> [comment]".
+    quiet: true
