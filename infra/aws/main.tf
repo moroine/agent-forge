@@ -6,15 +6,19 @@ data "aws_ssm_parameter" "ami" {
 }
 
 # A network of its own: one public subnet, no NAT gateway, no IPv6.
+# Never around forge's bridge (10.77.0.1/24 by default, cli/lib/config.ts):
+# AWS puts the VPC's resolver at its base + 2 and DHCP routes the VM to it,
+# so a 10.77.0.0/16 VPC would send forge-proxy's traffic (10.77.0.2) away
+# from the bridge.
 resource "aws_vpc" "dev" {
-  cidr_block           = "10.77.0.0/16"
+  cidr_block           = "10.100.0.0/16"
   enable_dns_support   = true
   enable_dns_hostnames = true
 }
 
 resource "aws_subnet" "dev" {
   vpc_id     = aws_vpc.dev.id
-  cidr_block = "10.77.1.0/24"
+  cidr_block = "10.100.1.0/24"
 }
 
 resource "aws_internet_gateway" "dev" {
