@@ -8,6 +8,8 @@ import { ensureFork, type GitHub } from "./github.ts";
 const keyId = (line: string): string => line.trim().split(/\s+/).slice(0, 2).join(" ");
 
 export async function relaySetup(ctx: Context, gh: GitHub, cfg: RelayConfig, signingPub: string, sleep: (ms: number) => Promise<void>): Promise<number> {
+  // An empty or malformed key would match a malformed registered one (both have no id).
+  if (!/^[A-Za-z0-9@.-]+ [A-Za-z0-9+/]+={0,2}(\s|$)/.test(signingPub.trim())) throw new RelayError("the signing public key is empty or malformed: expected '<type> <base64> [comment]'");
   const me = await gh.request("GET", "/user");
   if (me.status !== 200) throw new RelayError(`GitHub GET /user answered ${me.status}: the token is not accepted`);
   const login = String((me.json as { login?: unknown } | null)?.login ?? "");
@@ -22,6 +24,19 @@ export async function relaySetup(ctx: Context, gh: GitHub, cfg: RelayConfig, sig
 
   ctx.out(`fork ${cfg.fork}: ${await ensureFork(gh, cfg, sleep)}`);
 
+  // The relay never enables Actions on the fork: the bot's branches would run
+  // workflows there. Disabled is GitHub's default on a new fork.
+  let actionsOk = true;
+  const perms = await gh.request("GET", `/repos/${cfg.fork}/actions/permissions`);
+  if (perms.status === 200) {
+    if ((perms.json as { enabled?: unknown } | null)?.enabled !== false) {
+      ctx.out(`Actions are enabled on ${cfg.fork}: disable them (the fork's Settings → Actions → General → Disable actions); the relay needs them off`);
+      actionsOk = false;
+    } else ctx.out("fork Actions: disabled");
+  } else if (perms.status === 403 || perms.status === 404) {
+    ctx.out(`could not check the Actions setting of ${cfg.fork} with this token: make sure the fork's Actions tab shows them disabled, which GitHub does by default on a new fork`);
+  } else throw new RelayError(`GitHub GET /repos/${cfg.fork}/actions/permissions answered ${perms.status}`);
+
   const keys = await gh.request("GET", `/users/${cfg.botLogin}/ssh_signing_keys`);
   if (keys.status !== 200) throw new RelayError(`GitHub GET /users/${cfg.botLogin}/ssh_signing_keys answered ${keys.status}`);
   const want = keyId(signingPub);
@@ -33,6 +48,5 @@ export async function relaySetup(ctx: Context, gh: GitHub, cfg: RelayConfig, sig
     return 1;
   }
   ctx.out("signing key: registered");
-  ctx.out("GitHub disables Actions on a new fork: check the fork's Actions tab once and enable them.");
-  return 0;
+  return actionsOk ? 0 : 1;
 }

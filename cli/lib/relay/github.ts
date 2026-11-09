@@ -122,7 +122,8 @@ export async function openPull(gh: GitHub, cfg: RelayConfig, task: string, title
     base: "main",
     maintainer_can_modify: false,
   })).json);
-  return { number: Number(j.number), url: str(j.html_url) };
+  if (typeof j.number !== "number" || !Number.isInteger(j.number) || j.number < 1) throw new RelayError("GitHub answered without a pull request number");
+  return { number: j.number, url: str(j.html_url) };
 }
 
 export async function comment(gh: GitHub, cfg: RelayConfig, pr: number, body: string): Promise<{ url: string }> {

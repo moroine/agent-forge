@@ -182,12 +182,13 @@ test("ciLog refuses a job that is not one of the pull request's checks", async (
 });
 
 const GOOD = "ssh-ed25519 AAAAkey relay";
-function setupFake(over: { scopes?: string; expiry?: boolean; login?: string; keys?: unknown[] } = {}) {
+function setupFake(over: { scopes?: string; expiry?: boolean; login?: string; keys?: unknown[]; actions?: Answer } = {}) {
   const headers: Record<string, string> = { "X-OAuth-Scopes": over.scopes ?? "public_repo, workflow" };
   if (over.expiry !== false) headers["GitHub-Authentication-Token-Expiration"] = "2027-01-01 00:00:00 UTC";
   return fake({
     "GET /user": { json: { login: over.login ?? "Bot" }, headers },
     "GET /repos/bot/widgets": { json: { fork: true, parent: { full_name: "acme/widgets" } } },
+    "GET /repos/bot/widgets/actions/permissions": over.actions ?? { json: { enabled: false } },
     "GET /users/bot/ssh_signing_keys": { json: over.keys ?? [] },
   });
 }
@@ -210,5 +211,29 @@ test("setup prints the signing key and returns 1 until it is registered", async 
   // Registered under another comment: same type and base64, so it counts.
   const ctx2 = fakeContext();
   assert.equal(await relaySetup(ctx2, setupFake({ keys: [{ key: "ssh-ed25519 AAAAkey laptop" }] }).gh, cfg, GOOD, async () => {}), 0);
-  assert.match(ctx2.out_lines.join("\n"), /Actions/);
+});
+
+test("setup returns 1 while Actions are enabled on the fork, 0 when off or unreadable", async () => {
+  const keys = [{ key: GOOD }];
+  const run = async (actions: Answer) => {
+    const ctx = fakeContext();
+    return { code: await relaySetup(ctx, setupFake({ keys, actions }).gh, cfg, GOOD, async () => {}), out: ctx.out_lines.join("\n") };
+  };
+  const on = await run({ json: { enabled: true } });
+  assert.equal(on.code, 1);
+  assert.match(on.out, /Actions are enabled on bot\/widgets: disable them/);
+  assert.equal((await run({ json: { enabled: false } })).code, 0);
+  const unreadable = await run({ status: 403 });
+  assert.equal(unreadable.code, 0);
+  assert.match(unreadable.out, /could not check/);
+  await assert.rejects(() => relaySetup(fakeContext(), setupFake({ keys, actions: { status: 500 } }).gh, cfg, GOOD, async () => {}), /500/);
+});
+
+test("setup refuses an empty or malformed signing key", async () => {
+  for (const bad of ["", "  \n", "garbage"]) await assert.rejects(() => relaySetup(fakeContext(), setupFake().gh, cfg, bad, async () => {}), /signing public key/);
+});
+
+test("openPull refuses an answer without a pull request number", async () => {
+  const { gh } = fake({ "POST /repos/acme/widgets/pulls": { status: 201, json: { html_url: "x" } } });
+  await assert.rejects(() => openPull(gh, cfg, "t", "T", "B"), /without a pull request number/);
 });
