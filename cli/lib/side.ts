@@ -20,7 +20,7 @@ export function currentSide(env: NodeJS.ProcessEnv = process.env, exists: (path:
 export const LAPTOP_COMMANDS = ["install", "open", "fetch", "ship", "cloud"] as const;
 
 const HOST_COMMANDS = [
-  "setup", "start", "resume", "finish", "stop", "delete", "list", "egress", "attach", "upload-pack", "task-base", "image",
+  "setup", "start", "resume", "finish", "stop", "delete", "list", "egress", "attach", "upload-pack", "task-base", "image", "relay",
 ] as const;
 
 // `completion` is for both sides: it is the current side's own.

@@ -24,6 +24,7 @@ import { cmdInstall } from "./lib/commands/install.ts";
 import { cmdOpen } from "./lib/commands/open.ts";
 import { cmdFetch } from "./lib/commands/fetch.ts";
 import { cmdShip } from "./lib/commands/ship.ts";
+import { cmdRelay } from "./lib/commands/relay.ts";
 import { currentSide, requireSide } from "./lib/side.ts";
 
 const USAGE = `Usage: forge <command> [args]
@@ -46,6 +47,14 @@ On the forge host:
   attach <container> <task>         Run a task's agent in this terminal (what herdr tabs run)
   upload-pack <container> [<path>]  Serve a container's repository to git fetch (see the README, "Get the work back")
   task-base <container> [<task>]    Print the ref a task started from (every task, tab-separated, without <task>)
+  relay publish [<task>]            On the contributor's dev VM: publish agent/<task> through the relay
+  relay pr <task> --title <text> --body-file <file|->
+                                    Open the task's pull request (the body from a file, or stdin with -)
+  relay comment <pr> --body-file <file|->
+  relay reply <pr> <comment-id> --body-file <file|->
+                                    Comment on a pull request, or reply to one of its comments
+  relay read <number>               Read an issue or pull request thread (trusted accounts only)
+  relay ci <pr> [<job-id>]          List a pull request's CI runs, or print one job's log
   image build                       Build the agent-base image (Ansible, through Incus)
   image commit                      Print the commit agent-base was built from (nothing if no image)
   completion bash                   Print a bash completion function (eval it in ~/.bashrc)
@@ -70,9 +79,10 @@ With no terminal on stdin (scripts, CI) nothing is asked and the command
 exits with this usage instead.`;
 
 type LaptopOptions = { remote?: string; host?: string };
+type RelayArgs = { title?: string; bodyFile?: string };
 
 function dispatch(
-  ctx: Context, positionals: string[], force: boolean, strict: boolean, all: boolean, laptop: LaptopOptions,
+  ctx: Context, positionals: string[], force: boolean, strict: boolean, all: boolean, laptop: LaptopOptions, relay: RelayArgs,
 ): Promise<number> {
   const [cmd, a, b] = positionals;
   // --strict ne vaut que pour `start` (création d'un container strict).
@@ -89,6 +99,7 @@ function dispatch(
     case "attach": return cmdAttach(ctx, a, b);
     case "upload-pack": return cmdUploadPack(ctx, a);
     case "task-base": return cmdTaskBase(ctx, a, b);
+    case "relay": return cmdRelay(ctx, a, positionals.slice(2), relay);
     case "image": return cmdImage(ctx, a, b);
     case "completion": return cmdCompletion(ctx, a, b);
     case "install": return cmdInstall(ctx, laptop);
@@ -127,6 +138,7 @@ async function main(): Promise<number> {
       options: {
         force: { type: "boolean" }, strict: { type: "boolean" }, all: { type: "boolean" },
         remote: { type: "string" }, host: { type: "string" },
+        title: { type: "string" }, "body-file": { type: "string" },
         help: { type: "boolean", short: "h" },
       },
       allowPositionals: true,
@@ -148,8 +160,12 @@ async function main(): Promise<number> {
       throw new ForgeError("--host only goes with install, open, fetch, ship and cloud: forge install --host <name>, " +
         "forge open --host <name>, forge fetch --host <name>, forge ship <task> --host <name>, forge cloud start --host <name>");
     }
+    if ((values.title !== undefined || values["body-file"] !== undefined) && cmd !== "relay") {
+      throw new ForgeError("--title and --body-file only go with relay: forge relay pr <task> --title <text> --body-file <file>");
+    }
     const laptop = { remote: values.remote, host: values.host };
-    const code = await dispatch(ctx, positionals, values.force === true, values.strict === true, values.all === true, laptop);
+    const code = await dispatch(ctx, positionals, values.force === true, values.strict === true, values.all === true, laptop,
+      { title: values.title, bodyFile: values["body-file"] });
     // Politique d'acquittement de la popup herdr, qui se ferme avec le processus :
     // - un code de sortie non nul, ou une exception : on attend Entrée ;
     // - un succès sans rien à lire : elle se ferme aussitôt ;
