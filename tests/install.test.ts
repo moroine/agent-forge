@@ -1146,7 +1146,12 @@ test("a re-run of a finished cloud host applies OpenTofu and the playbook again,
   ]);
   // This machine's address may have moved since the last run.
   assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.8/32");
-  assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.20"), called(ctx).join("\n"));
+  // Installed, the host runs fail2ban in aggressive mode, which bans this
+  // machine for ssh-keyscan's connections: the wait is the admin's login.
+  assert.ok(!called(ctx).some((c) => c.startsWith("ssh-keyscan")), called(ctx).join("\n"));
+  assert.ok(called(ctx).includes(
+    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5 ` +
+    `-o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.20 true`), called(ctx).join("\n"));
   assert.ok(!called(ctx).some((c) => c.includes("claude-token")), called(ctx).join("\n"));
   assert.deepEqual(asked(ctx), [LINK, TOASTS()]);
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);

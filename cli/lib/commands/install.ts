@@ -419,35 +419,49 @@ async function cloudVm(
   const infra = infraFor(host.name, checkout);
   await applyInteractive(ctx, infra);
   host.address = await infraAddress(ctx, infra);
-  await waitForSsh(ctx, host.address, sleep);
+  await waitForSsh(ctx, host, sleep, reached);
   return reached ? "done" : firstConnection(ctx, host);
 }
 
 // A new instance boots for a minute or two before sshd answers. The keys
 // ssh-keyscan prints only say it does: the first connection asks about them.
-async function waitForSsh(ctx: Context, address: string, sleep: (ms: number) => Promise<void>): Promise<void> {
+// Once the host was reached, the probe is the admin's login instead: on a
+// public host, fail2ban's aggressive mode counts ssh-keyscan's connections,
+// closed before authentication, and bans this machine after three of them.
+async function waitForSsh(
+  ctx: Context, host: LaptopHost, sleep: (ms: number) => Promise<void>, reached: boolean,
+): Promise<void> {
   for (let i = 0; i < SSH_TRIES; i++) {
     if (i > 0) await sleep(SSH_WAIT_MS);
-    const r = await ctx.exec(["ssh-keyscan", "-T", "5", address]);
-    if (r.stdout.split("\n").some((l) => l.trim() !== "" && !l.startsWith("#"))) return;
+    if (reached) {
+      if ((await ctx.exec(adminSsh(host, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]))).code === 0) return;
+    } else {
+      const r = await ctx.exec(["ssh-keyscan", "-T", "5", host.address]);
+      if (r.stdout.split("\n").some((l) => l.trim() !== "" && !l.startsWith("#"))) return;
+    }
   }
   throw new ForgeError(
-    `${address} did not answer on SSH within ${(SSH_TRIES * SSH_WAIT_MS) / 60000} minutes: ` +
+    `${host.address} did not answer on SSH within ${(SSH_TRIES * SSH_WAIT_MS) / 60000} minutes: ` +
     "check the instance in the AWS console, and that this machine's public address has not changed",
   );
+}
+
+// The admin's `ssh … true` by address, with forge's known_hosts and one key.
+// By address, not by the alias whose ForwardAgent no would apply: a Host *
+// of ~/.ssh/config must not forward the agent to the dev VM.
+function adminSsh(host: LaptopHost, options: string[] = []): string[] {
+  const argv = ["ssh", "-o", sshOption("UserKnownHostsFile", knownHostsPath()), "-o", "IdentitiesOnly=yes", ...options];
+  if (host.kind === "cloud") argv.push("-o", "ForwardAgent=no");
+  if (host.identityAgent) argv.push("-o", sshOption("IdentityAgent", host.identityAgent));
+  argv.push("-i", host.adminKey, `${host.admin}@${host.address}`, "true");
+  return argv;
 }
 
 // In the terminal, so that OpenSSH asks about the new host's key once, in the
 // open; exactly one key is offered (sshd allows two attempts, fail2ban bans).
 async function firstConnection(ctx: Context, host: LaptopHost): Promise<Outcome> {
   mkdirSync(dirname(knownHostsPath()), { recursive: true, mode: 0o700 });
-  const argv = ["ssh", "-o", sshOption("UserKnownHostsFile", knownHostsPath()), "-o", "IdentitiesOnly=yes"];
-  // By address, not by the alias whose ForwardAgent no would apply: a Host *
-  // of ~/.ssh/config must not forward the agent to the dev VM.
-  if (host.kind === "cloud") argv.push("-o", "ForwardAgent=no");
-  if (host.identityAgent) argv.push("-o", sshOption("IdentityAgent", host.identityAgent));
-  argv.push("-i", host.adminKey, `${host.admin}@${host.address}`, "true");
-  const code = await ctx.attach(argv);
+  const code = await ctx.attach(adminSsh(host));
   if (code !== 0) {
     throw new ForgeError(`ssh ${host.admin}@${host.address} failed (exit code ${code}): check the address, the admin account and its key`);
   }
