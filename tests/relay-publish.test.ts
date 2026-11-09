@@ -4,6 +4,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { ExecResult } from "../cli/lib/context.ts";
 import { parseRelayConfig, RelayError } from "../cli/lib/relay/config.ts";
 import type { GitHub } from "../cli/lib/relay/github.ts";
 import { RELAY_PATHS } from "../cli/lib/relay/paths.ts";
@@ -43,6 +44,9 @@ let dev: string;
 let blLog: string;
 let blEnv: Record<string, string>;
 let ctx: FakeContext;
+// A test may stand between the relay and a command: to fail it, or to act
+// around it (`run` runs it for real).
+let intercept: ((argv: string[], run: () => Promise<ExecResult>) => Promise<ExecResult>) | null;
 let n = 0;
 
 // Every command the relay runs gets the fake Betterleaks first on its PATH,
@@ -55,8 +59,12 @@ beforeEach(() => {
   blLog = path.join(root, "betterleaks.log");
   blEnv = { PATH: `${bin}:${process.env.PATH}`, FAKE_BL_LOG: blLog, BETTERLEAKS_VALIDATE: "true", BETTERLEAKS_ANALYZE: "true" };
   ctx = hybridContext();
+  intercept = null;
   const exec = ctx.exec;
-  ctx.exec = (argv, o) => exec(argv, { ...o, env: { ...blEnv, ...o?.env } });
+  ctx.exec = (argv, o) => {
+    const run = () => exec(argv, { ...o, env: { ...blEnv, ...o?.env } });
+    return intercept === null ? run() : intercept(argv, run);
+  };
 
   // GitHub: upstream main holds an ignore file; the fork starts empty.
   githubBase = path.join(root, "github");
@@ -113,8 +121,9 @@ const forkHead = (t: string): string | null => (exists(fork, `refs/heads/agent/$
 const tree = (repo: string, rev: string): string => git(repo, "rev-parse", `${rev}^{tree}`);
 const stateOf = (d: RelayDeps): RelayState => {
   const file = path.join(d.paths.stateDir, "state.json");
-  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { published: {}, writes: [] };
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : { published: {}, pending: {}, writes: [] };
 };
+const nothingRecorded = { published: {}, pending: {}, writes: [] };
 
 // One commit of `file` on agent/<t> in the dev clone, which is created from
 // `from` (origin/main by default) when it does not exist.
@@ -215,6 +224,79 @@ test("refuses when the fork's branch moved since the relay published it", async 
   await refused(publish(d, { branch: "agent/t", bundle: bundle("t") }), /moved since the relay published it/);
   assert.equal(forkHead("t"), theirs);
   assert.deepEqual(stateOf(d).published, { t: first.head });
+
+  // A published branch deleted from the fork is told apart.
+  git(fork, "update-ref", "-d", "refs/heads/agent/t");
+  await refused(publish(d, { branch: "agent/t", bundle: bundle("t") }), new RegExp(`agent/t is gone from the fork although the relay published it at ${first.head.slice(0, 12)}`));
+  assert.deepEqual(stateOf(d).published, { t: first.head });
+});
+
+test("a publish that fails after its push keeps it recorded, and its retry answers with the fork's head", async () => {
+  const d = relay();
+  work("t", "a.txt");
+  const first = await publish(d, { branch: "agent/t", bundle: bundle("t") });
+  align("t", first);
+  work("t", "b.txt");
+  const sent = bundle("t");
+  // The push lands, then the answer cannot be bundled: the dev VM never hears of it.
+  intercept = (argv, run) => (argv.includes("bundle") && argv.includes("create") ? Promise.resolve({ code: 1, stdout: "", stderr: "simulated" }) : run());
+  await assert.rejects(publish(d, { branch: "agent/t", bundle: sent }), /simulated/);
+  const pushed = forkHead("t")!;
+  assert.notEqual(pushed, first.head);
+  assert.deepEqual(stateOf(d).published, { t: pushed });
+  intercept = null;
+
+  // The agent's branch still holds its unsigned commit: it sends it again.
+  const retry = await publish(d, { branch: "agent/t", bundle: sent });
+  assert.equal(retry.head, pushed);
+  assert.equal(forkHead("t"), pushed);
+  assert.equal(stateOf(d).writes.length, 2);
+  align("t", retry);
+  assert.equal(git(dev, "status", "--porcelain"), "");
+});
+
+test("a publish that dies between its push and its record is recognized by the next one", async () => {
+  const d = relay();
+  work("t", "a.txt");
+  const first = await publish(d, { branch: "agent/t", bundle: bundle("t") });
+  align("t", first);
+  work("t", "b.txt");
+  const sent = bundle("t");
+  intercept = async (argv, run) => {
+    const r = await run();
+    if (argv.includes("push")) throw new Error("the relay died");
+    return r;
+  };
+  await assert.rejects(publish(d, { branch: "agent/t", bundle: sent }), /the relay died/);
+  const pushed = forkHead("t")!;
+  assert.deepEqual(stateOf(d).published, { t: first.head });
+  assert.deepEqual(stateOf(d).pending, { t: pushed });
+  intercept = null;
+
+  const retry = await publish(d, { branch: "agent/t", bundle: sent });
+  assert.equal(retry.head, pushed);
+  assert.deepEqual(stateOf(d).published, { t: pushed });
+  assert.deepEqual(stateOf(d).pending, {});
+});
+
+test("a pending head the fork never got does not block the next publish", async () => {
+  const d = relay();
+  work("t", "a.txt");
+  const first = await publish(d, { branch: "agent/t", bundle: bundle("t") });
+  align("t", first);
+  work("t", "b.txt");
+  const sent = bundle("t");
+  // The relay dies after recording the pending head, before pushing it.
+  intercept = (argv, run) => (argv.includes("push") ? Promise.reject(new Error("the relay died")) : run());
+  await assert.rejects(publish(d, { branch: "agent/t", bundle: sent }), /the relay died/);
+  assert.equal(forkHead("t"), first.head);
+  assert.equal(Object.keys(stateOf(d).pending).length, 1);
+  intercept = null;
+
+  const second = await publish(d, { branch: "agent/t", bundle: sent });
+  assert.equal(git(fork, "rev-parse", `${second.head}^`), first.head);
+  assert.deepEqual(stateOf(d).published, { t: second.head });
+  assert.deepEqual(stateOf(d).pending, {});
 });
 
 test("adopts an unrecorded fork branch of the bot's commits, refuses one with another author", async () => {
@@ -248,7 +330,19 @@ test("a Betterleaks finding refuses the publish and pushes nothing", async () =>
     /generic-api-key in secret\.txt:3 \(commit 0123456789ab, fingerprint 0123456789abcdef0123456789abcdef01234567:secret\.txt:generic-api-key:3\)[\s\S]*Nothing was published\. A false positive is cleared by the maintainer/,
   );
   assert.equal(forkHead("t"), null);
-  assert.deepEqual(stateOf(d), { published: {}, writes: [] });
+  assert.deepEqual(stateOf(d), nothingRecorded);
+});
+
+test("the scans run in a fresh directory and refuse a mirror holding an ignore file", async () => {
+  // Betterleaks reads one at the root of the repository it scans, on top of -i.
+  const d = relay();
+  work("t", "a.txt");
+  fs.writeFileSync(path.join(d.paths.mirror, ".betterleaksignore"), "anything\n");
+  await refused(publish(d, { branch: "agent/t", bundle: bundle("t") }), /mirror holds a \.betterleaksignore/);
+  assert.equal(forkHead("t"), null);
+  fs.rmSync(path.join(d.paths.mirror, ".betterleaksignore"));
+  await publish(d, { branch: "agent/t", bundle: bundle("t") });
+  assert.match(fs.readFileSync(blLog, "utf8"), /^cwd: .*\/forge-relay-scan-[^/]+$/m);
 });
 
 test("the scan reads upstream main's .betterleaksignore, never the branch's", async () => {
@@ -307,14 +401,31 @@ test("a branch that names a blob is refused and leaves nothing that breaks the n
   assert.equal(forkHead("t"), res.head);
 });
 
-test("a rejected push records nothing", async () => {
+test("a push GitHub refuses gives its reason and records nothing", async () => {
+  // As push protection or a workflow change without the workflow scope would.
   const d = relay();
-  fs.writeFileSync(path.join(fork, "hooks", "pre-receive"), "#!/bin/sh\nexit 1\n", { mode: 0o755 });
+  fs.writeFileSync(path.join(fork, "hooks", "pre-receive"), "#!/bin/sh\necho 'push declined: a secret was found' >&2\nexit 1\n", { mode: 0o755 });
   work("t", "a.txt");
-  await refused(publish(d, { branch: "agent/t", bundle: bundle("t") }), /moved during the publish/);
+  await refused(publish(d, { branch: "agent/t", bundle: bundle("t") }), /^GitHub refused the push of agent\/t: pre-receive hook declined\. Nothing was published\.$/);
   assert.equal(forkHead("t"), null);
-  assert.deepEqual(stateOf(d), { published: {}, writes: [] });
+  assert.deepEqual(stateOf(d), nothingRecorded);
   assert.equal(exists(d.paths.mirror, "refs/relay/published/agent/t"), false);
+});
+
+test("a push refused because the fork moved meanwhile says so and records nothing", async () => {
+  const d = relay();
+  work("t", "a.txt");
+  // The fork's branch appears between the relay's fetch and its push.
+  intercept = (argv, run) => {
+    if (argv.includes("push")) {
+      // The empty tree is the one object the empty fork has.
+      const race = git(fork, "-c", "user.name=M", "-c", "user.email=m@example.com", "commit-tree", "4b825dc642cb6eb9a060e54bf8d69288fbee4904", "-m", "race");
+      git(fork, "update-ref", "refs/heads/agent/t", race);
+    }
+    return run();
+  };
+  await refused(publish(d, { branch: "agent/t", bundle: bundle("t") }), /^the fork's agent\/t moved during the publish$/);
+  assert.deepEqual(stateOf(d), nothingRecorded);
 });
 
 test("refuses a task built on another task, published or only sent", async () => {
@@ -349,7 +460,7 @@ test("refuses more than 200 commits before reading any of them", async () => {
 });
 
 test("takeWrite refuses past the hourly cap", () => {
-  const s: RelayState = { published: {}, writes: [] };
+  const s: RelayState = { published: {}, pending: {}, writes: [] };
   takeWrite(s, 0, 2);
   takeWrite(s, 60_000, 2);
   assert.throws(() => takeWrite(s, 120_000, 2), (e) => e instanceof RelayError && /write cap/.test(e.message));
@@ -360,12 +471,29 @@ test("takeWrite refuses past the hourly cap", () => {
 test("withState removes a lock older than 15 minutes", async () => {
   const dir = path.join(root, "state");
   fs.mkdirSync(path.join(dir, "lock"), { recursive: true });
+  fs.writeFileSync(path.join(dir, "lock", "owner"), "a request that died");
   const old = new Date(Date.now() - 16 * 60_000);
   fs.utimesSync(path.join(dir, "lock"), old, old);
   const started = Date.now();
   assert.equal(await withState(dir, async () => "ran"), "ran");
   assert.ok(Date.now() - started < 5000);
   assert.equal(fs.existsSync(path.join(dir, "lock")), false);
+});
+
+test("a request that lost its lock writes nothing and leaves the next holder's lock", async () => {
+  const dir = path.join(root, "state");
+  fs.mkdirSync(dir);
+  await assert.rejects(
+    withState(dir, async (s, save) => {
+      // Taken as stale while this request ran, then taken by another one.
+      fs.writeFileSync(path.join(dir, "lock", "owner"), "the next holder");
+      s.writes.push(1);
+      await save();
+    }),
+    /lost the lock/,
+  );
+  assert.equal(fs.existsSync(path.join(dir, "state.json")), false);
+  assert.equal(fs.readFileSync(path.join(dir, "lock", "owner"), "utf8"), "the next holder");
 });
 
 test("two withState calls at once run one after the other", async () => {

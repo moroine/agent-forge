@@ -1,14 +1,18 @@
 // The relay's state, <stateDir>/state.json: the head it last published on the
-// fork for each task, and the times of its recent writes to GitHub. Two
-// requests can run at once (two terminals, a multiplexed ssh connection), so
-// each one reads and writes the state under one lock.
+// fork for each task, the head it is about to push (pending), and the times
+// of its recent writes to GitHub. Two requests can run at once (two
+// terminals, a multiplexed ssh connection), so each one reads and writes the
+// state under one lock.
 import { randomBytes } from "node:crypto";
 import { promises as fsp } from "node:fs";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { RelayError } from "./config.ts";
 
-export type RelayState = { published: Record<string, string>; writes: number[] };
+// `pending[t]` is written before a push and cleared once the push is recorded
+// in `published[t]` (or refused): if the relay dies in between, the next
+// publish still recognizes the fork's head as its own.
+export type RelayState = { published: Record<string, string>; pending: Record<string, string>; writes: number[] };
 
 const RETRY_MS = 100;
 const WAIT_MS = 30_000;
@@ -18,11 +22,14 @@ const HOUR_MS = 3_600_000;
 const SHA = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 const errno = (e: unknown): string | undefined => (e as NodeJS.ErrnoException).code;
+const token = (): string => randomBytes(12).toString("hex");
 
-// `published` has no prototype: a task named `constructor` or `toString` is
-// not already published.
+// The maps have no prototype: a task named `constructor` or `toString` is
+// neither published nor pending.
+const heads = (): Record<string, string> => Object.create(null) as Record<string, string>;
+
 function emptyState(): RelayState {
-  return { published: Object.create(null) as Record<string, string>, writes: [] };
+  return { published: heads(), pending: heads(), writes: [] };
 }
 
 async function readState(file: string): Promise<RelayState> {
@@ -40,91 +47,116 @@ async function readState(file: string): Promise<RelayState> {
   } catch {
     throw bad();
   }
-  const o = json as { published?: unknown; writes?: unknown };
-  if (typeof o !== "object" || o === null || typeof o.published !== "object" || o.published === null || Array.isArray(o.published)) throw bad();
+  if (typeof json !== "object" || json === null || Array.isArray(json)) throw bad();
+  const o = json as { published?: unknown; pending?: unknown; writes?: unknown };
+  const map = (v: unknown): Record<string, string> => {
+    if (typeof v !== "object" || v === null || Array.isArray(v)) throw bad();
+    const m = heads();
+    for (const [task, head] of Object.entries(v)) {
+      if (typeof head !== "string" || !SHA.test(head)) throw bad();
+      m[task] = head;
+    }
+    return m;
+  };
   if (!Array.isArray(o.writes) || o.writes.some((w) => typeof w !== "number" || !Number.isFinite(w))) throw bad();
-  const s = emptyState();
-  for (const [task, head] of Object.entries(o.published)) {
-    if (typeof head !== "string" || !SHA.test(head)) throw bad();
-    s.published[task] = head;
-  }
-  s.writes = o.writes as number[];
-  return s;
+  return { published: map(o.published), pending: map(o.pending ?? {}), writes: o.writes as number[] };
 }
 
+type Held = { dir: string; lockDir: string; owner: string };
+
+const ownerOf = (lockDir: string): Promise<string | null> => fsp.readFile(path.join(lockDir, "owner"), "utf8").catch(() => null);
+
 // Written to a temporary file, flushed, then renamed: a crash leaves the old
-// state or the new one, never half of it.
-async function writeState(dir: string, s: RelayState): Promise<void> {
-  const tmp = path.join(dir, `state.json.${process.pid}.${randomBytes(6).toString("hex")}.tmp`);
+// state or the new one, never half of it. Only while this request still holds
+// the lock: one that lost it (taken as stale) writes nothing.
+async function writeState(held: Held, s: RelayState): Promise<void> {
+  if ((await ownerOf(held.lockDir)) !== held.owner) throw new Error("relay state: this request lost the lock; nothing was written");
+  const tmp = path.join(held.dir, `state.json.${process.pid}.${token()}.tmp`);
   try {
     const fh = await fsp.open(tmp, "wx", 0o600);
     try {
-      await fh.writeFile(`${JSON.stringify({ published: { ...s.published }, writes: s.writes })}\n`);
+      await fh.writeFile(`${JSON.stringify({ published: { ...s.published }, pending: { ...s.pending }, writes: s.writes })}\n`);
       await fh.sync();
     } finally {
       await fh.close();
     }
-    await fsp.rename(tmp, path.join(dir, "state.json"));
+    await fsp.rename(tmp, path.join(held.dir, "state.json"));
   } catch (e) {
     await fsp.rm(tmp, { force: true });
     throw e;
   }
 }
 
-// mkdir is atomic: the request that creates <dir>/lock holds it. The holder
-// writes a random owner inside, so that releasing a lock that was meanwhile
-// taken as stale never removes the next holder's.
-async function lock(dir: string): Promise<{ lockDir: string; owner: string }> {
+// A lock older than STALE_MS is moved aside under a name of its own, then
+// removed if it is still the lock found stale. Another request may have
+// broken it and taken a fresh lock in the meantime: that one is put back,
+// or, if a third request already holds the name, its holder finds out at
+// its next write.
+async function breakStale(lockDir: string): Promise<void> {
+  let mtimeMs: number;
+  try {
+    ({ mtimeMs } = await fsp.stat(lockDir));
+  } catch (e) {
+    if (errno(e) === "ENOENT") return;
+    throw e;
+  }
+  if (Date.now() - mtimeMs <= STALE_MS) return;
+  const stale = await ownerOf(lockDir);
+  const aside = `${lockDir}.stale.${token()}`;
+  try {
+    await fsp.rename(lockDir, aside);
+  } catch (e) {
+    if (errno(e) === "ENOENT") return;
+    throw e;
+  }
+  if ((await ownerOf(aside)) !== stale) await fsp.rename(aside, lockDir).catch(() => {});
+  await fsp.rm(aside, { recursive: true, force: true });
+}
+
+// The lock is the directory <dir>/lock, holding a random owner: a write or a
+// release checks it, so that a request whose lock was taken as stale never
+// acts on the next holder's. It is made aside, owner included, then renamed
+// into place: rename is atomic and refuses to replace a directory that is not
+// empty, so the request whose rename succeeds holds the lock, and a lock never
+// exists without its owner.
+async function lock(dir: string): Promise<Held> {
   const lockDir = path.join(dir, "lock");
-  const owner = randomBytes(12).toString("hex");
-  const deadline = Date.now() + WAIT_MS;
-  for (;;) {
-    let created = false;
-    try {
-      await fsp.mkdir(lockDir);
-      created = true;
-    } catch (e) {
-      if (errno(e) !== "EEXIST") throw e;
-    }
-    if (created) {
+  const owner = token();
+  const staging = path.join(dir, `lock.new.${owner}`);
+  await fsp.mkdir(staging);
+  try {
+    await fsp.writeFile(path.join(staging, "owner"), owner);
+    const deadline = Date.now() + WAIT_MS;
+    for (;;) {
       try {
-        await fsp.writeFile(path.join(lockDir, "owner"), owner);
+        await fsp.rename(staging, lockDir);
+        return { dir, lockDir, owner };
       } catch (e) {
-        // A lock without its owner would block every request for 15 minutes.
-        await fsp.rm(lockDir, { recursive: true, force: true });
-        throw e;
+        if (errno(e) !== "EEXIST" && errno(e) !== "ENOTEMPTY") throw e;
       }
-      return { lockDir, owner };
+      await breakStale(lockDir);
+      if (Date.now() >= deadline) throw new RelayError("the relay is busy with another request: try again in a minute");
+      await sleep(RETRY_MS);
     }
-    try {
-      const { mtimeMs } = await fsp.stat(lockDir);
-      if (Date.now() - mtimeMs > STALE_MS) {
-        await fsp.rm(lockDir, { recursive: true, force: true });
-        continue;
-      }
-    } catch (e) {
-      // Released between our mkdir and stat: try again at once.
-      if (errno(e) === "ENOENT") continue;
-      throw e;
-    }
-    if (Date.now() >= deadline) throw new RelayError("the relay is busy with another request: try again in a minute");
-    await sleep(RETRY_MS);
+  } finally {
+    // Gone already when the rename succeeded.
+    await fsp.rm(staging, { recursive: true, force: true });
   }
 }
 
-async function unlock({ lockDir, owner }: { lockDir: string; owner: string }): Promise<void> {
-  const current = await fsp.readFile(path.join(lockDir, "owner"), "utf8").catch(() => null);
-  if (current === owner) await fsp.rm(lockDir, { recursive: true, force: true });
+async function unlock(held: Held): Promise<void> {
+  if ((await ownerOf(held.lockDir)) === held.owner) await fsp.rm(held.lockDir, { recursive: true, force: true });
 }
 
-// Runs `fn` on the state under the lock. The state is written back only when
-// `fn` succeeds: a request that fails records nothing.
-export async function withState<T>(dir: string, fn: (s: RelayState) => Promise<T>): Promise<T> {
+// Runs `fn` on the state under the lock. The state is written back when `fn`
+// succeeds; a request that fails records nothing, except what it wrote itself
+// with `save`, which makes the state durable at once (before a push, for one).
+export async function withState<T>(dir: string, fn: (s: RelayState, save: () => Promise<void>) => Promise<T>): Promise<T> {
   const held = await lock(dir);
   try {
     const s = await readState(path.join(dir, "state.json"));
-    const result = await fn(s);
-    await writeState(dir, s);
+    const result = await fn(s, () => writeState(held, s));
+    await writeState(held, s);
     return result;
   } finally {
     await unlock(held);

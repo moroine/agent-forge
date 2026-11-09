@@ -3,9 +3,12 @@
 // (.github/scripts/scan-secrets.sh). What tunes a scan comes from upstream
 // main only, never from the branch, which the agent writes: its
 // .betterleaksignore for commits (a false positive is cleared there, by the
-// maintainer) and its .betterleaks.toml when it has one. Every file Betterleaks
-// reads is written to a fresh temporary directory, so nothing in the relay's
-// working directory or in the scanned repository is picked up.
+// maintainer) and its .betterleaks.toml when it has one. Those are written to a
+// fresh temporary directory, which is also the scan's working directory:
+// Betterleaks reads an ignore file in its working directory too (stdin mode).
+// In git mode it also reads one at the root of the scanned repository: the
+// mirror never has one, and a scan refuses to run if it does.
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -30,8 +33,9 @@ export async function fileAt(ctx: Context, repo: string, rev: string, name: stri
   return (await mustSucceed(`git cat-file ${name}`, ctx.exec(gitIn(repo, "cat-file", "blob", blob)))).stdout;
 }
 
-// upstream main's .betterleaks.toml, or null when it has none. Before the
-// first publish, the mirror has no upstream main: no configuration either.
+// upstream main's .betterleaks.toml as the mirror last fetched it, or null
+// when it has none. Before the first publish, the mirror has no upstream main:
+// no configuration either.
 async function upstreamConfig(ctx: Context, repo: string): Promise<string | null> {
   const r = await ctx.exec(gitIn(repo, "rev-parse", "--verify", "-q", `${UPSTREAM_MAIN}^{commit}`));
   if (r.code === 1) return null;
@@ -80,12 +84,13 @@ async function scan(
       config.push("--config", file);
     }
     // BETTERLEAKS_VALIDATE and BETTERLEAKS_ANALYZE are removed: validation
-    // would send a found token to its issuer's API.
+    // would send a found token to its issuer's API. The working directory is
+    // the temporary one, which holds no ignore file at its root.
     const r = await ctx.exec(
       ["env", "-u", "BETTERLEAKS_VALIDATE", "-u", "BETTERLEAKS_ANALYZE", "betterleaks", ...command,
         "--redact", "--no-banner", "--ignore-gitleaks-allow", "-i", ignore,
         "--report-format", "json", "--report-path", report, ...config, ...target],
-      o.input === undefined ? undefined : { input: o.input },
+      { cwd: dir, ...(o.input === undefined ? {} : { input: o.input }) },
     );
     if (r.code === 0) return [];
     // Exit 1 is also how Betterleaks reports its own errors: without a
@@ -101,12 +106,23 @@ async function scan(
 }
 
 // Scans the commits of `range` (`<sha>..<sha>`) in the mirror, as CI does,
-// with `ignoreText` as the .betterleaksignore (none when null).
-export async function scanCommits(ctx: Context, repo: string, range: string, ignoreText: string | null): Promise<Finding[]> {
+// with `ignoreText` as the .betterleaksignore (none when null) and the
+// .betterleaks.toml of `upstreamMain`, the commit ID of upstream main the
+// publish read under its lock.
+export async function scanCommits(
+  ctx: Context, repo: string, range: string, ignoreText: string | null, upstreamMain: string,
+): Promise<Finding[]> {
   // The range lands in --log-opts, which Betterleaks splits on spaces: only
   // two commit IDs, so that it cannot carry a git log option.
   if (!/^[0-9a-f]{40,64}\.\.[0-9a-f]{40,64}$/.test(range)) throw new Error(`scanCommits: not a <sha>..<sha> range: ${range}`);
-  const config = await upstreamConfig(ctx, repo);
+  if (!/^[0-9a-f]{40,64}$/.test(upstreamMain)) throw new Error(`scanCommits: not a commit ID: ${upstreamMain}`);
+  // Betterleaks would read these at the repository's root, on top of -i.
+  for (const name of [".betterleaksignore", ".gitleaksignore"]) {
+    if (existsSync(path.join(repo, name))) {
+      throw new RelayError(`the relay's mirror holds a ${name}, which the scan would read: nothing was published; the relay's administrator removes it`);
+    }
+  }
+  const config = await fileAt(ctx, repo, upstreamMain, ".betterleaks.toml");
   // --diff-merges=remerge: a plain `git log -p` shows no diff for a merge, so
   // a secret added while resolving a conflict would go unseen.
   return scan(ctx, ["git", `--log-opts=--diff-merges=remerge ${range}`], [repo], { ignoreText, config });

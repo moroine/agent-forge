@@ -1,8 +1,8 @@
 #!/bin/bash
 # A stand-in for Betterleaks in the relay's tests, found first on the PATH as
 # `betterleaks`. It logs what it was given and, on demand, reports a finding.
-#   FAKE_BL_LOG   file that receives its argv and the .betterleaksignore of its
-#                 -i directory (required)
+#   FAKE_BL_LOG   file that receives its argv, its working directory and the
+#                 .betterleaksignore of its -i directory (required)
 #   FAKE_BL_FIND  1: write a one-finding report to --report-path and exit 1
 set -e
 
@@ -32,6 +32,7 @@ done
   printf 'argv:'
   printf ' %s' "${argv[@]}"
   printf '\n'
+  printf 'cwd: %s\n' "$(pwd -P)"
   if [ -n "$ignore_dir" ] && [ -f "$ignore_dir/.betterleaksignore" ]; then
     cat "$ignore_dir/.betterleaksignore"
   fi

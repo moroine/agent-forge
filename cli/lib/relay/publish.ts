@@ -51,6 +51,33 @@ async function commitAt(ctx: Context, repo: string, name: string): Promise<strin
 
 const lines = (text: string): string[] => text.split("\n").filter((l) => l !== "");
 
+// The best common ancestor of two commits, or null when they have none.
+async function mergeBase(ctx: Context, repo: string, a: string, b: string): Promise<string | null> {
+  const r = await ctx.exec(gitIn(repo, "merge-base", a, b));
+  if (r.code === 0) return r.stdout.trim();
+  if (r.code === 1) return null;
+  throw new ForgeError(`git merge-base failed: ${r.stderr.trim() || `exit code ${r.code}`}`);
+}
+
+async function isAncestor(ctx: Context, repo: string, ancestor: string, of: string): Promise<boolean> {
+  const r = await ctx.exec(gitIn(repo, "merge-base", "--is-ancestor", ancestor, of));
+  if (r.code > 1) throw new ForgeError(`git merge-base failed: ${r.stderr.trim() || `exit code ${r.code}`}`);
+  return r.code === 0;
+}
+
+// The refusal of a push, from git's --porcelain output, which marks a refused
+// ref with `!` (`!\t<src>:<dst>\t[rejected] (non-fast-forward)`): null when
+// the push was not refused but failed. Only a fork that moved is reported as
+// such; any other refusal (GitHub's push protection, a workflow change
+// without the workflow scope) gives GitHub's reason.
+function pushRefusal(porcelain: string, t: string): string | null {
+  const summary = /^!\t[^\t]*\t(.*)$/m.exec(porcelain)?.[1];
+  if (summary === undefined) return null;
+  if (/^\[rejected\] \((non-fast-forward|fetch first)\)$/.test(summary)) return `the fork's agent/${t} moved during the publish`;
+  const reason = /^\[[^\]]*\] \((.*)\)$/.exec(summary)?.[1] ?? summary;
+  return `GitHub refused the push of agent/${t}: ${printable(reason).slice(0, 200)}. Nothing was published.`;
+}
+
 // The bot's token, read for the push only. Neither it nor its file's content
 // ever appears in an error.
 function readToken(file: string): string {
@@ -108,20 +135,27 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
 
   // One lock from reading the fork's head to recording what was pushed: two
   // publishes never interleave.
-  return withState(paths.stateDir, async (s) => {
+  return withState(paths.stateDir, async (s, save) => {
     // Commit IDs, read once: a concurrent request's fetch may move the refs.
     const upstreamMain = await commitAt(ctx, repo, UPSTREAM_MAIN);
     if (upstreamMain === null) throw new ForgeError("upstream main is missing from the mirror after fetching it");
     const forkHead = await commitAt(ctx, repo, ref("fork", t));
     const recorded = s.published[t] ?? null;
-    if (recorded !== null) {
+    if (forkHead !== null && forkHead === s.pending[t]) {
+      // An earlier publish pushed this head, then died before recording it.
+      s.published[t] = forkHead;
+    } else if (recorded !== null) {
+      if (forkHead === null) {
+        throw new RelayError(`agent/${t} is gone from the fork although the relay published it at ${shortSha(recorded)}: nothing was published; ask the maintainer`);
+      }
       if (forkHead !== recorded) {
         throw new RelayError(`the fork's agent/${t} moved since the relay published it: nothing was published; the maintainer never commits to the bot's branches`);
       }
     } else if (forkHead !== null) {
       await adopt(d, t, forkHead, upstreamMain);
     }
-    const base = forkHead ?? upstreamMain;
+    // Any other pending head was never pushed: the fork does not have it.
+    delete s.pending[t];
 
     const tmp = await mkdtemp(path.join(os.tmpdir(), "forge-relay-publish-"));
     try {
@@ -144,6 +178,14 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         throw new RelayError(`the bundle's agent/${t} is not a commit`);
       }
 
+      // What the branch builds on, of the fork's branch: its head, unless an
+      // earlier publish pushed without its answer reaching the dev VM. The
+      // agent's branch then still holds the commits that publish replayed,
+      // and builds on an older published commit. Replayed again from there,
+      // they give the same commits (the replay is deterministic), and the
+      // fork's head is checked below.
+      const since = forkHead === null ? null : await mergeBase(ctx, repo, incoming, forkHead);
+
       // The new commits: neither on upstream main nor on the fork, nor any
       // other task's (as fetched, published or sent). A commit built on
       // another task then has a parent checkCommits refuses: no stacked tasks.
@@ -154,7 +196,7 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         .filter((r) => !own.has(r));
       // One more than the cap is enough to refuse, before reading any commit.
       const shas = lines((await git(ctx, repo, "listing the new commits", "rev-list", "--topo-order", "--reverse",
-        `--max-count=${MAX_COMMITS + 1}`, incoming, `^${upstreamMain}`, ...(forkHead === null ? [] : [`^${forkHead}`]),
+        `--max-count=${MAX_COMMITS + 1}`, incoming, `^${upstreamMain}`, ...(since === null ? [] : [`^${since}`]),
         ...(others.length > 0 ? ["--not", ...others] : []))).stdout);
       if (shas.length > MAX_COMMITS) throw new RelayError(`this publish brings more than ${MAX_COMMITS} commits: squash some of them`);
       if (shas.length === 0) {
@@ -162,16 +204,20 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
       }
       const commits = [];
       for (const sha of shas) commits.push(await readCommit(ctx, repo, sha));
-      await checkCommits(ctx, repo, { commits, tip: incoming, upstreamMain, base: forkHead, cfg });
+      await checkCommits(ctx, repo, { commits, tip: incoming, upstreamMain, base: since, cfg });
 
       const allowed = [...cfg.trustedLogins, cfg.botLogin].map((l) => l.toLowerCase());
       const head = await replaySigned(ctx, repo, commits, paths.signingKey, (m) => neutralizeMentions(m, allowed));
       const tree = async (rev: string) => (await git(ctx, repo, "reading a tree", "rev-parse", `${rev}^{tree}`)).stdout.trim();
       if ((await tree(head)) !== (await tree(incoming))) throw new ForgeError(`the replay of agent/${t} does not have the agent's tree`);
+      // Equal when this publish replays what an earlier one pushed: nothing to push.
+      if (forkHead !== null && head !== forkHead && !(await isAncestor(ctx, repo, forkHead, head))) {
+        throw new RelayError(`agent/${t} does not build on the fork's agent/${t}, which is at ${shortSha(forkHead)}: nothing was published; build on what was published, never rewrite it (an earlier publish may have pushed without its answer reaching you: fetch the fork's agent/${t} anonymously)`);
+      }
 
       // The commits about to be pushed, as CI will scan them, with main's ignore file.
       const ignoreText = await fileAt(ctx, repo, upstreamMain, ".betterleaksignore");
-      const found = await scanCommits(ctx, repo, `${base}..${head}`, ignoreText);
+      const found = await scanCommits(ctx, repo, `${since ?? upstreamMain}..${head}`, ignoreText, upstreamMain);
       if (found.length > 0) {
         throw new RelayError([
           `Betterleaks found ${found.length === 1 ? "a possible secret" : `${found.length} possible secrets`} in agent/${t}:`,
@@ -180,34 +226,51 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         ].join("\n"));
       }
 
-      takeWrite(s, d.now(), cfg.writesPerHour);
+      if (head !== forkHead) {
+        // The cap is checked before the push, and the write counted once it is done.
+        const now = d.now();
+        takeWrite({ ...s, writes: [...s.writes] }, now, cfg.writesPerHour);
+        // Durable before the push: if the relay dies after it, the next
+        // publish recognizes the fork's head as its own.
+        s.pending[t] = head;
+        await save();
 
-      // No `+` and no --force: GitHub refuses anything but a fast-forward or
-      // the branch's creation. The token goes to git in its environment only.
-      const token = readToken(paths.token);
-      const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-      const pushed = await ctx.exec(gitIn(repo, "push", "--porcelain", `${paths.githubBase}/${cfg.fork}.git`, `${head}:refs/heads/agent/${t}`), {
-        env: {
-          ...NO_PROMPT,
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-          GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-        },
-      });
-      if (pushed.code !== 0) {
-        // --porcelain marks a ref the remote refused with `!`.
-        if (/^!\t/m.test(pushed.stdout)) throw new RelayError(`the fork's agent/${t} moved during the publish`);
-        // git does not print the header; redacted all the same, in both forms.
-        const detail = oneLine(pushed.stderr).split(token).join("***").split(basic).join("***");
-        throw new ForgeError(`pushing agent/${t} to the fork failed: ${detail}`);
+        // No `+` and no --force: GitHub refuses anything but a fast-forward or
+        // the branch's creation. The token goes to git in its environment only.
+        const token = readToken(paths.token);
+        const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
+        const pushed = await ctx.exec(gitIn(repo, "push", "--porcelain", `${paths.githubBase}/${cfg.fork}.git`, `${head}:refs/heads/agent/${t}`), {
+          env: {
+            ...NO_PROMPT,
+            GIT_CONFIG_COUNT: "1",
+            GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
+            GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
+          },
+        });
+        if (pushed.code !== 0) {
+          const refusal = pushRefusal(pushed.stdout, t);
+          if (refusal !== null) {
+            delete s.pending[t];
+            await save();
+            throw new RelayError(refusal);
+          }
+          // Not refused, failed: the push may have landed, so pending stays.
+          // git does not print the header; redacted all the same, in both forms.
+          const detail = oneLine(pushed.stderr).split(token).join("***").split(basic).join("***");
+          throw new ForgeError(`pushing agent/${t} to the fork failed: ${detail}`);
+        }
+        // Recorded at once: whatever fails after this, the fork's head is the relay's.
+        s.published[t] = head;
+        delete s.pending[t];
+        takeWrite(s, now, cfg.writesPerHour);
+        await save();
       }
-
-      // Pushed: recorded, then answered with a bundle the client fetches into
-      // its fork/agent/<t>.
-      await git(ctx, repo, "recording the published head", "update-ref", ref("published", t), head);
       s.published[t] = head;
+
+      // Answered with a bundle the client fetches into its fork/agent/<t>.
+      await git(ctx, repo, "recording the published head", "update-ref", ref("published", t), head);
       const answer = path.join(tmp, "published.bundle");
-      await git(ctx, repo, "bundling the published branch", "bundle", "create", "-q", answer, ref("published", t), `^${base}`);
+      await git(ctx, repo, "bundling the published branch", "bundle", "create", "-q", answer, ref("published", t), `^${since ?? upstreamMain}`);
       return { head, url: `https://github.com/${cfg.fork}/tree/agent/${t}`, bundle: await readFile(answer) };
     } finally {
       await rm(tmp, { recursive: true, force: true });
