@@ -4,8 +4,8 @@
 // relay, which OpenTofu creates: `forge cloud create`). Each step is recorded
 // in hosts.json when it succeeds and skipped on a re-run, so that a re-run
 // picks up after a failure; a re-run of a finished host is an update
-// (playbook, setup and image again; a cloud host's are OpenTofu and the
-// playbooks).
+// (playbook, setup and image again; a cloud host's are OpenTofu, the
+// playbooks and the relay's setup).
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync,
   statSync, symlinkSync, writeFileSync,
@@ -58,8 +58,11 @@ const STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "identity", 
 // and stop send it back to forge cloud create --host, which adds the relay.
 export const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude", "relay"];
 const stepsFor = (kind: LaptopHost["kind"]): InstallStep[] => (kind === "cloud" ? CLOUD_STEPS : STEPS);
-// What a re-run of a finished host runs again: re-running is updating.
-const UPDATE: InstallStep[] = ["playbook", "setup", "image"];
+// What a re-run of a finished host runs again: re-running is updating. Only
+// a cloud host has the relay step: the bot's token must expire, so its update
+// asks to keep the stored token or paste a new one, and runs the relay's
+// setup again, which checks the token, the fork, Actions and the signing key.
+const UPDATE: InstallStep[] = ["playbook", "setup", "image", "relay"];
 const LABELS: Record<InstallStep, string> = {
   vm: "VM", inventory: "inventory", playbook: "playbook", ssh: "SSH configuration", identity: "git identity",
   claude: "Claude login", setup: "forge setup", image: "agent-base image", relay: "relay setup",

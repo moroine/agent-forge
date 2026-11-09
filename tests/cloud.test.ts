@@ -224,13 +224,20 @@ test("rebuild-relay replaces only the relay and redoes the playbook and the rela
 
 test("create --host updates the listed cloud host, create alone starts a new one", async () => {
   install();
-  const ctx = laptop({ answers: [1, 2, 2] });
+  // The Include accepted, the stored bot token kept, the link and herdr's notifications declined.
+  const ctx = laptop({ answers: [1, 1, 2, 2] });
   assert.equal(await cmdCloud(ctx, "create", { host: "forge-dev", checkout: CHECKOUT, sleep: noWait }), 0);
   // What start and stop refuse to apply, create --host shows and applies.
   const apply = attached(ctx).findIndex((a) => a.startsWith("tofu ") && a.includes(" apply ") && !a.includes("-replace"));
   assert.ok(apply >= 0, attached(ctx).join("\n"));
   assert.ok(apply < attached(ctx).findIndex((a) => a.includes("contributor.yml")), attached(ctx).join("\n"));
-  assert.ok(!attached(ctx).some((a) => a.includes("ubuntu@")), attached(ctx).join("\n"));
+  // No first connection again.
+  assert.ok(!attached(ctx).some((a) => /ubuntu@\S+ true$/.test(a)), attached(ctx).join("\n"));
+  // The relay step runs again: the bot's token expires, and this is how it is replaced.
+  assert.ok(ctx.err_lines.some((l) => l.startsWith("A bot token is already stored on the relay> ")), ctx.err_lines.join("\n"));
+  assert.ok(attached(ctx).some((a) => a.endsWith("ubuntu@203.0.113.21 -- 'sudo' '-u' 'forge-relay' '/usr/local/bin/forge-relay' 'setup'")),
+    attached(ctx).join("\n"));
+  assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
 
   // No --host: the first question of a new cloud host (its name), unanswered here.
   const fresh = fakeContext({ rules: RULES, answers: [] });

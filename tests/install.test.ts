@@ -1229,18 +1229,29 @@ test("a cloud VM that never answers on SSH stops the run after 36 tries, 5 s apa
   assert.deepEqual(loadHosts().map((h) => h.name), ["forge-dev"]);
 });
 
+// The relay's setup as the admin runs it: a re-run of a finished host runs it again.
+const relaySetupCall = () =>
+  `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ` +
+  "ubuntu@203.0.113.21 -- 'sudo' '-u' 'forge-relay' '/usr/local/bin/forge-relay' 'setup'";
+const BOT_TOKEN_STORED: ExecRule = { match: "'sudo' 'test' '-s' '/etc/forge-relay/github-token'", code: 0 };
+const KEEP_OR_PASTE = "A bot token is already stored on the relay";
+
 // After a change to infra/aws, `forge cloud start` refuses and points here: a
 // re-run applies OpenTofu again (its plan asks, an empty one asks nothing),
-// then the playbooks; never a first connection or a token again.
-test("a re-run of a finished cloud host applies OpenTofu and the playbook again, never the first connection or the token", async () => {
+// then the playbooks and the relay's setup; never a first connection or the
+// Claude token again.
+test("a re-run of a finished cloud host applies OpenTofu, the playbooks and the relay's setup again, never the first connection", async () => {
   await newCloud();
-  const ctx = cloudLaptop({ rules: [{ match: "checkip.amazonaws.com", stdout: "198.51.100.8\n" }], answers: [2, 2] });
+  const ctx = cloudLaptop({
+    rules: [{ match: "checkip.amazonaws.com", stdout: "198.51.100.8\n" }, BOT_TOKEN_STORED], answers: [1, 2, 2],
+  });
   assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }), 0);
   assert.ok(called(ctx).some((c) => c.startsWith(`tofu -chdir=${CHECKOUT}/infra/aws init`)), called(ctx).join("\n"));
   assert.deepEqual(attached(ctx), [
     `tofu -chdir=${CHECKOUT}/infra/aws apply -var-file=${join(hostDir("forge-dev"), "tofu.tfvars.json")}`,
     galaxy(),
     ...playbooks(),
+    relaySetupCall(),
     "herdr --remote forge-dev --remote-keybindings server",
   ]);
   // This machine's address may have moved since the last run.
@@ -1256,8 +1267,28 @@ test("a re-run of a finished cloud host applies OpenTofu and the playbook again,
   assert.ok(called(ctx).includes(
     `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5 ` +
     `-o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.21 true`), called(ctx).join("\n"));
-  assert.ok(!called(ctx).some((c) => c.includes("claude-token") || c.includes("github-token")), called(ctx).join("\n"));
-  assert.deepEqual(asked(ctx), [LINK, TOASTS()]);
+  // The bot's token kept: its file is only checked.
+  assert.ok(!called(ctx).some((c) => c.includes("claude-token") || c.includes("github-token.new")), called(ctx).join("\n"));
+  assert.deepEqual(asked(ctx), [KEEP_OR_PASTE, LINK, TOASTS()]);
+  assert.ok(ctx.out_lines.includes("  relay setup: already there"), ctx.out_lines.join("\n"));
+  assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
+});
+
+// The bot's token must expire: a finished host's update is how it is replaced.
+test("a re-run of a finished cloud host replaces an expired bot token, then checks it", async () => {
+  await newCloud();
+  const renewed = `ghp_${"Cd4".repeat(12)}`;
+  const ctx = cloudLaptop({ rules: [BOT_TOKEN_STORED], answers: [2, renewed, 2, 2] });
+  assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }), 0);
+  const execs = ctx.calls.filter((c) => !ctx.attachCalls.some((a) => a.argv === c));
+  const write = execs.findIndex((c) => c.join(" ").includes("github-token.new"));
+  assert.equal(ctx.execOptions[write]?.input, `${renewed}\n`);
+  assert.ok(!ctx.calls.some((c) => c.join(" ").includes(renewed)));
+  // The new token is written before the relay's setup checks it.
+  const setup = attached(ctx).indexOf(relaySetupCall());
+  assert.ok(setup >= 0, attached(ctx).join("\n"));
+  assert.ok(ctx.calls.indexOf(execs[write]) < ctx.calls.indexOf(ctx.attachCalls[setup].argv));
+  assert.ok(ctx.out_lines.includes("  relay setup: done"), ctx.out_lines.join("\n"));
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
 });
 
