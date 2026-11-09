@@ -7,7 +7,7 @@ import { join } from "node:path";
 import { createContext, ForgeError } from "../cli/lib/context.ts";
 import type { Context } from "../cli/lib/context.ts";
 import {
-  ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, imageDecision, runSetup,
+  ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, ensureRelayCredentials, imageDecision, runSetup,
 } from "../cli/lib/laptop/host-steps.ts";
 import type { LaptopHost } from "../cli/lib/laptop/state.ts";
 import { fakeContext } from "./lib/fake-context.ts";
@@ -119,6 +119,21 @@ test("an empty or malformed Claude token is refused, without quoting it, and not
       e instanceof ForgeError && !e.message.includes("s3cr3t"), String(answer));
     assert.equal(ctx.calls.length, 1, String(answer));
   }
+});
+
+// A fine-grained token cannot fork for the bot nor be scoped as the relay
+// needs: only a classic one passes, and the refusal never quotes it.
+test("the relay step refuses a token that is not a classic one, and never prints it", async () => {
+  const cloud: LaptopHost = { ...host, name: "forge-dev", kind: "cloud", relayAddress: "203.0.113.21" };
+  const fineGrained = `github_pat_${"Xy7".repeat(10)}`;
+  const ctx = fakeContext({ rules: [{ match: "'sudo' 'test' '-s' '/etc/forge-relay/github-token'", code: 1 }], answers: [fineGrained] });
+  await assert.rejects(ensureRelayCredentials(ctx, cloud), (e: Error) =>
+    e instanceof ForgeError && /classic/.test(e.message) && !e.message.includes(fineGrained));
+  assert.ok(![...ctx.out_lines, ...ctx.err_lines].some((l) => l.includes(fineGrained)));
+  assert.ok(!ctx.calls.some((c) => c.join(" ").includes(fineGrained)));
+  // Nothing written, no setup.
+  assert.equal(ctx.calls.length, 1);
+  assert.equal(ctx.attachCalls.length, 0);
 });
 
 test("runSetup attaches forge setup and fails on a non-zero code", async () => {

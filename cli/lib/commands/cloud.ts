@@ -1,10 +1,12 @@
-// forge cloud (spec §5.6): the contributor's dev VM from the laptop. `create`
-// installs a cloud host (or resumes its install), `start` and `stop` switch
-// the instance on and off, `rebuild` replaces the instance with a new one.
+// forge cloud (spec §5.6): the contributor's dev VM and its relay from the
+// laptop. `create` installs a cloud host (or resumes its install), `start`
+// and `stop` switch the instances on and off, `rebuild` replaces the dev VM
+// with a new one, `rebuild-relay` the relay.
 import { ForgeError, type Context } from "../context.ts";
 import { repoRoot } from "../paths.ts";
 import {
-  applyInteractive, applyQuiet, currentPublicIp, DEV_INSTANCE, infraFor, loadCloudSettings, saveCloudSettings,
+  applyInteractive, applyQuiet, currentPublicIp, DEV_INSTANCE, infraFor, loadCloudSettings, RELAY_INSTANCE,
+  saveCloudSettings,
 } from "../laptop/cloud.ts";
 import { forgetHostKeys } from "../laptop/lima.ts";
 import { remoteExec } from "../laptop/remote.ts";
@@ -14,7 +16,7 @@ import { cmdOpen } from "./open.ts";
 
 export type CloudOptions = { host?: string; checkout?: string; sleep?: (ms: number) => Promise<void> };
 
-const USAGE = "forge cloud create|start|stop|rebuild [--host <name>]";
+const USAGE = "forge cloud create|start|stop|rebuild|rebuild-relay [--host <name>]";
 // A stopped instance's sshd answers after a minute or two: probed every 5 s, 3 minutes at most.
 const SSH_WAIT_MS = 5000;
 const SSH_TRIES = 36;
@@ -38,6 +40,8 @@ async function selectCloudHost(ctx: Context, wanted?: string): Promise<LaptopHos
 
 // Start and stop work on a finished install only: before that, the SSH
 // address or the OpenTofu state may be missing, and the install resumes first.
+// A host installed before the relay existed lacks its step: create --host
+// adds the relay.
 function installed(host: LaptopHost): LaptopHost {
   if (!CLOUD_STEPS.every((s) => host.done.includes(s))) {
     throw new ForgeError(`${host.name}'s install is not finished: run forge cloud create --host ${host.name} to resume it`);
@@ -57,6 +61,7 @@ export async function cmdCloud(ctx: Context, sub: string | undefined, opts: Clou
     case "start": return start(ctx, installed(await selectCloudHost(ctx, opts.host)), checkout, sleep);
     case "stop": return stop(ctx, installed(await selectCloudHost(ctx, opts.host)), checkout);
     case "rebuild": return rebuild(ctx, await selectCloudHost(ctx, opts.host), checkout, sleep);
+    case "rebuild-relay": return rebuildRelay(ctx, await selectCloudHost(ctx, opts.host), checkout, sleep);
     default: throw new ForgeError(`usage: ${USAGE}`);
   }
 }
@@ -95,4 +100,35 @@ async function rebuild(ctx: Context, host: LaptopHost, checkout: string, sleep: 
   host.done = ["inventory"];
   saveHost(host);
   return cmdInstall(ctx, { host: host.name, checkout, sleep });
+}
+
+// A new relay (spec §5.6, §5.7), the dev VM left as it is: suspected of
+// compromise, or broken. Its credentials go with its disk, so the install
+// that follows redoes the playbooks (the dev VM pins the new relay's key)
+// and the relay step (a new token, a new signing key to register).
+async function rebuildRelay(ctx: Context, host: LaptopHost, checkout: string, sleep: (ms: number) => Promise<void>): Promise<number> {
+  const relay = host.relayAddress;
+  if (!relay) throw new ForgeError(`${host.name} has no relay yet: forge cloud create --host ${host.name} creates it`);
+  const i = await ctx.prompt.pick(
+    `Rebuild ${host.name}'s relay from scratch? The bot's token and signing key go with it: ` +
+    "you will paste a new token and register a new signing key.",
+    ["rebuild it", "stop"],
+  );
+  if (i !== 1) throw new ForgeError(`${host.name}'s relay is left as it is`);
+  // The new relay's cloud-init needs its metadata service; the dev VM's stays off.
+  await applyInteractive(ctx, infraFor(host.name, checkout), { dev: false, relay: true }, [`-replace=${RELAY_INSTANCE}`]);
+  // From here on the old relay is gone: the runbook is printed last, whatever
+  // the install does (its relay step fails until the new key is registered).
+  try {
+    // The Elastic IP stays, the instance gets new host keys: the old entry would refuse them.
+    await forgetHostKeys(ctx, [relay]);
+    host.done = host.done.filter((s) => s !== "playbook" && s !== "relay");
+    saveHost(host);
+    return await cmdInstall(ctx, { host: host.name, checkout, sleep });
+  } finally {
+    ctx.out(`${host.name}'s old relay is gone, but its credentials still work on GitHub. On the bot's account:`);
+    ctx.out("  1. revoke the old token (Settings > Developer settings > Personal access tokens);");
+    ctx.out("  2. remove the old signing key (Settings > SSH and GPG keys).");
+    ctx.out(`The new relay has its own: forge cloud create --host ${host.name} asks for the new token, and the relay's setup prints the new signing key to register.`);
+  }
 }

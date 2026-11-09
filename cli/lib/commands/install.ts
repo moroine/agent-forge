@@ -1,10 +1,11 @@
 // forge install (spec "Sub-project 3: guided install"): installs or updates a
 // forge host from the laptop, the Lima VM forge-local, a remote VM
-// forge-<name>, or a cloud host forge-<name> (the contributor's dev VM, which
-// OpenTofu creates: `forge cloud create`). Each step is recorded in hosts.json
-// when it succeeds and skipped on a re-run, so that a re-run picks up after a
-// failure; a re-run of a finished host is an update (playbook, setup and image
-// again; a cloud host's are OpenTofu and the playbook).
+// forge-<name>, or a cloud host forge-<name> (the contributor's dev VM and its
+// relay, which OpenTofu creates: `forge cloud create`). Each step is recorded
+// in hosts.json when it succeeds and skipped on a re-run, so that a re-run
+// picks up after a failure; a re-run of a finished host is an update
+// (playbook, setup and image again; a cloud host's are OpenTofu and the
+// playbooks).
 import {
   chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readlinkSync, realpathSync, renameSync, rmSync,
   statSync, symlinkSync, writeFileSync,
@@ -15,24 +16,27 @@ import { ForgeError, type Context } from "../context.ts";
 import { addLaptopBlock, laptopToasts, readConfig } from "../herdr-config.ts";
 import { forgeHome, herdrConfigPath, laptopDataDir, limaHome, repoRoot, sshDir } from "../paths.ts";
 import {
-  applyInteractive, askCloudSettings, checkNestedVirt, currentPublicIp, infraFor, infraOutputs, loadCloudSettings,
-  saveCloudSettings,
+  applyInteractive, askCloudSettings, askRelaySettings, checkNestedVirt, currentPublicIp, infraFor, infraOutputs,
+  loadCloudSettings, saveCloudSettings,
 } from "../laptop/cloud.ts";
-import { ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, runSetup } from "../laptop/host-steps.ts";
-import { renderInventory, writeInventoryOnce } from "../laptop/inventory.ts";
+import {
+  ensureClaudeLogin, ensureClaudeToken, ensureGitIdentity, ensureImage, ensureRelayCredentials, runSetup,
+} from "../laptop/host-steps.ts";
+import { renderInventory, renderRelayInventory, writeInventoryOnce } from "../laptop/inventory.ts";
 import { chooseKey, githubAgent, keyLabel, listAgentKeys } from "../laptop/keys.ts";
 import {
   ensureLimaVm, forgetHostKeys, HOST_KEY_ALIAS, LIMA_DEFAULT_PORT, LIMA_NAME, limaInstance, type LimaInstance,
   type LimaOptions,
 } from "../laptop/lima.ts";
 import { checkPrerequisites } from "../laptop/prereqs.ts";
+import { adminSsh } from "../laptop/remote.ts";
 import {
   addInclude, forgeSshConfigDefines, forgeSshConfigPath, hostDefinedElsewhere, INCLUDE_LINE, includeState,
-  overriddenSettings, removeOldForgeSshConfig, renderForgeSshConfig, sshOption, writeForgeSshConfig,
+  overriddenSettings, removeOldForgeSshConfig, renderForgeSshConfig, writeForgeSshConfig,
 } from "../laptop/ssh-config.ts";
 import {
-  forgeKeyPath, forgetHost, hostDir, inventoryPath, knownHostsPath, loadHosts, saveHost, selectHost, validHostName,
-  type InstallStep, type LaptopHost,
+  forgeKeyPath, forgetHost, hostDir, inventoryPath, knownHostsPath, loadHosts, relayClientKeyPath, relayInventoryPath,
+  relayLinkPath, saveHost, selectHost, validHostName, type InstallStep, type LaptopHost,
 } from "../laptop/state.ts";
 import { cmdOpen } from "./open.ts";
 
@@ -49,14 +53,16 @@ type Target = { kind: LaptopHost["kind"]; listed?: LaptopHost; address: string }
 const STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "identity", "claude", "setup", "image"];
 // A cloud host gets neither this machine's git identity (the agent commits as
 // the bot, which the playbook sets) nor forge setup and the image: the
-// agent's tests run them on the VM (spec §5.3).
-export const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude"];
+// agent's tests run them on the VM (spec §5.3). Its last step is the relay's
+// credentials: a host installed before the relay existed lacks it, so start
+// and stop send it back to forge cloud create --host, which adds the relay.
+export const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude", "relay"];
 const stepsFor = (kind: LaptopHost["kind"]): InstallStep[] => (kind === "cloud" ? CLOUD_STEPS : STEPS);
 // What a re-run of a finished host runs again: re-running is updating.
 const UPDATE: InstallStep[] = ["playbook", "setup", "image"];
 const LABELS: Record<InstallStep, string> = {
   vm: "VM", inventory: "inventory", playbook: "playbook", ssh: "SSH configuration", identity: "git identity",
-  claude: "Claude login", setup: "forge setup", image: "agent-base image",
+  claude: "Claude login", setup: "forge setup", image: "agent-base image", relay: "relay setup",
 };
 const USER_NAME = /^[a-z_][a-z0-9_-]*$/;
 // A host name or an IP address: never an ssh option, never user@host.
@@ -132,16 +138,19 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
   const reached = host.done.includes("vm");
   const machine = (): Promise<Outcome> => (host.kind === "lima" ? limaVm(ctx, host, checkout, opts.lima)
     : host.kind === "cloud" ? cloudVm(ctx, host, checkout, sleep, reached)
-    : firstConnection(ctx, host));
+    : firstConnection(ctx, host, host.address));
   await step("vm", machine, host.kind === "cloud" || (vm !== null && vm.status !== "Running"));
   // 7. Every run, so that a deleted inventory comes back; an existing one is
-  // kept, with the developer's edits. A cloud host's also sets up the agent.
+  // kept, with the developer's edits. A cloud host's also sets up the agent,
+  // and its relay has one of its own.
   await step("inventory", async () => {
     const text = renderInventory(host, {
       forgeKey: key, adminKeyFile: host.adminKey, knownHosts: knownHostsPath(),
       ...(host.kind === "cloud" ? { contributor: contributorVars(host.name) } : {}),
     });
-    return writeInventoryOnce(inventoryPath(host.name), text) === "written" ? "done" : "already there";
+    const dev = writeInventoryOnce(inventoryPath(host.name), text);
+    const relay = host.kind === "cloud" ? await relayInventory(ctx, host, checkout) : "kept";
+    return dev === "written" || relay === "written" ? "done" : "already there";
   }, true);
   // 8. On a finished host, or on a checkout that moved since the playbook last
   // deployed it (a git pull after a failed step), the update's steps are run
@@ -166,6 +175,8 @@ export async function cmdInstall(ctx: Context, opts: InstallOptions = {}): Promi
     : ((await ensureClaudeLogin(ctx, host)) === "logged-in" ? "done" : "already there")));
   await step("setup", async () => { await runSetup(ctx, host); return "done"; });
   await step("image", async () => ((await ensureImage(ctx, host, checkout)) === "built" ? "done" : "already there"));
+  // A cloud host's relay: the bot's token, then its setup, as the admin.
+  await step("relay", async () => ((await ensureRelayCredentials(ctx, host)) === "stored" ? "done" : "already there"));
   // 11. Not recorded steps: asked while the link, or herdr's notifications,
   // are missing.
   await linkForge(ctx, checkout);
@@ -382,6 +393,23 @@ function contributorVars(name: string): { upstream: string; fork: string; gitNam
   return { upstream: s.upstream, fork: s.fork, gitName: s.botName, gitEmail: s.botEmail };
 }
 
+// The relay's inventory, written once. Its trusted logins are asked the first
+// time, and saved with the cloud settings (a host created before the relay
+// existed has none); the dev VM's subnet comes from OpenTofu.
+async function relayInventory(ctx: Context, host: LaptopHost, checkout: string): Promise<"written" | "kept"> {
+  const path = relayInventoryPath(host.name);
+  if (existsSync(path)) return "kept";
+  let settings = loadCloudSettings(host.name);
+  if (!settings.trustedLogins) {
+    settings = { ...settings, ...(await askRelaySettings(ctx)) };
+    saveCloudSettings(host.name, settings);
+  }
+  const { subnetCidr } = await infraOutputs(ctx, infraFor(host.name, checkout));
+  return writeInventoryOnce(path, renderRelayInventory(host, settings, {
+    adminKeyFile: host.adminKey, knownHosts: knownHostsPath(), subnetCidr,
+  }));
+}
+
 // The GitHub key (its public half, which IdentityFile names while the private
 // half stays in the agent), or a private key file the provider generated.
 async function adminKey(ctx: Context, name: string, key: string): Promise<string> {
@@ -404,13 +432,17 @@ async function limaVm(ctx: Context, host: LaptopHost, checkout: string, lima?: L
   return "done";
 }
 
-// The cloud VM: checked for nested virtualization, then created (or updated,
-// or found unchanged) by OpenTofu, which shows its plan and asks (an empty
-// plan asks nothing); SSH is opened to this machine's current address only.
-// Then, once sshd answers, the first connection, as for a remote, unless an
-// earlier run made it (`reached`). Run on every install: OpenTofu's state
-// knows what exists. The metadata services stay on until the first
-// connection: cloud-init reads the admin key from them on the first boot.
+// The cloud VMs, the dev VM and its relay: checked for nested
+// virtualization, then created (or updated, or found unchanged) by OpenTofu,
+// which shows its plan and asks (an empty plan asks nothing); SSH is opened
+// to this machine's current address only. Then, once each sshd answers, its
+// first connection, as for a remote, unless an earlier run made it. Run on
+// every install: OpenTofu's state knows what exists. An instance's metadata
+// service stays on until its first connection: cloud-init reads the admin
+// key from it on the first boot. The dev VM was reached once its VM step was
+// recorded (`reached`); the relay, once forge's known_hosts has its key,
+// which a host installed before the relay existed, or a rebuilt relay
+// (rebuild-relay forgets it), does not have.
 async function cloudVm(
   ctx: Context, host: LaptopHost, checkout: string, sleep: (ms: number) => Promise<void>, reached: boolean,
 ): Promise<Outcome> {
@@ -418,53 +450,79 @@ async function cloudVm(
   await checkNestedVirt(ctx, settings);
   saveCloudSettings(host.name, { ...settings, sshCidr: `${await currentPublicIp(ctx)}/32` });
   const infra = infraFor(host.name, checkout);
-  await applyInteractive(ctx, infra, { dev: !reached, relay: !reached });
-  host.address = (await infraOutputs(ctx, infra)).address;
-  await waitForSsh(ctx, host, sleep, reached);
-  return reached ? "done" : firstConnection(ctx, host);
+  // No address before the first apply: the relay is new.
+  const before = host.relayAddress;
+  const relayReached = before !== undefined && (await hostKeys(ctx, before)).length > 0;
+  await applyInteractive(ctx, infra, { dev: !reached, relay: !relayReached });
+  const outputs = await infraOutputs(ctx, infra);
+  host.address = outputs.address;
+  host.relayAddress = outputs.relayAddress;
+  await waitForSsh(ctx, host, host.address, sleep, reached);
+  if (!reached) await firstConnection(ctx, host, host.address);
+  // An Elastic IP keeps its address; a new one has no key in known_hosts yet.
+  const relayKnown = relayReached && host.relayAddress === before;
+  await waitForSsh(ctx, host, host.relayAddress, sleep, relayKnown);
+  if (!relayKnown) await firstConnection(ctx, host, host.relayAddress);
+  return "done";
+}
+
+// The keys forge's known_hosts holds for `address`, as `<type> <base64>`.
+// `ssh-keygen -F` prints a comment, then each matching line (its host field
+// hashed or not); a marked line (@revoked, @cert-authority) is no host's key.
+async function hostKeys(ctx: Context, address: string): Promise<string[]> {
+  if (!existsSync(knownHostsPath())) return [];
+  const r = await ctx.exec(["ssh-keygen", "-F", address, "-f", knownHostsPath()]);
+  if (r.code !== 0) return [];
+  return r.stdout.split("\n").flatMap((l) => {
+    const [hostField, type, key] = l.trim().split(/\s+/);
+    return hostField && !hostField.startsWith("#") && !hostField.startsWith("@") && type && key ? [`${type} ${key}`] : [];
+  });
+}
+
+// The relay's host key for the dev VM, which trusts it by this key alone (no
+// first use there): the one ssh recorded at the relay's first connection,
+// `ssh-ed25519 <base64>` and nothing else.
+async function relayHostKey(ctx: Context, host: LaptopHost): Promise<string> {
+  const key = host.relayAddress ? (await hostKeys(ctx, host.relayAddress)).find((k) => /^ssh-ed25519 [A-Za-z0-9+/=]+$/.test(k)) : undefined;
+  if (!key) {
+    throw new ForgeError(
+      `${knownHostsPath()} holds no ssh-ed25519 key for ${host.name}'s relay (${host.relayAddress ?? "no address yet"}): ` +
+      `run forge cloud create --host ${host.name} again, which connects to the relay and records it`,
+    );
+  }
+  return key;
 }
 
 // A new instance boots for a minute or two before sshd answers. The keys
 // ssh-keyscan prints only say it does: the first connection asks about them.
-// Once the host was reached, the probe is the admin's login instead: on a
+// Once the machine was reached, the probe is the admin's login instead: on a
 // public host, fail2ban's aggressive mode counts ssh-keyscan's connections,
 // closed before authentication, and bans this machine after three of them.
 async function waitForSsh(
-  ctx: Context, host: LaptopHost, sleep: (ms: number) => Promise<void>, reached: boolean,
+  ctx: Context, host: LaptopHost, address: string, sleep: (ms: number) => Promise<void>, reached: boolean,
 ): Promise<void> {
   for (let i = 0; i < SSH_TRIES; i++) {
     if (i > 0) await sleep(SSH_WAIT_MS);
     if (reached) {
-      if ((await ctx.exec(adminSsh(host, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]))).code === 0) return;
+      if ((await ctx.exec(adminSsh(host, address, ["-o", "BatchMode=yes", "-o", "ConnectTimeout=5"]))).code === 0) return;
     } else {
-      const r = await ctx.exec(["ssh-keyscan", "-T", "5", host.address]);
+      const r = await ctx.exec(["ssh-keyscan", "-T", "5", address]);
       if (r.stdout.split("\n").some((l) => l.trim() !== "" && !l.startsWith("#"))) return;
     }
   }
   throw new ForgeError(
-    `${host.address} did not answer on SSH within ${(SSH_TRIES * SSH_WAIT_MS) / 60000} minutes: ` +
+    `${address} did not answer on SSH within ${(SSH_TRIES * SSH_WAIT_MS) / 60000} minutes: ` +
     "check the instance in the AWS console, and that this machine's public address has not changed",
   );
 }
 
-// The admin's `ssh … true` by address, with forge's known_hosts and one key.
-// By address, not by the alias whose ForwardAgent no would apply: a Host *
-// of ~/.ssh/config must not forward the agent to the dev VM.
-function adminSsh(host: LaptopHost, options: string[] = []): string[] {
-  const argv = ["ssh", "-o", sshOption("UserKnownHostsFile", knownHostsPath()), "-o", "IdentitiesOnly=yes", ...options];
-  if (host.kind === "cloud") argv.push("-o", "ForwardAgent=no");
-  if (host.identityAgent) argv.push("-o", sshOption("IdentityAgent", host.identityAgent));
-  argv.push("-i", host.adminKey, `${host.admin}@${host.address}`, "true");
-  return argv;
-}
-
-// In the terminal, so that OpenSSH asks about the new host's key once, in the
-// open; exactly one key is offered (sshd allows two attempts, fail2ban bans).
-async function firstConnection(ctx: Context, host: LaptopHost): Promise<Outcome> {
+// In the terminal, so that OpenSSH asks about the new machine's key once, in
+// the open; exactly one key is offered (sshd allows two attempts, fail2ban bans).
+async function firstConnection(ctx: Context, host: LaptopHost, address: string): Promise<Outcome> {
   mkdirSync(dirname(knownHostsPath()), { recursive: true, mode: 0o700 });
-  const code = await ctx.attach(adminSsh(host));
+  const code = await ctx.attach(adminSsh(host, address));
   if (code !== 0) {
-    throw new ForgeError(`ssh ${host.admin}@${host.address} failed (exit code ${code}): check the address, the admin account and its key`);
+    throw new ForgeError(`ssh ${host.admin}@${address} failed (exit code ${code}): check the address, the admin account and its key`);
   }
   return "done";
 }
@@ -472,16 +530,41 @@ async function firstConnection(ctx: Context, host: LaptopHost): Promise<Outcome>
 // From the checkout, whose HEAD the playbook deploys (its directory too: an
 // ansible.cfg wherever forge was run from is never read); the collections
 // live in forge's data directory. A cloud host's playbook is site.yml plus the
-// agent's role.
+// agent's role, then its relay's.
 async function playbook(ctx: Context, host: LaptopHost, checkout: string): Promise<void> {
   const collections = join(laptopDataDir(), "collections");
   const opts = { env: { ANSIBLE_COLLECTIONS_PATH: collections }, cwd: checkout };
   const requirements = join(checkout, "ansible", "requirements.yml");
   const galaxy = await ctx.attach(["ansible-galaxy", "collection", "install", "-r", requirements, "-p", collections], opts);
   if (galaxy !== 0) throw new ForgeError(`ansible-galaxy collection install failed (exit code ${galaxy})`);
-  const file = host.kind === "cloud" ? "contributor.yml" : "site.yml";
-  const play = await ctx.attach(["ansible-playbook", "-i", inventoryPath(host.name), join(checkout, "ansible", file)], opts);
-  if (play !== 0) throw new ForgeError(`ansible-playbook failed (exit code ${play})`);
+  const run = async (inventory: string, file: string, ...extra: string[]): Promise<void> => {
+    const play = await ctx.attach(["ansible-playbook", "-i", inventory, join(checkout, "ansible", file), ...extra], opts);
+    if (play !== 0) throw new ForgeError(`ansible-playbook ${file} failed (exit code ${play})`);
+  };
+  if (host.kind !== "cloud") return run(inventoryPath(host.name), "site.yml");
+  // contributor.yml makes the dev VM's relay client key and fetches its public
+  // half to this machine; relay.yml lets that key in. The key file goes as
+  // JSON: Ansible's key=value form would cut a path at a space.
+  await run(inventoryPath(host.name), "contributor.yml", "-e", `@${await writeRelayLink(ctx, host, checkout)}`);
+  await run(relayInventoryPath(host.name), "relay.yml",
+    "-e", JSON.stringify({ forge_relay_client_key_file: relayClientKeyPath(host.name) }));
+}
+
+// What contributor.yml needs about the relay, all of it public: its private
+// address (the dev VM's way to it), its host key, and where to put the dev
+// VM's client key on this machine. Written on each run, from OpenTofu and
+// known_hosts; returns its path.
+async function writeRelayLink(ctx: Context, host: LaptopHost, checkout: string): Promise<string> {
+  const { relayPrivateIp } = await infraOutputs(ctx, infraFor(host.name, checkout));
+  const link = {
+    forge_contributor_relay_address: relayPrivateIp,
+    forge_contributor_relay_host_key: await relayHostKey(ctx, host),
+    forge_contributor_relay_client_pub_dest: relayClientKeyPath(host.name),
+  };
+  const path = relayLinkPath(host.name);
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  writeFileSync(path, JSON.stringify(link, null, 2) + "\n", { mode: 0o600 });
+  return path;
 }
 
 // forge's own file is rewritten freely. ~/.ssh/config is left alone when an

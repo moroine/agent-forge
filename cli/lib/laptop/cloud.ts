@@ -21,6 +21,11 @@ export type CloudSettings = {
   botEmail: string;
   // The /32 allowed to reach SSH; `forge cloud start` sets it to this machine's address.
   sshCidr?: string;
+  // The relay's: the GitHub logins it takes the agent's instructions from, and
+  // the Co-authored-by emails it lets through. Asked by the inventory step of
+  // a host created before the relay existed, hence optional.
+  trustedLogins?: string[];
+  coAuthorEmails?: string[];
 };
 
 export type Infra = { name: string; checkout: string; settings: CloudSettings; adminKey: string };
@@ -59,9 +64,11 @@ const STR_FIELDS = ["awsProfile", "region", "instanceType", "alertEmail", "upstr
 function isSettings(v: unknown): v is CloudSettings {
   if (typeof v !== "object" || v === null) return false;
   const o = v as Record<string, unknown>;
+  const strings = (k: string) => o[k] === undefined || (Array.isArray(o[k]) && (o[k] as unknown[]).every((s) => typeof s === "string"));
   return STR_FIELDS.every((k) => typeof o[k] === "string") &&
     Number.isInteger(o.diskGb) && Number.isInteger(o.budgetUsd) &&
-    (o.sshCidr === undefined || typeof o.sshCidr === "string");
+    (o.sshCidr === undefined || typeof o.sshCidr === "string") &&
+    strings("trustedLogins") && strings("coAuthorEmails");
 }
 
 export function loadCloudSettings(name: string): CloudSettings {
@@ -122,6 +129,21 @@ export async function askCloudSettings(ctx: Context): Promise<CloudSettings> {
   const botName = checked("bot name", await ask(ctx, "Git author name of the agent"), (v) => v.length > 0, "a non-empty name");
   const botEmail = checked("bot email", await ask(ctx, "Git author email of the agent"), validEmail, "an email address");
   return { awsProfile, region, instanceType, diskGb, budgetUsd, alertEmail, upstream, fork, botName, botEmail };
+}
+
+// GitHub's login syntax, which the relay checks again.
+const LOGIN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/;
+// Claude Code's commits name it as their co-author.
+const CO_AUTHOR_EMAILS = ["noreply@anthropic.com"];
+
+// The relay's settings forge cannot guess: whose GitHub comments and reviews
+// the agent acts on. The co-author emails take their default.
+export async function askRelaySettings(ctx: Context): Promise<{ trustedLogins: string[]; coAuthorEmails: string[] }> {
+  const answer = await ask(ctx, "GitHub logins the agent takes instructions from (yours), comma-separated");
+  const trustedLogins = answer.split(",").map((l) => l.trim()).filter((l) => l !== "");
+  if (trustedLogins.length === 0) throw new ForgeError("trusted logins: none given, expected your GitHub login");
+  for (const login of trustedLogins) checked("trusted login", login, (v) => LOGIN.test(v), "a GitHub login");
+  return { trustedLogins, coAuthorEmails: [...CO_AUTHOR_EMAILS] };
 }
 
 export function infraFor(name: string, checkout: string): Infra {

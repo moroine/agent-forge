@@ -66,10 +66,13 @@ On your laptop:
                                     Install or update a forge host: the local Lima VM by default, a new
                                     remote VM with --remote, an installed host with --host
   open [--host <name>]              Open herdr on a forge host
-  cloud create [--host <name>]      Create the dev VM on AWS and install it (or resume that install)
+  cloud create [--host <name>]      Create the dev VM and its relay on AWS and install them (or resume
+                                    that install)
   cloud start|stop|rebuild [--host <name>]
-                                    Start the dev VM and open herdr, stop it (disks kept), or replace
-                                    it with a new one (its disk is lost)
+                                    Start the VMs and open herdr, stop them (disks kept), or replace
+                                    the dev VM with a new one (its disk is lost)
+  cloud rebuild-relay [--host <name>]
+                                    Replace the relay with a new one: a new bot token and signing key
   fetch [--host <name>]             Fetch the agents' branches into this clone and list the tasks
   ship <task> [--host <name>]       Re-sign a task's new commits, push agent/<task> and open its PR
                                     (a stacked task ships with the tasks under it, bottom first)

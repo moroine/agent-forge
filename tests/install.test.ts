@@ -12,9 +12,11 @@ import { ForgeError } from "../cli/lib/context.ts";
 import { renderLaptopBlock } from "../cli/lib/herdr-config.ts";
 import { loadCloudSettings, saveCloudSettings, type CloudSettings } from "../cli/lib/laptop/cloud.ts";
 import {
-  forgeKeyPath, hostDir, inventoryPath, knownHostsPath, loadHosts, saveHost, type InstallStep, type LaptopHost,
+  forgeKeyPath, hostDir, inventoryPath, knownHostsPath, loadHosts, relayClientKeyPath, relayInventoryPath, relayLinkPath,
+  saveHost, type InstallStep, type LaptopHost,
 } from "../cli/lib/laptop/state.ts";
 import { fakeContext, type ExecRule, type FakeContext } from "./lib/fake-context.ts";
+import { hostKeyOf, withKnownHosts } from "./lib/fake-known-hosts.ts";
 
 // Every laptop path lives in a temporary home: never the real one, never the
 // real ~/.ssh or herdr config, never a real VM.
@@ -1031,8 +1033,12 @@ const CLOUD_ANSWERS = [
   "forge-dev", "eu-west-3", "", "", "60", "ops@example.com", "example/agent-forge", "bot-example/agent-forge",
   "Example Bot", "1+bot-example@users.noreply.github.com",
 ];
-const CLOUD_ALL: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude"];
+const CLOUD_ALL: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude", "relay"];
 const TOKEN = "tok-abc";
+// A classic token's shape, built here so that no secret scanner takes this file for a leak.
+const BOT_TOKEN = `ghp_${"Ab3".repeat(12)}`;
+const TRUSTED = "maintainer-example";
+const TRUSTED_LABEL = "GitHub logins the agent takes instructions from (yours), comma-separated";
 const CLOUD_RULES: ExecRule[] = [
   { match: "tofu version", stdout: "OpenTofu v1.10.0\n" },
   { match: "aws --version", stdout: "aws-cli/2.31.0 Python/3.13.7\n" },
@@ -1044,7 +1050,11 @@ const CLOUD_RULES: ExecRule[] = [
   }) },
   { match: "ssh-keyscan", stdout: "203.0.113.20 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHostKey\n" },
   { match: "'test' '-s' '.config/agent-forge/claude-token'", code: 1 },
+  { match: "'sudo' 'test' '-s' '/etc/forge-relay/github-token'", code: 1 },
 ];
+// forge's known_hosts follows the first connections: a key is known once ssh asked about it.
+const cloudLaptop = (o: { rules?: ExecRule[]; answers?: (number | string | null)[]; attachRules?: ExecRule[] } = {}) =>
+  withKnownHosts(laptop({ vm: null }, { ...o, rules: [...(o.rules ?? []), ...CLOUD_RULES] }), knownHostsPath);
 const cloudHost = (): LaptopHost => ({
   name: "forge-dev", kind: "cloud", address: "", port: 22, user: "alice", admin: "ubuntu",
   adminKey: forgeKeyPath("forge-dev"), exposure: "public", done: [],
@@ -1055,10 +1065,22 @@ const metadataFlags = (): unknown[] => {
   return [vars.dev_metadata_enabled, vars.relay_metadata_enabled];
 };
 
-// A new cloud host from its questions to herdr: the Include accepted, the
-// token pasted, the link and herdr's notifications declined.
+const devFirst = (address: string) =>
+  `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@${address} true`;
+const galaxy = () =>
+  `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`;
+// The dev VM's playbook with the relay link, then the relay's.
+const playbooks = () => [
+  `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml -e @${relayLinkPath("forge-dev")}`,
+  `ansible-playbook -i ${relayInventoryPath("forge-dev")} ${CHECKOUT}/ansible/relay.yml ` +
+  `-e ${JSON.stringify({ forge_relay_client_key_file: relayClientKeyPath("forge-dev") })}`,
+];
+
+// A new cloud host from its questions to herdr: the trusted logins answered,
+// the Include accepted, both tokens pasted, the link and herdr's
+// notifications declined.
 async function newCloud(): Promise<FakeContext> {
-  const ctx = laptop({ vm: null }, { rules: CLOUD_RULES, answers: ["dev", "alice", ...CLOUD_ANSWERS, 1, TOKEN, 2, 2] });
+  const ctx = cloudLaptop({ answers: ["dev", "alice", ...CLOUD_ANSWERS, TRUSTED, 1, TOKEN, BOT_TOKEN, 2, 2] });
   assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, cloud: true, sleep: noWait }), 0);
   return ctx;
 }
@@ -1070,21 +1092,27 @@ test("a new cloud host: settings asked, infra applied, address recorded, contrib
   assert.equal(host.address, "203.0.113.20");
   assert.equal(host.admin, "ubuntu");
   assert.equal(host.adminKey, forgeKeyPath("forge-dev"));
+  assert.equal(host.relayAddress, "203.0.113.21");
   assert.deepEqual(host.done, CLOUD_ALL);
   assert.equal(loadCloudSettings("forge-dev").sshCidr, "198.51.100.7/32");
+  assert.deepEqual(loadCloudSettings("forge-dev").trustedLogins, [TRUSTED]);
   // New instances: cloud-init reads the admin key from the metadata services.
   assert.deepEqual(metadataFlags(), [true, true]);
-  // OpenTofu, the first connection once sshd answers, the contributor playbook, herdr.
+  // OpenTofu, both first connections once sshd answers, both playbooks, the
+  // relay's setup, herdr.
   assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.20"), called(ctx).join("\n"));
+  assert.ok(called(ctx).includes("ssh-keyscan -T 5 203.0.113.21"), called(ctx).join("\n"));
   assert.deepEqual(attached(ctx), [
     `tofu -chdir=${CHECKOUT}/infra/aws apply -var-file=${join(hostDir("forge-dev"), "tofu.tfvars.json")}`,
     // By address, not by the alias: the alias's ForwardAgent no would not apply.
-    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.20 true`,
-    `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`,
-    `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml`,
+    devFirst("203.0.113.20"),
+    devFirst("203.0.113.21"),
+    galaxy(),
+    ...playbooks(),
+    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ` +
+    "ubuntu@203.0.113.21 -- 'sudo' '-u' 'forge-relay' '/usr/local/bin/forge-relay' 'setup'",
     "herdr --remote forge-dev --remote-keybindings server",
   ]);
-  assert.ok(ctx.calls.some((c) => c.join(" ").endsWith(`${CHECKOUT}/ansible/contributor.yml`)));
   // No forge setup, no image, and never this machine's git identity: the dev VM commits as the bot.
   assert.ok(!called(ctx).some((c) =>
     /forge setup|image build|'forge' 'setup'|'image' 'build'|'git' 'config'/.test(c)), called(ctx).join("\n"));
@@ -1093,6 +1121,65 @@ test("a new cloud host: settings asked, infra applied, address recorded, contrib
   assert.match(inventory, /ansible_ssh_common_args: ".*-o ForwardAgent=no.*"/);
   assert.match(forgeSshFile(), /^Host forge-dev\n(  .*\n)*  ForwardAgent no$/m);
   assert.ok(ctx.out_lines.includes("  Claude token: done"), ctx.out_lines.join("\n"));
+  assert.ok(ctx.out_lines.includes("  relay setup: done"), ctx.out_lines.join("\n"));
+});
+
+// A host installed before the relay existed: its dev VM was reached, the
+// relay is new. Its metadata service is on until forge knows its key, then
+// the first connection asks about that key, in the open.
+test("the relay's first connection happens while its key is unknown", async () => {
+  saveHost({ ...cloudHost(), address: "203.0.113.20", done: ["vm", "inventory", "playbook", "ssh", "claude"], deployed: HEAD2 });
+  saveCloudSettings("forge-dev", CLOUD_SETTINGS);
+  writeFileSync(knownHostsPath(), `203.0.113.20 ${hostKeyOf("203.0.113.20")}\n`);
+  const ctx = cloudLaptop({ answers: [TRUSTED, 1, BOT_TOKEN, 2, 2] });
+  assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }), 0);
+  assert.deepEqual(metadataFlags(), [false, true]);
+  // The dev VM's wait is the admin's login, the relay's a key scan.
+  assert.deepEqual(called(ctx).filter((c) => c.startsWith("ssh-keyscan")), ["ssh-keyscan -T 5 203.0.113.21"]);
+  const first = attached(ctx).indexOf(devFirst("203.0.113.21"));
+  assert.ok(first >= 0 && first < attached(ctx).indexOf(galaxy()), attached(ctx).join("\n"));
+  assert.ok(!attached(ctx).includes(devFirst("203.0.113.20")), attached(ctx).join("\n"));
+  assert.ok(asked(ctx).includes(TRUSTED_LABEL), asked(ctx).join("\n"));
+  const host = loadHosts()[0];
+  assert.equal(host.relayAddress, "203.0.113.21");
+  assert.deepEqual(host.done, CLOUD_ALL);
+});
+
+test("the playbook step runs contributor.yml with the relay link, then relay.yml", async () => {
+  const ctx = await newCloud();
+  assert.deepEqual(attached(ctx).filter((a) => a.startsWith("ansible-playbook")), playbooks());
+  // The relay's private address, its key as the first connection recorded
+  // it, and where the dev VM's client key lands on this machine.
+  assert.deepEqual(JSON.parse(readFileSync(relayLinkPath("forge-dev"), "utf8")), {
+    forge_contributor_relay_address: "10.100.1.11",
+    forge_contributor_relay_host_key: hostKeyOf("203.0.113.21"),
+    forge_contributor_relay_client_pub_dest: relayClientKeyPath("forge-dev"),
+  });
+  const inventory = readFileSync(relayInventoryPath("forge-dev"), "utf8");
+  assert.match(inventory, /^ {4}forge-dev-relay:\n {6}ansible_host: "203\.0\.113\.21"$/m);
+  assert.match(inventory, /^ {6}ansible_user: "ubuntu"$/m);
+  assert.match(inventory, /ansible_ssh_common_args: ".*-o ForwardAgent=no.*"/);
+  assert.match(inventory, /^ {4}forge_exposure: "public"$/m);
+  assert.match(inventory, /^ {4}forge_relay_bot_login: "bot-example"$/m);
+  assert.match(inventory, /^ {4}forge_relay_trusted_logins: \["maintainer-example"\]$/m);
+  assert.match(inventory, /^ {4}forge_relay_co_author_emails: \["noreply@anthropic\.com"\]$/m);
+  assert.match(inventory, /^ {4}forge_relay_client_cidr: "10\.100\.1\.0\/24"$/m);
+});
+
+test("the bot token reaches the relay on ssh's stdin, never in an argv", async () => {
+  const ctx = await newCloud();
+  assert.ok(!ctx.calls.some((c) => c.join(" ").includes(BOT_TOKEN)));
+  assert.ok(![...ctx.out_lines, ...ctx.err_lines].some((l) => l.includes(BOT_TOKEN)));
+  const execs = ctx.calls.filter((c) => !ctx.attachCalls.some((a) => a.argv === c));
+  const i = execs.findIndex((c) => c.join(" ").includes("'install'"));
+  assert.equal(execs[i]?.join(" "),
+    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o BatchMode=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ` +
+    "ubuntu@203.0.113.21 -- 'sudo' 'install' '-o' 'forge-relay' '-g' 'forge-relay' '-m' '600' '/dev/stdin' '/etc/forge-relay/github-token'");
+  assert.equal(ctx.execOptions[i]?.input, `${BOT_TOKEN}\n`);
+  // Never in a file on this machine.
+  for (const [rel, what] of snapshot(home)) {
+    if (what.startsWith("file ")) assert.ok(!readFileSync(join(home, rel), "utf8").includes(BOT_TOKEN), rel);
+  }
 });
 
 test("the Claude token travels on stdin only", async () => {
@@ -1116,7 +1203,7 @@ test("a cloud host whose first connection failed is retried, never forgotten", a
   saveCloudSettings("forge-dev", CLOUD_SETTINGS);
   const state = join(hostDir("forge-dev"), "terraform.tfstate");
   writeFileSync(state, "{}\n");
-  const ctx = laptop({ vm: null }, { rules: CLOUD_RULES, attachRules: [{ match: "ubuntu@203.0.113.20", code: 255 }] });
+  const ctx = cloudLaptop({ attachRules: [{ match: "ubuntu@203.0.113.20", code: 255 }] });
   await assert.rejects(cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }),
     /The VM step failed: run forge cloud create --host forge-dev to resume there\./);
   assert.ok(attached(ctx).some((a) => a.startsWith("tofu ") && a.includes(" apply ")), attached(ctx).join("\n"));
@@ -1130,7 +1217,7 @@ test("a cloud VM that never answers on SSH stops the run after 36 tries, 5 s apa
   saveHost(cloudHost());
   saveCloudSettings("forge-dev", CLOUD_SETTINGS);
   const slept: number[] = [];
-  const ctx = laptop({ vm: null }, { rules: [{ match: "ssh-keyscan", stdout: "" }, ...CLOUD_RULES] });
+  const ctx = cloudLaptop({ rules: [{ match: "ssh-keyscan", stdout: "" }] });
   await assert.rejects(cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: async (ms) => { slept.push(ms); } }),
     /203\.0\.113\.20[\s\S]*forge cloud create --host forge-dev/);
   assert.equal(called(ctx).filter((c) => c.startsWith("ssh-keyscan")).length, 36);
@@ -1141,16 +1228,16 @@ test("a cloud VM that never answers on SSH stops the run after 36 tries, 5 s apa
 
 // After a change to infra/aws, `forge cloud start` refuses and points here: a
 // re-run applies OpenTofu again (its plan asks, an empty one asks nothing),
-// then the playbook; never the first connection or the token again.
+// then the playbooks; never a first connection or a token again.
 test("a re-run of a finished cloud host applies OpenTofu and the playbook again, never the first connection or the token", async () => {
   await newCloud();
-  const ctx = laptop({ vm: null }, { rules: [{ match: "checkip.amazonaws.com", stdout: "198.51.100.8\n" }, ...CLOUD_RULES], answers: [2, 2] });
+  const ctx = cloudLaptop({ rules: [{ match: "checkip.amazonaws.com", stdout: "198.51.100.8\n" }], answers: [2, 2] });
   assert.equal(await cmdInstall(ctx, { checkout: CHECKOUT, host: "forge-dev", sleep: noWait }), 0);
   assert.ok(called(ctx).some((c) => c.startsWith(`tofu -chdir=${CHECKOUT}/infra/aws init`)), called(ctx).join("\n"));
   assert.deepEqual(attached(ctx), [
     `tofu -chdir=${CHECKOUT}/infra/aws apply -var-file=${join(hostDir("forge-dev"), "tofu.tfvars.json")}`,
-    `ansible-galaxy collection install -r ${CHECKOUT}/ansible/requirements.yml -p ${join(home, ".local/share/agent-forge/collections")}`,
-    `ansible-playbook -i ${inventoryPath("forge-dev")} ${CHECKOUT}/ansible/contributor.yml`,
+    galaxy(),
+    ...playbooks(),
     "herdr --remote forge-dev --remote-keybindings server",
   ]);
   // This machine's address may have moved since the last run.
@@ -1163,7 +1250,10 @@ test("a re-run of a finished cloud host applies OpenTofu and the playbook again,
   assert.ok(called(ctx).includes(
     `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5 ` +
     `-o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.20 true`), called(ctx).join("\n"));
-  assert.ok(!called(ctx).some((c) => c.includes("claude-token")), called(ctx).join("\n"));
+  assert.ok(called(ctx).includes(
+    `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o BatchMode=yes -o ConnectTimeout=5 ` +
+    `-o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ubuntu@203.0.113.21 true`), called(ctx).join("\n"));
+  assert.ok(!called(ctx).some((c) => c.includes("claude-token") || c.includes("github-token")), called(ctx).join("\n"));
   assert.deepEqual(asked(ctx), [LINK, TOASTS()]);
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
 });

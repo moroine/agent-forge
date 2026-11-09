@@ -1,9 +1,10 @@
 // Host account and runtime steps of `forge install`, run from the laptop over
 // the SSH alias: git identity, Claude login (or a cloud host's Claude token),
-// `forge setup`, `agent-base` image.
+// `forge setup`, `agent-base` image; and a cloud host's relay credentials, as
+// the admin.
 import { ForgeError, mustSucceed } from "../context.ts";
 import type { Context } from "../context.ts";
-import { remoteAttach, remoteExec } from "./remote.ts";
+import { adminAttach, adminExec, remoteAttach, remoteExec } from "./remote.ts";
 import type { LaptopHost } from "./state.ts";
 
 type Identity = { name: string; email: string };
@@ -77,6 +78,45 @@ export async function ensureClaudeToken(ctx: Context, host: LaptopHost): Promise
     ["sh", "-c", `umask 077 && mkdir -p .config/agent-forge && cat > ${CLAUDE_TOKEN_FILE} && chmod 600 ${CLAUDE_TOKEN_FILE}`],
     `${token}\n`));
   return "stored";
+}
+
+// The bot's GitHub token on the relay (cli/lib/relay/paths.ts), which only
+// forge-relay reads; the relay writes nothing there itself.
+const RELAY_TOKEN_FILE = "/etc/forge-relay/github-token";
+// A classic personal access token: only those can write to a public
+// repository another account owns, the upstream (spec §5.4).
+const BOT_TOKEN = /^ghp_[A-Za-z0-9]{36}$/;
+
+// The relay's credentials (spec §5.7), by the admin's SSH to the relay: the
+// bot's token, pasted at a prompt that does not echo it and written through
+// ssh's stdin, like the Claude token (never in an argv, a printed line, a
+// file on this machine or an error); then `forge-relay setup`, which checks
+// the token, creates the bot's fork, and checks that the signing key relay.yml
+// made is registered on the bot's account. It exits non-zero until the
+// maintainer has done what it prints, such as registering that key.
+export async function ensureRelayCredentials(ctx: Context, host: LaptopHost): Promise<"stored" | "already"> {
+  const relay = host.relayAddress;
+  if (!relay) throw new ForgeError(`${host.name} has no relay address yet: run forge cloud create --host ${host.name}`);
+  let outcome: "stored" | "already" = "already";
+  if ((await adminExec(ctx, host, relay, ["sudo", "test", "-s", RELAY_TOKEN_FILE])).code !== 0) {
+    ctx.out("The relay publishes as the bot, a GitHub account of its own. On GitHub:");
+    ctx.out("  1. create the bot's account, with two-factor authentication on; never make it a collaborator of the repository;");
+    ctx.out("  2. as the bot, create a classic personal access token with only the public_repo and workflow scopes, and an expiry date.");
+    ctx.out("The relay creates the bot's fork itself, then prints the signing key to register on the bot's account.");
+    const token = ((await ctx.prompt.askSecret("Bot token")) ?? "").trim();
+    if (!token) throw new ForgeError("no bot token given: paste the bot's classic personal access token");
+    if (!BOT_TOKEN.test(token)) {
+      throw new ForgeError("that is not a classic GitHub token (ghp_ then 36 letters and digits): create a classic personal access token, not a fine-grained one");
+    }
+    await mustSucceed("writing the bot's token on the relay", adminExec(ctx, host, relay,
+      ["sudo", "install", "-o", "forge-relay", "-g", "forge-relay", "-m", "600", "/dev/stdin", RELAY_TOKEN_FILE],
+      `${token}\n`));
+    outcome = "stored";
+  }
+  if ((await adminAttach(ctx, host, relay, ["sudo", "-u", "forge-relay", "/usr/local/bin/forge-relay", "setup"])) !== 0) {
+    throw new ForgeError(`the relay's setup is not complete: do what it says above, then run forge cloud create --host ${host.name} again`);
+  }
+  return outcome;
 }
 
 export async function runSetup(ctx: Context, host: LaptopHost): Promise<void> {

@@ -6,9 +6,9 @@ import { join } from "node:path";
 import { ForgeError, type Context } from "../context.ts";
 import { laptopStateDir } from "../paths.ts";
 
-export type InstallStep = "vm" | "inventory" | "playbook" | "ssh" | "identity" | "claude" | "setup" | "image";
+export type InstallStep = "vm" | "inventory" | "playbook" | "ssh" | "identity" | "claude" | "setup" | "image" | "relay";
 
-const STEPS: readonly string[] = ["vm", "inventory", "playbook", "ssh", "identity", "claude", "setup", "image"];
+const STEPS: readonly string[] = ["vm", "inventory", "playbook", "ssh", "identity", "claude", "setup", "image", "relay"];
 const KINDS: readonly string[] = ["lima", "remote", "cloud"];
 const EXPOSURES: readonly string[] = ["local", "public", "lan"];
 
@@ -24,6 +24,9 @@ export type LaptopHost = {
   adminKey: string;
   exposure: "local" | "public" | "lan";
   identityAgent?: string;
+  // A cloud host's relay, by its public address (an Elastic IP, kept when the
+  // relay is rebuilt); recorded once OpenTofu has created it.
+  relayAddress?: string;
   // The checkout commit the playbook last deployed: another one, after a git
   // pull, is deployed again on the next forge install.
   deployed?: string;
@@ -50,6 +53,21 @@ export function forgeKeyPath(name: string): string {
   return join(hostDir(name), "forge-key.pub");
 }
 
+// A cloud host's relay: its inventory (written once, like inventory.yml), the
+// public data contributor.yml gets about it, and the dev VM's relay client
+// key (its public half), which contributor.yml fetches and relay.yml installs.
+export function relayInventoryPath(name: string): string {
+  return join(hostDir(name), "relay-inventory.yml");
+}
+
+export function relayLinkPath(name: string): string {
+  return join(hostDir(name), "relay-link.json");
+}
+
+export function relayClientKeyPath(name: string): string {
+  return join(hostDir(name), "relay-client.pub");
+}
+
 export function knownHostsPath(): string {
   return join(laptopStateDir(), "known_hosts");
 }
@@ -64,6 +82,7 @@ function isHost(h: unknown): h is LaptopHost {
     str("kind") && KINDS.includes(o.kind as string) &&
     str("exposure") && EXPOSURES.includes(o.exposure as string) &&
     (o.identityAgent === undefined || typeof o.identityAgent === "string") &&
+    (o.relayAddress === undefined || typeof o.relayAddress === "string") &&
     (o.deployed === undefined || typeof o.deployed === "string") &&
     Array.isArray(o.done) && o.done.every((s) => typeof s === "string" && STEPS.includes(s));
 }
