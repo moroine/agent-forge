@@ -4,10 +4,11 @@
 // from an agent, so it is validated before any other work, and the order of a
 // write is always: text checks, secret scan, write cap, then GitHub.
 import { createHash } from "node:crypto";
-import { appendFile, chmod, mkdir } from "node:fs/promises";
+import { appendFile, mkdir } from "node:fs/promises";
 import path from "node:path";
 import { RelayError } from "./config.ts";
 import { ciLog, ciRuns, comment, openPull, readThread, reply } from "./github.ts";
+import type { RelayPaths } from "./paths.ts";
 import { validTask } from "./policy.ts";
 import { publish, type RelayDeps } from "./publish.ts";
 import { scanText } from "./scan.ts";
@@ -35,8 +36,9 @@ const FIELDS: Record<Op, Record<string, "string" | "int">> = {
 
 type Request = Record<string, string | number>;
 
-// One audit line per request. It holds identifiers, sizes and digests, never
-// a text, a token or a bundle's content.
+// One audit line per request. It holds validated identifiers, sizes and
+// digests, never a text the agent wrote, a message derived from one, a token
+// or a bundle's content (ruling R17).
 type Audit = Record<string, unknown>;
 
 const digest = (text: string) => ({ length: text.length, sha256: createHash("sha256").update(text).digest("hex") });
@@ -75,6 +77,10 @@ function decodeBundle(s: string): Buffer {
 // A text the bot will post: length and mention checks, then Betterleaks. A
 // finding refuses it: the agent rewrites it, nothing is cleared.
 async function publicText(d: RelayDeps, text: string, max: number, what: string): Promise<string> {
+  // The cap comes first: the reference and mention checks are quadratic on
+  // crafted input, and neutralizing only lengthens a text, so this refuses
+  // nothing that would have passed.
+  if (text.length > max) throw new RelayError(`${what}: longer than ${max} characters`);
   const out = checkPublicText(text, d.cfg, max, what);
   const findings = await scanText(d.ctx, out, d.paths.mirror);
   if (findings.length > 0) {
@@ -98,18 +104,19 @@ async function handle(d: RelayDeps, op: Op, input: Buffer, audit: Audit): Promis
   const r = parseRequest(op, input);
   switch (op) {
     case "publish": {
+      // The branch is logged once validTask accepted it: before, it is agent text.
+      audit.branch = `agent/${validTask(r.branch as string)}`;
       const bundle = decodeBundle(r.bundle as string);
-      audit.branch = String(r.branch).slice(0, 200);
       audit.bundleBytes = bundle.length;
       // publish takes the state lock and counts its own write.
       const out = await publish(d, { branch: r.branch as string, bundle });
       return { head: out.head, url: out.url, bundle: out.bundle.toString("base64") };
     }
     case "open-pr": {
-      audit.branch = String(r.branch).slice(0, 200);
       audit.title = digest(r.title as string);
       audit.body = digest(r.body as string);
       const task = validTask(r.branch as string);
+      audit.branch = `agent/${task}`;
       const title = await publicText(d, r.title as string, TITLE_MAX, "pull request title");
       const body = await publicText(d, r.body as string, PR_BODY_MAX, "pull request body");
       await takeWriteSlot(d, task);
@@ -145,34 +152,55 @@ async function handle(d: RelayDeps, op: Op, input: Buffer, audit: Audit): Promis
 
 // The audit file is created private. A failure to append is reported on
 // stderr and never hides the operation's answer.
-async function writeAudit(d: RelayDeps, line: Audit): Promise<void> {
+type Sink = { paths: RelayPaths; err: (line: string) => void; now: () => number };
+
+async function writeAudit(io: Sink, line: Audit): Promise<void> {
   try {
-    await mkdir(path.dirname(d.paths.audit), { recursive: true, mode: 0o700 });
-    await appendFile(d.paths.audit, `${JSON.stringify(line)}\n`, { mode: 0o600 });
+    await mkdir(path.dirname(io.paths.audit), { recursive: true, mode: 0o700 });
+    await appendFile(io.paths.audit, `${JSON.stringify(line)}\n`, { mode: 0o600 });
   } catch (e) {
-    d.ctx.err(`forge-relay: cannot write the audit log: ${e instanceof Error ? e.message : String(e)}`);
+    // The code only: an errno message names a path.
+    io.err(`forge-relay: cannot write the audit log (${(e as NodeJS.ErrnoException).code ?? "error"})`);
   }
 }
 
+// The answer to a failure, and its audit line. A refusal's message goes back
+// to the agent; the audit keeps only that it was a refusal and the message's
+// length and digest. Any other error answers generically, and its stack goes
+// to the audit log only.
+export async function fail(io: Sink, audit: Audit, e: unknown): Promise<string> {
+  let message: string;
+  if (e instanceof RelayError) {
+    audit.outcome = "refused";
+    audit.detail = "refused";
+    message = e.message;
+  } else {
+    audit.outcome = "error";
+    audit.detail = "error";
+    audit.stack = e instanceof Error ? (e.stack ?? e.message) : String(e);
+    message = "internal error (logged on the relay)";
+  }
+  audit.message = digest(message);
+  await writeAudit(io, audit);
+  return `${JSON.stringify({ ok: false, error: message })}\n`;
+}
+
+// An audit line for a request that failed before `serve` ran (too large, no
+// configuration): the operation as given only when it is one of OPS.
+export function auditFor(io: Sink, op: string | undefined): Audit {
+  return { time: new Date(io.now()).toISOString(), op: op !== undefined && (OPS as readonly string[]).includes(op) ? op : "unknown" };
+}
+
 export async function serve(d: RelayDeps, op: string | undefined, input: Buffer): Promise<string> {
-  const audit: Audit = { time: new Date(d.now()).toISOString(), op: String(op).slice(0, 40) };
-  let answer: Record<string, unknown>;
+  const io: Sink = { paths: d.paths, err: d.ctx.err, now: d.now };
+  const audit = auditFor(io, op);
   try {
     if (op === undefined || !(OPS as readonly string[]).includes(op)) throw new RelayError(`unknown operation; the operations are ${OPS.join(", ")}`);
-    answer = { ok: true, ...(await handle(d, op as Op, input, audit)) };
+    const answer = { ok: true, ...(await handle(d, op as Op, input, audit)) };
     audit.outcome = "ok";
+    await writeAudit(io, audit);
+    return `${JSON.stringify(answer)}\n`;
   } catch (e) {
-    if (e instanceof RelayError) {
-      audit.outcome = "refused";
-      audit.detail = e.message.slice(0, 500);
-      answer = { ok: false, error: e.message };
-    } else {
-      // The stack goes to the audit log only, never back to the dev VM.
-      audit.outcome = "error";
-      audit.detail = e instanceof Error ? (e.stack ?? e.message) : String(e);
-      answer = { ok: false, error: "internal error (logged on the relay)" };
-    }
+    return fail(io, audit, e);
   }
-  await writeAudit(d, audit);
-  return `${JSON.stringify(answer)}\n`;
 }

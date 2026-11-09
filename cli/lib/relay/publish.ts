@@ -3,7 +3,6 @@
 // commits, scans them with Betterleaks against upstream main's ignore file,
 // and pushes them to the bot's fork, fast-forward only. Nothing is pushed or
 // recorded unless every step before passed.
-import { readFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -11,7 +10,7 @@ import { ForgeError, mustSucceed, type Context } from "../context.ts";
 import { printable } from "../printable.ts";
 import { RelayError, type RelayConfig } from "./config.ts";
 import { ensureFork, type GitHub } from "./github.ts";
-import type { RelayPaths } from "./paths.ts";
+import { readToken, type RelayPaths } from "./paths.ts";
 import { checkAuthorship, checkCommits, validTask } from "./policy.ts";
 import { gitIn, readCommit, replaySigned, shortSha } from "./replay.ts";
 import { fileAt, scanCommits, UPSTREAM_MAIN } from "./scan.ts";
@@ -76,19 +75,6 @@ function pushRefusal(porcelain: string, t: string): string | null {
   if (/^\[rejected\] \((non-fast-forward|fetch first)\)$/.test(summary)) return `the fork's agent/${t} moved during the publish`;
   const reason = /^\[[^\]]*\] \((.*)\)$/.exec(summary)?.[1] ?? summary;
   return `GitHub refused the push of agent/${t}: ${printable(reason).slice(0, 200)}. Nothing was published.`;
-}
-
-// The bot's token, read for the push only. Neither it nor its file's content
-// ever appears in an error.
-function readToken(file: string): string {
-  let token: string;
-  try {
-    token = readFileSync(file, "utf8").trim();
-  } catch {
-    throw new ForgeError(`cannot read the bot's token from ${file}`);
-  }
-  if (token === "" || /\s/.test(token)) throw new ForgeError(`the bot's token in ${file} is empty or malformed`);
-  return token;
 }
 
 // Step 2, before the lock: upstream main and the fork's branch, fetched

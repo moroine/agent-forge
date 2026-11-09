@@ -38,7 +38,8 @@ done
   fi
 } >>"$FAKE_BL_LOG"
 
-if [ "$FAKE_BL_FIND" = "1" ]; then
+# FAKE_BL_FIND_ON: report only when stdin holds this marker (a text scan).
+if [ "$FAKE_BL_FIND" = "1" ] && { [ -z "$FAKE_BL_FIND_ON" ] || grep -q -- "$FAKE_BL_FIND_ON"; }; then
   if [ -z "$report" ]; then
     echo "fake-betterleaks: no --report-path" >&2
     exit 2

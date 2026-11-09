@@ -20,7 +20,7 @@ let root: string;
 let calls: string[];
 let ctx: FakeContext;
 let d: RelayDeps;
-let finding: boolean;
+let finding: string | null;
 
 // A GitHub that records every call and answers what the bot's own pull
 // request 7 needs.
@@ -40,10 +40,10 @@ beforeEach(() => {
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
   fs.symlinkSync(fakeBetterleaks, path.join(bin, "betterleaks"));
-  finding = false;
+  finding = null;
   ctx = hybridContext();
   const exec = ctx.exec;
-  ctx.exec = (argv, o) => exec(argv, { ...o, env: { PATH: `${bin}:${process.env.PATH}`, FAKE_BL_LOG: path.join(root, "bl.log"), ...(finding ? { FAKE_BL_FIND: "1" } : {}), ...o?.env } });
+  ctx.exec = (argv, o) => exec(argv, { ...o, env: { PATH: `${bin}:${process.env.PATH}`, FAKE_BL_LOG: path.join(root, "bl.log"), ...(finding === null ? {} : { FAKE_BL_FIND: "1", FAKE_BL_FIND_ON: finding }), ...o?.env } });
   calls = [];
   const stateDir = path.join(root, "state");
   const mirror = path.join(root, "mirror.git");
@@ -79,22 +79,38 @@ test("an unknown operation is refused and audited", async () => {
   assert.deepEqual(calls, []);
 });
 
-test("a malformed request or an unknown field is refused", async () => {
-  for (const [op, body] of [
-    ["comment", { pr: 7, body: "x", extra: 1 }],
-    ["comment", { pr: "7", body: "x" }],
-    ["comment", { pr: 0, body: "x" }],
-    ["comment", { pr: 1.5, body: "x" }],
-    ["comment", { pr: 2e9, body: "x" }],
-    ["comment", { pr: 7 }],
-    ["comment", { pr: 7, body: 3 }],
-    ["ci-log", { pr: 7, job: -1 }],
-    ["publish", { branch: "agent/t", bundle: "not base64!" }],
-    ["publish", { branch: "agent/t", bundle: "" }],
-  ] as [string, unknown][]) {
-    assert.equal((await answer(op, body)).ok, false, `${op} ${JSON.stringify(body)}`);
+test("a malformed request or an unknown field is refused, with its reason", async () => {
+  for (const [op, body, why] of [
+    ["comment", { pr: 7, body: "x", extra: 1 }, /unknown field/],
+    ["comment", { pr: "7", body: "x" }, /pr must be an integer/],
+    ["comment", { pr: 0, body: "x" }, /pr must be an integer/],
+    ["comment", { pr: 1.5, body: "x" }, /pr must be an integer/],
+    ["comment", { pr: 2e9, body: "x" }, /pr must be an integer/],
+    ["comment", { pr: 7 }, /body must be a string/],
+    ["comment", { pr: 7, body: 3 }, /body must be a string/],
+    ["ci-log", { pr: 7, job: -1 }, /job must be an integer/],
+    ["publish", { branch: "agent/t", bundle: "not base64!" }, /not base64/],
+    ["publish", { branch: "agent/t", bundle: "" }, /bundle is empty/],
+    ["publish", { branch: "t", bundle: "AAAA" }, /agent\/<task>/],
+  ] as [string, unknown, RegExp][]) {
+    const a = await answer(op, body);
+    assert.equal(a.ok, false, `${op} ${JSON.stringify(body)}`);
+    assert.match(String(a.error), why, `${op} ${JSON.stringify(body)}`);
   }
-  for (const raw of ["not json", "[]", "null"]) assert.equal(JSON.parse(await serve(d, "read", Buffer.from(raw))).ok, false);
+  for (const raw of ["not json", "[]", "null"]) {
+    const a = JSON.parse(await serve(d, "read", Buffer.from(raw)));
+    assert.equal(a.ok, false);
+    assert.match(a.error, /not valid JSON|must be a JSON object/);
+  }
+  assert.deepEqual(calls, []);
+});
+
+test("a text over its cap is refused at once, before the quadratic checks", async () => {
+  const t0 = Date.now();
+  const a = await answer("comment", { pr: 7, body: "-".repeat(65536) + "/" });
+  assert.equal(a.ok, false);
+  assert.match(String(a.error), /comment: longer than 10000 characters/);
+  assert.ok(Date.now() - t0 < 1000, "refused quickly");
   assert.deepEqual(calls, []);
 });
 
@@ -107,10 +123,11 @@ test("a comment referring to another repository is refused before any GitHub cal
 
 test("a Betterleaks finding in a pull request body refuses it before any GitHub call", async () => {
   await withState(d.paths.stateDir, async (s) => { s.published.t = HEAD; });
-  finding = true;
-  const a = await answer("open-pr", { branch: "agent/t", title: "title", body: "a body" });
+  // The fake finds only in a text holding this marker, which only the body has.
+  finding = "BODY-MARKER";
+  const a = await answer("open-pr", { branch: "agent/t", title: "title", body: "a body BODY-MARKER" });
   assert.equal(a.ok, false);
-  assert.match(String(a.error), /Betterleaks found a possible secret in the pull request title \(rule generic-api-key\)/);
+  assert.match(String(a.error), /Betterleaks found a possible secret in the pull request body \(rule generic-api-key\)/);
   assert.deepEqual(calls, []);
   // A refused request does not use the cap.
   await withState(d.paths.stateDir, async (s) => assert.deepEqual(s.writes, []));
@@ -150,7 +167,8 @@ test("an internal error answers without its stack, which goes to the audit log",
   assert.deepEqual(a, { ok: false, error: "internal error (logged on the relay)" });
   const last = audit().at(-1)!;
   assert.equal(last.outcome, "error");
-  assert.match(String(last.detail), /boom at/);
+  assert.equal(last.detail, "error");
+  assert.match(String(last.stack), /boom at/);
 });
 
 test("an audit failure does not hide the answer and is reported on stderr", async () => {
@@ -169,4 +187,23 @@ test("the audit log never holds the texts", async () => {
   const log = fs.readFileSync(d.paths.audit, "utf8");
   assert.doesNotMatch(log, /SECRET-(BODY|TITLE)-TEXT/);
   assert.match(log, /sha256/);
+});
+
+test("the audit log holds no agent text on the refusal paths either", async () => {
+  const M = "MARKER-ghp_LEAK";
+  await answer("comment", { pr: 7, body: `see other/repo#3 ${M}` });
+  await answer("open-pr", { branch: `${M}`, title: "t", body: "b" });
+  await answer("publish", { branch: `agent/${M}/..`, bundle: "AAAA" });
+  await answer("comment", { pr: 7, body: "x", [`${M}-field`]: 1 });
+  await serve(d, `pub\u009b2J${M}`, json({}));
+  await serve(d, `${M} `, json({}));
+  await serve(d, "read", Buffer.from(M));
+  // A publish refused for authorship, past the branch check: its message quotes the agent.
+  await serve(d, "publish", json({ branch: "agent/t", bundle: Buffer.from(M).toString("base64") }));
+  const log = fs.readFileSync(d.paths.audit, "utf8");
+  assert.doesNotMatch(log, /MARKER|ghp_LEAK/);
+  const lines = audit();
+  assert.ok(lines.length >= 8);
+  for (const l of lines.slice(0, 7)) assert.ok(l.outcome === "refused" && l.detail === "refused", JSON.stringify(l));
+  assert.deepEqual(lines.filter((l) => l.op === "unknown").length, 2);
 });
