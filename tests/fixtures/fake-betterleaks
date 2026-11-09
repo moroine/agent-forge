@@ -1,0 +1,61 @@
+#!/bin/bash
+# A stand-in for Betterleaks in the relay's tests, found first on the PATH as
+# `betterleaks`. It logs what it was given and, on demand, reports a finding.
+#   FAKE_BL_LOG   file that receives its argv and the .betterleaksignore of its
+#                 -i directory (required)
+#   FAKE_BL_FIND  1: write a one-finding report to --report-path and exit 1
+set -e
+
+if [ -z "$FAKE_BL_LOG" ]; then
+  echo "fake-betterleaks: FAKE_BL_LOG is not set" >&2
+  exit 2
+fi
+# The relay removes these with `env -u`: validation would send a found token
+# to its issuer. Seeing one here means a scan ran without that guard.
+if [ -n "${BETTERLEAKS_VALIDATE+set}" ] || [ -n "${BETTERLEAKS_ANALYZE+set}" ]; then
+  echo "fake-betterleaks: BETTERLEAKS_VALIDATE or BETTERLEAKS_ANALYZE reached the scan" >&2
+  exit 2
+fi
+
+ignore_dir=""
+report=""
+argv=("$@")
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    -i) ignore_dir="$2"; shift ;;
+    --report-path) report="$2"; shift ;;
+  esac
+  shift
+done
+
+{
+  printf 'argv:'
+  printf ' %s' "${argv[@]}"
+  printf '\n'
+  if [ -n "$ignore_dir" ] && [ -f "$ignore_dir/.betterleaksignore" ]; then
+    cat "$ignore_dir/.betterleaksignore"
+  fi
+} >>"$FAKE_BL_LOG"
+
+if [ "$FAKE_BL_FIND" = "1" ]; then
+  if [ -z "$report" ]; then
+    echo "fake-betterleaks: no --report-path" >&2
+    exit 2
+  fi
+  sha=0123456789abcdef0123456789abcdef01234567
+  cat >"$report" <<EOF
+[
+ {
+  "RuleID": "generic-api-key",
+  "StartLine": 3,
+  "Match": "REDACTED",
+  "Secret": "REDACTED",
+  "File": "secret.txt",
+  "Commit": "$sha",
+  "Fingerprint": "$sha:secret.txt:generic-api-key:3"
+ }
+]
+EOF
+  exit 1
+fi
+exit 0
