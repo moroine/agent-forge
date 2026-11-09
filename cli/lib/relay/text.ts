@@ -6,15 +6,27 @@ import { RelayError } from "./config.ts";
 
 // Les spans de code selon CommonMark : une suite de N guillemets inversés
 // ouvre un span, qui se ferme à la prochaine suite d'exactement N (il peut
-// couvrir des lignes). Une suite sans fermeture est du texte. Ce qu'un span
+// couvrir des lignes). Une suite sans fermeture est du texte. Hors d'un span,
+// un guillemet précédé d'un nombre impair d'antislashs est échappé : texte
+// littéral, il n'ouvre rien (le reste de sa suite, si elle continue, ouvre
+// normalement). Dans un span les antislashs sont littéraux : une fermeture
+// n'est jamais échappée. Ce qu'un span
 // contient ne notifie personne, on n'y touche pas. Rend les spans [début, fin[.
 function codeSpans(text: string): [number, number][] {
   const runs = [...text.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
   const spans: [number, number][] = [];
   for (let i = 0; i < runs.length; i++) {
-    const close = runs.findIndex((r, j) => j > i && r.len === runs[i].len);
+    let { at, len } = runs[i];
+    let slashes = 0;
+    while (at - slashes > 0 && text[at - slashes - 1] === "\\") slashes++;
+    if (slashes % 2 === 1) {
+      at++;
+      len--;
+      if (len === 0) continue;
+    }
+    const close = runs.findIndex((r, j) => j > i && r.len === len);
     if (close === -1) continue;
-    spans.push([runs[i].at, runs[close].at + runs[close].len]);
+    spans.push([at, runs[close].at + runs[close].len]);
     i = close;
   }
   return spans;
@@ -32,13 +44,13 @@ export function neutralizeMentions(text: string, allowed: readonly string[]): st
   // fermer sur aucune autre : le span qu'on ajoute reste un span.
   const fence = "`".repeat(Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
   // Entre deux spans, `after` dit si un span suit : une mention collée à un
-  // guillemet inversé reçoit une espace, sinon sa clôture se fondrait dans la suite.
+  // guillemet inversé ou à un antislash (qui échapperait notre ouverture) reçoit une espace, sinon sa clôture se fondrait dans la suite.
   const fix = (s: string, spanBefore: boolean, spanAfter: boolean) =>
     s.replace(MENTION, (m, name: string, at: number) => {
       if (!name.includes("/") && allowed.includes(name.toLowerCase())) return m;
       const prev = at > 0 ? s[at - 1] : spanBefore ? "`" : "";
       const next = at + m.length < s.length ? s[at + m.length] : spanAfter ? "`" : "";
-      return `${prev === "`" ? " " : ""}${fence}${m}${fence}${next === "`" ? " " : ""}`;
+      return `${prev === "`" || prev === "\\" ? " " : ""}${fence}${m}${fence}${next === "`" ? " " : ""}`;
     });
   let out = "";
   let last = 0;

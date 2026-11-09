@@ -52,6 +52,12 @@ test("code spans follow CommonMark: matching runs, newlines, unclosed runs are t
   for (const t of ["``x`@evil``", "`a\n@evil`"]) assert.equal(neutralizeMentions(t, allowed), t);
 });
 
+test("an escaped backtick opens no span, an escaped backslash does not escape", () => {
+  assert.equal(neutralizeMentions("\\`@evil`", allowed), "\\` ``@evil`` `");
+  assert.equal(neutralizeMentions("\\\\`@x`", allowed), "\\\\`@x`");
+  assert.equal(neutralizeMentions("`a\\`@x", allowed), "`a\\` ``@x``");
+});
+
 test("references through any spelling of a github.com URL are found, upstream ones are not", () => {
   for (const u of ["http://github.com/o/r/pull/1", "HTTPS://GITHUB.COM/o/r/pull/1", "https://www.github.com/o/r/issues/1",
     "github.com/o/r/issues/1", "www.github.com/o/r/issues/1", "[x](http://github.com/o/r/pull/1)"]) {
