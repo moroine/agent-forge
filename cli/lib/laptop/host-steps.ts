@@ -80,9 +80,15 @@ export async function ensureClaudeToken(ctx: Context, host: LaptopHost): Promise
   return "stored";
 }
 
-// The bot's GitHub token on the relay (cli/lib/relay/paths.ts), which only
-// forge-relay reads; the relay writes nothing there itself.
+// The bot's GitHub token on the relay (cli/lib/relay/paths.ts). Like
+// config.json, root:forge-relay 0640: the service reads it and cannot change
+// it. Written to a temporary file next to it, then renamed: a token is never
+// half there. `cat`, not `install /dev/stdin`, which uutils' install (Ubuntu
+// 26.04) may refuse, stdin being no regular file. Fixed paths only, nothing
+// in the script comes from outside; the token arrives on stdin.
 const RELAY_TOKEN_FILE = "/etc/forge-relay/github-token";
+const WRITE_RELAY_TOKEN = `umask 077 && cat > ${RELAY_TOKEN_FILE}.new && chown root:forge-relay ${RELAY_TOKEN_FILE}.new && ` +
+  `chmod 0640 ${RELAY_TOKEN_FILE}.new && mv -f ${RELAY_TOKEN_FILE}.new ${RELAY_TOKEN_FILE}`;
 // A classic personal access token: only those can write to a public
 // repository another account owns, the upstream (spec §5.4).
 const BOT_TOKEN = /^ghp_[A-Za-z0-9]{36}$/;
@@ -94,29 +100,37 @@ const BOT_TOKEN = /^ghp_[A-Za-z0-9]{36}$/;
 // the token, creates the bot's fork, and checks that the signing key relay.yml
 // made is registered on the bot's account. It exits non-zero until the
 // maintainer has done what it prints, such as registering that key.
+// This step is not recorded yet whenever it runs, so a token already stored
+// may be one the setup refused (wrong scopes, no expiry, another account):
+// the maintainer keeps it or pastes a new one.
 export async function ensureRelayCredentials(ctx: Context, host: LaptopHost): Promise<"stored" | "already"> {
   const relay = host.relayAddress;
   if (!relay) throw new ForgeError(`${host.name} has no relay address yet: run forge cloud create --host ${host.name}`);
-  let outcome: "stored" | "already" = "already";
-  if ((await adminExec(ctx, host, relay, ["sudo", "test", "-s", RELAY_TOKEN_FILE])).code !== 0) {
-    ctx.out("The relay publishes as the bot, a GitHub account of its own. On GitHub:");
-    ctx.out("  1. create the bot's account, with two-factor authentication on; never make it a collaborator of the repository;");
-    ctx.out("  2. as the bot, create a classic personal access token with only the public_repo and workflow scopes, and an expiry date.");
-    ctx.out("The relay creates the bot's fork itself, then prints the signing key to register on the bot's account.");
-    const token = ((await ctx.prompt.askSecret("Bot token")) ?? "").trim();
-    if (!token) throw new ForgeError("no bot token given: paste the bot's classic personal access token");
-    if (!BOT_TOKEN.test(token)) {
-      throw new ForgeError("that is not a classic GitHub token (ghp_ then 36 letters and digits): create a classic personal access token, not a fine-grained one");
-    }
-    await mustSucceed("writing the bot's token on the relay", adminExec(ctx, host, relay,
-      ["sudo", "install", "-o", "forge-relay", "-g", "forge-relay", "-m", "600", "/dev/stdin", RELAY_TOKEN_FILE],
-      `${token}\n`));
-    outcome = "stored";
-  }
+  const stored = (await adminExec(ctx, host, relay, ["sudo", "test", "-s", RELAY_TOKEN_FILE])).code === 0;
+  const replace = stored &&
+    (await ctx.prompt.pick("A bot token is already stored on the relay", ["keep it", "paste a new one"])) === 2;
+  if (!stored || replace) await storeBotToken(ctx, host, relay);
   if ((await adminAttach(ctx, host, relay, ["sudo", "-u", "forge-relay", "/usr/local/bin/forge-relay", "setup"])) !== 0) {
-    throw new ForgeError(`the relay's setup is not complete: do what it says above, then run forge cloud create --host ${host.name} again`);
+    throw new ForgeError(
+      `the relay's setup is not complete: do what it says above, then run forge cloud create --host ${host.name} again; ` +
+      `if the token itself was refused, run forge cloud create --host ${host.name} again and choose to paste a new one`,
+    );
   }
-  return outcome;
+  return !stored || replace ? "stored" : "already";
+}
+
+async function storeBotToken(ctx: Context, host: LaptopHost, relay: string): Promise<void> {
+  ctx.out("The relay publishes as the bot, a GitHub account of its own. On GitHub:");
+  ctx.out("  1. create the bot's account, with two-factor authentication on; never make it a collaborator of the repository;");
+  ctx.out("  2. as the bot, create a classic personal access token with only the public_repo and workflow scopes, and an expiry date.");
+  ctx.out("The relay creates the bot's fork itself, then prints the signing key to register on the bot's account.");
+  const token = ((await ctx.prompt.askSecret("Bot token")) ?? "").trim();
+  if (!token) throw new ForgeError("no bot token given: paste the bot's classic personal access token");
+  if (!BOT_TOKEN.test(token)) {
+    throw new ForgeError("that is not a classic GitHub token (ghp_ then 36 letters and digits): create a classic personal access token, not a fine-grained one");
+  }
+  await mustSucceed("writing the bot's token on the relay",
+    adminExec(ctx, host, relay, ["sudo", "sh", "-c", WRITE_RELAY_TOKEN], `${token}\n`));
 }
 
 export async function runSetup(ctx: Context, host: LaptopHost): Promise<void> {

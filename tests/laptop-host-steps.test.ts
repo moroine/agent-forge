@@ -136,6 +136,23 @@ test("the relay step refuses a token that is not a classic one, and never prints
   assert.equal(ctx.attachCalls.length, 0);
 });
 
+// A stored token may be one the relay's setup refused (wrong scopes, no
+// expiry, another account): the next run offers to replace it.
+test("a token already on the relay can be replaced: the new one goes on stdin, neither is printed", async () => {
+  const cloud: LaptopHost = { ...host, name: "forge-dev", kind: "cloud", relayAddress: "203.0.113.21" };
+  const fresh = `ghp_${"Cd4".repeat(12)}`;
+  const ctx = fakeContext({ rules: [{ match: "'sudo' 'test' '-s' '/etc/forge-relay/github-token'", code: 0 }], answers: [2, fresh] });
+  assert.equal(await ensureRelayCredentials(ctx, cloud), "stored");
+  assert.ok(ctx.err_lines.includes("A bot token is already stored on the relay> [keep it | paste a new one]"), ctx.err_lines.join("\n"));
+  const i = ctx.calls.findIndex((c) => c.join(" ").includes("github-token.new"));
+  assert.ok(i > 0, ctx.calls.map((c) => c.join(" ")).join("\n"));
+  assert.deepEqual(ctx.execOptions[i], { input: `${fresh}\n` });
+  // The stored token is never read; the new one is in no argv and no printed line.
+  assert.ok(!ctx.calls.some((c) => c.join(" ").includes(fresh) || c.join(" ").includes("cat /etc/forge-relay")));
+  assert.ok(![...ctx.out_lines, ...ctx.err_lines].some((l) => l.includes(fresh)));
+  assert.match(ctx.attachCalls[0].argv.join(" "), /'\/usr\/local\/bin\/forge-relay' 'setup'$/);
+});
+
 test("runSetup attaches forge setup and fails on a non-zero code", async () => {
   const ok = fakeContext();
   await runSetup(ok, host);

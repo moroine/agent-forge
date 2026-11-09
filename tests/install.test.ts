@@ -1171,10 +1171,13 @@ test("the bot token reaches the relay on ssh's stdin, never in an argv", async (
   assert.ok(!ctx.calls.some((c) => c.join(" ").includes(BOT_TOKEN)));
   assert.ok(![...ctx.out_lines, ...ctx.err_lines].some((l) => l.includes(BOT_TOKEN)));
   const execs = ctx.calls.filter((c) => !ctx.attachCalls.some((a) => a.argv === c));
-  const i = execs.findIndex((c) => c.join(" ").includes("'install'"));
+  const i = execs.findIndex((c) => c.join(" ").includes("github-token.new"));
+  // Root's, readable by forge-relay (like config.json), renamed into place.
+  const file = "/etc/forge-relay/github-token";
   assert.equal(execs[i]?.join(" "),
     `ssh -o UserKnownHostsFile=${knownHostsPath()} -o IdentitiesOnly=yes -o BatchMode=yes -o ForwardAgent=no -i ${forgeKeyPath("forge-dev")} ` +
-    "ubuntu@203.0.113.21 -- 'sudo' 'install' '-o' 'forge-relay' '-g' 'forge-relay' '-m' '600' '/dev/stdin' '/etc/forge-relay/github-token'");
+    `ubuntu@203.0.113.21 -- 'sudo' 'sh' '-c' 'umask 077 && cat > ${file}.new && chown root:forge-relay ${file}.new && ` +
+    `chmod 0640 ${file}.new && mv -f ${file}.new ${file}'`);
   assert.equal(ctx.execOptions[i]?.input, `${BOT_TOKEN}\n`);
   // Never in a file on this machine.
   for (const [rel, what] of snapshot(home)) {

@@ -450,20 +450,39 @@ async function cloudVm(
   await checkNestedVirt(ctx, settings);
   saveCloudSettings(host.name, { ...settings, sshCidr: `${await currentPublicIp(ctx)}/32` });
   const infra = infraFor(host.name, checkout);
-  // No address before the first apply: the relay is new.
   const before = host.relayAddress;
-  const relayReached = before !== undefined && (await hostKeys(ctx, before)).length > 0;
-  await applyInteractive(ctx, infra, { dev: !reached, relay: !relayReached });
+  const known = await relayReached(ctx, host);
+  await applyInteractive(ctx, infra, { dev: !reached, relay: !known });
   const outputs = await infraOutputs(ctx, infra);
   host.address = outputs.address;
   host.relayAddress = outputs.relayAddress;
   await waitForSsh(ctx, host, host.address, sleep, reached);
   if (!reached) await firstConnection(ctx, host, host.address);
   // An Elastic IP keeps its address; a new one has no key in known_hosts yet.
-  const relayKnown = relayReached && host.relayAddress === before;
-  await waitForSsh(ctx, host, host.relayAddress, sleep, relayKnown);
-  if (!relayKnown) await firstConnection(ctx, host, host.relayAddress);
+  const relayKnown = known && host.relayAddress === before;
+  try {
+    await waitForSsh(ctx, host, host.relayAddress, sleep, relayKnown);
+    if (!relayKnown) await firstConnection(ctx, host, host.relayAddress);
+  } catch (e) {
+    // A key forge holds for a relay that no longer has it (replaced by hand,
+    // or rebuild-relay interrupted before it forgot the old key) refuses
+    // every connection: forge's own way out is a new relay.
+    if (!(e instanceof ForgeError) || (await hostKeys(ctx, host.relayAddress)).length === 0) throw e;
+    throw new ForgeError(
+      `${e.message}\n${knownHostsPath()} holds a key for ${host.name}'s relay (${host.relayAddress}): if the relay ` +
+      `was replaced or its key changed, forge cloud rebuild-relay --host ${host.name} replaces it and forgets that key`,
+    );
+  }
   return "done";
+}
+
+// Whether the relay was reached: its recorded address has a key in forge's
+// known_hosts. A host installed before the relay existed has no address, and
+// rebuild-relay forgets the key: their relay's metadata service is on until
+// its first connection, as a new instance's (cloud-init reads the admin key
+// from it), whatever the command that applies OpenTofu.
+export async function relayReached(ctx: Context, host: LaptopHost): Promise<boolean> {
+  return host.relayAddress !== undefined && (await hostKeys(ctx, host.relayAddress)).length > 0;
 }
 
 // The keys forge's known_hosts holds for `address`, as `<type> <base64>`.
@@ -483,14 +502,23 @@ async function hostKeys(ctx: Context, address: string): Promise<string[]> {
 // first use there): the one ssh recorded at the relay's first connection,
 // `ssh-ed25519 <base64>` and nothing else.
 async function relayHostKey(ctx: Context, host: LaptopHost): Promise<string> {
-  const key = host.relayAddress ? (await hostKeys(ctx, host.relayAddress)).find((k) => /^ssh-ed25519 [A-Za-z0-9+/=]+$/.test(k)) : undefined;
-  if (!key) {
+  const address = host.relayAddress ?? "no address yet";
+  const keys = host.relayAddress ? await hostKeys(ctx, host.relayAddress) : [];
+  const key = keys.find((k) => /^ssh-ed25519 [A-Za-z0-9+/=]+$/.test(k));
+  if (key) return key;
+  // Another type only: ssh asks no question about a known host, so a re-run
+  // would never record the ed25519 key.
+  if (keys.length > 0) {
     throw new ForgeError(
-      `${knownHostsPath()} holds no ssh-ed25519 key for ${host.name}'s relay (${host.relayAddress ?? "no address yet"}): ` +
-      `run forge cloud create --host ${host.name} again, which connects to the relay and records it`,
+      `${knownHostsPath()} holds keys for ${host.name}'s relay (${address}), but no ssh-ed25519 one, which the dev VM ` +
+      `pins: remove them (ssh-keygen -R ${address} -f ${knownHostsPath()}), then run forge cloud create --host ${host.name} ` +
+      "again, which connects to the relay and records its key",
     );
   }
-  return key;
+  throw new ForgeError(
+    `${knownHostsPath()} holds no key for ${host.name}'s relay (${address}): ` +
+    `run forge cloud create --host ${host.name} again, which connects to the relay and records it`,
+  );
 }
 
 // A new instance boots for a minute or two before sshd answers. The keys

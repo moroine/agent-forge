@@ -11,7 +11,7 @@ import {
 import { forgetHostKeys } from "../laptop/lima.ts";
 import { remoteExec } from "../laptop/remote.ts";
 import { loadHosts, saveHost, type LaptopHost } from "../laptop/state.ts";
-import { CLOUD_STEPS, cmdInstall } from "./install.ts";
+import { CLOUD_STEPS, cmdInstall, relayReached } from "./install.ts";
 import { cmdOpen } from "./open.ts";
 
 export type CloudOptions = { host?: string; checkout?: string; sleep?: (ms: number) => Promise<void> };
@@ -93,8 +93,11 @@ async function rebuild(ctx: Context, host: LaptopHost, checkout: string, sleep: 
     ["rebuild it", "stop"],
   );
   if (i !== 1) throw new ForgeError(`${host.name} is left as it is`);
-  // The new instance's cloud-init needs its metadata service; the relay's stays off.
-  await applyInteractive(ctx, infraFor(host.name, checkout), { dev: true, relay: false }, [`-replace=${DEV_INSTANCE}`]);
+  // The new instance's cloud-init needs its metadata service. So does the
+  // relay's until it is reached: a host installed before the relay existed
+  // gets its relay from this apply.
+  await applyInteractive(ctx, infraFor(host.name, checkout), { dev: true, relay: !(await relayReached(ctx, host)) },
+    [`-replace=${DEV_INSTANCE}`]);
   // The Elastic IP stays, the instance gets new host keys: the old entries would refuse them.
   await forgetHostKeys(ctx, [host.name, host.address]);
   host.done = ["inventory"];
@@ -115,20 +118,21 @@ async function rebuildRelay(ctx: Context, host: LaptopHost, checkout: string, sl
     ["rebuild it", "stop"],
   );
   if (i !== 1) throw new ForgeError(`${host.name}'s relay is left as it is`);
-  // The new relay's cloud-init needs its metadata service; the dev VM's stays off.
-  await applyInteractive(ctx, infraFor(host.name, checkout), { dev: false, relay: true }, [`-replace=${RELAY_INSTANCE}`]);
-  // From here on the old relay is gone: the runbook is printed last, whatever
-  // the install does (its relay step fails until the new key is registered).
+  // The runbook is printed last after any apply attempt: a failed apply may
+  // have destroyed the old relay already, and the install's relay step fails
+  // until the new signing key is registered.
   try {
+    // The new relay's cloud-init needs its metadata service; the dev VM's stays off.
+    await applyInteractive(ctx, infraFor(host.name, checkout), { dev: false, relay: true }, [`-replace=${RELAY_INSTANCE}`]);
     // The Elastic IP stays, the instance gets new host keys: the old entry would refuse them.
     await forgetHostKeys(ctx, [relay]);
     host.done = host.done.filter((s) => s !== "playbook" && s !== "relay");
     saveHost(host);
     return await cmdInstall(ctx, { host: host.name, checkout, sleep });
   } finally {
-    ctx.out(`${host.name}'s old relay is gone, but its credentials still work on GitHub. On the bot's account:`);
+    ctx.out(`Once ${host.name}'s old relay is replaced, its credentials still work on GitHub. On the bot's account:`);
     ctx.out("  1. revoke the old token (Settings > Developer settings > Personal access tokens);");
-    ctx.out("  2. remove the old signing key (Settings > SSH and GPG keys).");
-    ctx.out(`The new relay has its own: forge cloud create --host ${host.name} asks for the new token, and the relay's setup prints the new signing key to register.`);
+    ctx.out("  2. remove the old signing key (Settings > SSH and GPG keys); the new one is the key the relay's setup prints.");
+    ctx.out(`If the relay step did not finish, run forge cloud create --host ${host.name} again.`);
   }
 }

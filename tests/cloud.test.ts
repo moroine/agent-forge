@@ -148,8 +148,9 @@ test("rebuild: refused without confirmation, nothing touched", async () => {
 test("rebuild: replaces the instance, forgets both host keys, installs again", async () => {
   install();
   appendFileSync(knownHostsPath(), "forge-dev ssh-ed25519 AAAA\n");
-  // Confirm, accept the SSH Include, the Claude token, decline the link and herdr's notifications.
-  const ctx = laptop({ answers: [1, 1, "tok-abc", 2, 2] });
+  // Confirm, accept the SSH Include, the Claude token, keep the bot's token,
+  // decline the link and herdr's notifications.
+  const ctx = laptop({ answers: [1, 1, "tok-abc", 1, 2, 2] });
   // The variables of the replacing apply, read as it runs: the install's own apply rewrites them.
   let replacing: unknown[] = [];
   const attach = ctx.attach;
@@ -168,6 +169,24 @@ test("rebuild: replaces the instance, forgets both host keys, installs again", a
   assert.ok(attached(ctx).some((a) => a.includes("contributor.yml")));
   // The relay, reached already, keeps its metadata service off.
   assert.deepEqual(metadataFlags(), [true, false]);
+  assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
+});
+
+// Installed before the relay existed: OpenTofu creates the relay in the
+// rebuild's own apply, whose cloud-init needs the metadata service.
+test("rebuild of a host with no relay yet creates the relay with its metadata service on", async () => {
+  install(host({ done: ["vm", "inventory", "playbook", "ssh", "claude"], relayAddress: undefined }));
+  // Confirm, accept the SSH Include, the Claude token, the bot's token, decline the link and herdr's notifications.
+  const ctx = laptop({ answers: [1, 1, "tok-abc", BOT_TOKEN, 2, 2], rules: [{ match: "'sudo' 'test' '-s' '/etc/forge-relay/github-token'", code: 1 }] });
+  let replacing: unknown[] = [];
+  const attach = ctx.attach;
+  ctx.attach = async (argv, o) => {
+    if (argv.includes("-replace=aws_instance.dev")) replacing = metadataFlags();
+    return attach(argv, o);
+  };
+  assert.equal(await cmdCloud(ctx, "rebuild", { checkout: CHECKOUT, sleep: noWait }), 0);
+  assert.deepEqual(replacing, [true, true]);
+  assert.equal(loadHosts()[0].relayAddress, "203.0.113.21");
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
 });
 
@@ -195,7 +214,7 @@ test("rebuild-relay replaces only the relay and redoes the playbook and the rela
   // The install starts again without the playbook and the relay step.
   assert.deepEqual(applies[1].done, ["vm", "inventory", "ssh", "claude"]);
   assert.ok(attached(ctx).some((a) => a.includes("contributor.yml")) && attached(ctx).some((a) => a.includes("relay.yml")));
-  assert.ok(called(ctx).some((c) => c.includes("'install'") && c.includes("github-token")), called(ctx).join("\n"));
+  assert.ok(called(ctx).some((c) => c.includes("cat > /etc/forge-relay/github-token.new")), called(ctx).join("\n"));
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
   // Last, the rotation runbook: the old credentials still work on GitHub.
   const runbook = ctx.out_lines.slice(-4).join("\n");
