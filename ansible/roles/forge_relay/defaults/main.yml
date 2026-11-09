@@ -25,8 +25,9 @@ forge_relay_nodesource_fingerprint: 6F71F525282841EEDAF851B42F59B5F99B1BE0B4
 forge_relay_nodesource_uri: https://deb.nodesource.com/node_24.x
 # nodejs carries cli/forge-relay's floor as its minimum, as in forge_users: a
 # bare name would keep a Node already installed from Ubuntu (22 on 26.04).
-# ssh-keygen (openssh-client) makes and uses the signing key; acl lets
-# Ansible run tasks as forge-relay.
+# ssh-keygen (openssh-client) makes the push and signing keys and signs with
+# the latter, ssh pushes with the former; acl lets Ansible run tasks as
+# forge-relay.
 forge_relay_packages:
   - git
   - openssh-client
@@ -39,3 +40,28 @@ forge_relay_betterleaks_url: "https://github.com/betterleaks/betterleaks/release
   v{{ forge_relay_betterleaks_version }}/\
   betterleaks_{{ forge_relay_betterleaks_version }}_linux_x64.tar.gz"
 forge_relay_betterleaks_sha256: 9d9ad503cd5d80d18a939352266c3fcca52f10da9b83cd5cfe646989b13940fe
+
+# GitHub's SSH host keys for github.com, the only ones the relay's ssh to
+# GitHub accepts (StrictHostKeyChecking=yes, cli/lib/relay/paths.ts). Public
+# values, pinned here and never fetched at run time, so that no one on the
+# network can substitute a key of their own. Taken on 2026-11-09 from
+# https://api.github.com/meta (ssh_keys), and checked against GitHub's
+# documentation, "GitHub's SSH key fingerprints"
+# (https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints):
+#   ed25519  SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU
+#   ECDSA    SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM
+#   RSA      SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s
+# tests/unit/forge_relay.yml checks these fingerprints. If GitHub rotates a
+# key, take the new one from the same two sources and check it the same way.
+# A line split with a trailing backslash is one line: YAML joins it with no
+# space.
+forge_relay_github_known_hosts:
+  - "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl"
+  - "github.com ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBEmKSENjQEezOmxkZ\
+    My7opKgwFB9nkt5YRrYMjNuG5N87uRgg6CLrbo5wAdT/y6v0mKV0U2w0WZ2YB/++Tpockg="
+  - "github.com ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQCj7ndNxQowgcQnjshcLrqPEiiphnt+VTTvDP6mHBL9j1aNUkY4U\
+    e1gvwnGLVlOhGeYrnZaMgRK6+PKCUXaDbC7qtbW8gIkhL7aGCsOr/C56SJMy/BCZfxd1nWzAOxSDPgVsmerOBYfNqltV9/hWCqBy\
+    wINIR+5dIg6JTJ72pcEpEjcYgXkE2YEFXV1JHnsKgbLWNlhScqb2UmyRkQyytRLtL+38TGxkxCflmO+5Z8CSSNY7GidjMIZ7Q4zM\
+    jA2n1nGrlTDkzwDCsw+wqFPGQA179cnfGWOWRVruj16z6XyvxvjJwbz0wQZ75XK5tKSb7FNyeIEs4TT4jk+S4dhPeAUC5y+bDYir\
+    YgM4GC7uEnztnZyaVWQ7B381AK4Qdrwt51ZqExKbQpTUNn+EjqoTwvqNj4kqx5QUCI0ThS/YkOxJCXmPUWZbhjpCg56i+2aB6CmK\
+    2JGhn57K5mj0MNdBXA4/WnwH6XoPWJzK5Nyu2zB3nAZp+S5hpQs+p1vN1/wsjk="

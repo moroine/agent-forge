@@ -1,0 +1,6 @@
+# Managed by agent-forge (ansible/roles/forge_relay): GitHub's SSH host keys,
+# pinned in the role's defaults. The relay's ssh to github.com accepts these
+# and no other.
+{% for line in forge_relay_github_known_hosts %}
+{{ line }}
+{% endfor %}

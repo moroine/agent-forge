@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseRelayConfig } from "../cli/lib/relay/config.ts";
+import { parseRelayConfig, RelayError } from "../cli/lib/relay/config.ts";
 import { ciLog, ciRuns, comment, ensureFork, filterByAuthor, githubClient, openPull, readThread, reply } from "../cli/lib/relay/github.ts";
+import { RELAY_PATHS } from "../cli/lib/relay/paths.ts";
 import { relaySetup } from "../cli/lib/relay/setup.ts";
-import { fakeContext } from "./lib/fake-context.ts";
+import { fakeContext, type FakeContext } from "./lib/fake-context.ts";
 
 const cfg = parseRelayConfig({
   upstream: "acme/widgets",
@@ -201,56 +202,95 @@ test("ciLog refuses a job that is not one of the pull request's checks", async (
   assert.ok(!requests.some((r) => r.path.includes("/actions/jobs")));
 });
 
-const GOOD = "ssh-ed25519 AAAAkey relay";
-function setupFake(over: { scopes?: string; expiry?: boolean; login?: string; keys?: unknown[]; actions?: Answer } = {}) {
-  const headers: Record<string, string> = { "X-OAuth-Scopes": over.scopes ?? "public_repo, workflow" };
-  if (over.expiry !== false) headers["GitHub-Authentication-Token-Expiration"] = "2027-01-01 00:00:00 UTC";
+// The relay's two public keys: the push key and the signing key.
+const PUSH = "ssh-ed25519 AAAApush forge-relay-push";
+const SIGNING = "ssh-ed25519 AAAAsign forge-relay-signing";
+const KEYS = { push: PUSH, signing: SIGNING };
+const GREETING = (login: string) => `Hi ${login}! You've successfully authenticated, but GitHub does not provide shell access.\n`;
+// How the setup reaches github.com as the bot: the push key alone, GitHub's
+// pinned host keys alone.
+const SSH_CHECK = [
+  "ssh", "-F", "/dev/null", "-i", RELAY_PATHS.pushKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+  "-o", `UserKnownHostsFile=${RELAY_PATHS.githubKnownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+  "-T", "git@github.com",
+];
+
+// A token without expiry by default, as the maintainer creates it; both keys
+// registered unless a test says otherwise.
+function setupFake(over: { scopes?: string; login?: string; pushKeys?: unknown[]; signingKeys?: unknown[]; actions?: Answer } = {}) {
   return fake({
-    "GET /user": { json: { login: over.login ?? "Bot" }, headers },
+    "GET /user": { json: { login: over.login ?? "Bot" }, headers: { "X-OAuth-Scopes": over.scopes ?? "public_repo" } },
     "GET /repos/bot/widgets": { json: { fork: true, parent: { full_name: "acme/widgets" } } },
     "GET /repos/bot/widgets/actions/permissions": over.actions ?? { json: { enabled: false } },
-    "GET /users/bot/ssh_signing_keys": { json: over.keys ?? [] },
+    "GET /users/bot/keys": { json: over.pushKeys ?? [{ id: 1, key: "ssh-ed25519 AAAApush" }] },
+    "GET /users/bot/ssh_signing_keys": { json: over.signingKeys ?? [{ id: 2, key: SIGNING }] },
   });
 }
+// GitHub's answer to `ssh -T`: its greeting on stderr, and exit code 1.
+const sshAnswer = (stderr: string, code = 1) => fakeContext({ rules: [{ match: "git@github.com", code, stderr }] });
+const setup = async (o: { ctx?: FakeContext; fake?: Parameters<typeof setupFake>[0]; keys?: typeof KEYS } = {}) => {
+  const ctx = o.ctx ?? sshAnswer(GREETING("Bot"));
+  const code = await relaySetup({ ctx, github: setupFake(o.fake).gh, cfg, paths: RELAY_PATHS, sleep: async () => {} }, o.keys ?? KEYS);
+  return { code, ctx, out: ctx.out_lines.join("\n") };
+};
 
-test("setup refuses scopes beyond public_repo and workflow", async () => {
-  const { gh } = setupFake({ scopes: "public_repo, repo, workflow" });
-  await assert.rejects(() => relaySetup(fakeContext(), gh, cfg, GOOD, async () => {}), /repo/);
+test("setup takes a token with the public_repo scope only, without expiry, and refuses any other, naming its scopes", async () => {
+  const ok = await setup();
+  assert.equal(ok.code, 0, ok.out);
+  assert.match(ok.out, /^token: ok \(bot, scope public_repo\)$/m);
+  for (const scopes of ["public_repo, workflow", "repo", ""]) {
+    await assert.rejects(() => setup({ fake: { scopes } }), (e: Error) =>
+      e instanceof RelayError && e.message.includes(`[${scopes}]`) && /public_repo scope only/.test(e.message), scopes);
+  }
+  await assert.rejects(() => setup({ fake: { login: "other" } }), /account/);
 });
 
-test("setup refuses a token without expiry or of another account", async () => {
-  await assert.rejects(() => relaySetup(fakeContext(), setupFake({ expiry: false }).gh, cfg, GOOD, async () => {}), /expir/);
-  await assert.rejects(() => relaySetup(fakeContext(), setupFake({ login: "other" }).gh, cfg, GOOD, async () => {}), /account/);
-});
+test("setup prints both keys until they are registered, then checks the push key reaches GitHub as the bot", async () => {
+  const none = await setup({ fake: { pushKeys: [], signingKeys: [] } });
+  assert.equal(none.code, 1);
+  assert.match(none.out, /push key, not registered yet:\nssh-ed25519 AAAApush forge-relay-push\n.*Key type: Authentication Key/);
+  assert.match(none.out, /signing key, not registered yet:\nssh-ed25519 AAAAsign forge-relay-signing\n.*Key type: Signing Key/);
+  // An unregistered push key is not tried on GitHub.
+  assert.deepEqual(none.ctx.calls, []);
 
-test("setup prints the signing key and returns 1 until it is registered", async () => {
-  const ctx = fakeContext();
-  assert.equal(await relaySetup(ctx, setupFake().gh, cfg, `${GOOD}\n`, async () => {}), 1);
-  assert.match(ctx.out_lines.join("\n"), /ssh-ed25519 AAAAkey/);
-  assert.match(ctx.out_lines.join("\n"), /Signing Key/);
   // Registered under another comment: same type and base64, so it counts.
-  const ctx2 = fakeContext();
-  assert.equal(await relaySetup(ctx2, setupFake({ keys: [{ key: "ssh-ed25519 AAAAkey laptop" }] }).gh, cfg, GOOD, async () => {}), 0);
+  const both = await setup({ fake: { signingKeys: [{ key: "ssh-ed25519 AAAAsign laptop" }] } });
+  assert.equal(both.code, 0, both.out);
+  assert.deepEqual(both.ctx.calls, [SSH_CHECK]);
+  assert.match(both.out, /^push key: registered, and GitHub authenticates it as bot$/m);
+  assert.match(both.out, /^signing key: registered$/m);
+});
+
+test("setup refuses a push key GitHub takes for another account, or does not take", async () => {
+  // Another account, a deploy key, the bot's login in other case.
+  const other = await setup({ ctx: sshAnswer(GREETING("someone\x1b[2Jelse")) });
+  assert.equal(other.code, 1);
+  assert.match(other.out, /authenticates it as someone\[2Jelse, not bot/);
+  assert.equal((await setup({ ctx: sshAnswer(GREETING("acme/widgets")) })).code, 1);
+  assert.equal((await setup({ ctx: sshAnswer(GREETING("BOT")) })).code, 0);
+  // A host key that is not GitHub's pinned one, or no answer at all.
+  const pinned = await setup({ ctx: sshAnswer("Host key verification failed.\r\n", 255) });
+  assert.equal(pinned.code, 1);
+  assert.match(pinned.out, /did not authenticate the push key as bot: Host key verification failed\./);
+  // The signing key is still reported: both are registered in one pass.
+  assert.match(pinned.out, /^signing key: registered$/m);
 });
 
 test("setup returns 1 while Actions are enabled on the fork, 0 when off or unreadable", async () => {
-  const keys = [{ key: GOOD }];
-  const run = async (actions: Answer) => {
-    const ctx = fakeContext();
-    return { code: await relaySetup(ctx, setupFake({ keys, actions }).gh, cfg, GOOD, async () => {}), out: ctx.out_lines.join("\n") };
-  };
-  const on = await run({ json: { enabled: true } });
+  const on = await setup({ fake: { actions: { json: { enabled: true } } } });
   assert.equal(on.code, 1);
   assert.match(on.out, /Actions are enabled on bot\/widgets: disable them/);
-  assert.equal((await run({ json: { enabled: false } })).code, 0);
-  const unreadable = await run({ status: 403 });
+  const unreadable = await setup({ fake: { actions: { status: 403 } } });
   assert.equal(unreadable.code, 0);
   assert.match(unreadable.out, /could not check/);
-  await assert.rejects(() => relaySetup(fakeContext(), setupFake({ keys, actions: { status: 500 } }).gh, cfg, GOOD, async () => {}), /500/);
+  await assert.rejects(() => setup({ fake: { actions: { status: 500 } } }), /500/);
 });
 
-test("setup refuses an empty or malformed signing key", async () => {
-  for (const bad of ["", "  \n", "garbage"]) await assert.rejects(() => relaySetup(fakeContext(), setupFake().gh, cfg, bad, async () => {}), /signing public key/);
+test("setup refuses an empty or malformed public key", async () => {
+  for (const bad of ["", "  \n", "garbage"]) {
+    await assert.rejects(() => setup({ keys: { ...KEYS, push: bad } }), /push public key/);
+    await assert.rejects(() => setup({ keys: { ...KEYS, signing: bad } }), /signing public key/);
+  }
 });
 
 test("openPull refuses an answer without a pull request number", async () => {

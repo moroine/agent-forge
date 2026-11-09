@@ -18,6 +18,7 @@
 - **The relay also scans the text the bot publishes** (pull request titles and bodies, comments, replies) with Betterleaks, and refuses on a finding.
 - **The metadata service and cloud-init are off after the first boot**, held by the OpenTofu configuration and Ansible (part 1 acceptance, step 7).
 - **Egress stays open on both VMs** (spec §9). A filtering proxy outside the dev VM, possibly on the relay, is left for later: moroine/agent-forge#117.
+- **SSH push key; the token for the API only** (decided after Task 11, built as a later task). The bot pushes over SSH with an authentication key made on the relay, GitHub's host keys pinned in the role; the classic token has only `public_repo`, no expiry, and never reaches git. This overrides what Tasks 3, 4 and 10 and the Global Constraints below say about the `workflow` scope, the expiry and the token in `GIT_CONFIG_*`.
 
 ## Global Constraints
 
@@ -654,7 +655,7 @@ test("start refuses a host whose install lacks the relay step", …);
   - The plan adds the relay's resources and turns the dev VM's metadata service off in place.
   - The relay's first connection asks about its key.
   - Both playbooks pass.
-  - The relay step asks for the bot token. `forge-relay setup` prints the signing key; register it, then run `create --host` again. The fork is created when it is missing.
+  - The relay step asks for the bot token (`public_repo` only, no expiry). `forge-relay setup` prints the push key and the signing key; register them (Authentication Key, Signing Key), then run `create --host` again: the setup's SSH check greets the bot. The fork is created when it is missing.
 - [ ] **Step 2: Publish.** On the dev VM, the agent:
   1. makes `agent/relay-smoke` from `origin/main` with one commit;
   2. runs `forge relay publish`, then `forge relay pr relay-smoke --title … --body-file …`.
@@ -680,7 +681,8 @@ test("start refuses a host whose install lacks the relay step", …);
   - Ask the agent to read `~/.config/agent-forge/claude-token`: Claude Code refuses. Note what the rule blocks and what it does not.
 - [ ] **Step 6: Stop, start, rebuild.**
   - `forge cloud stop` and `forge cloud start`: both instances, and a publish works afterwards.
-  - `forge cloud rebuild-relay`, then the rotation: a new token, a new key registered, the old ones revoked. `publish` adopts the existing fork branch.
+  - `forge cloud rebuild-relay`, then the rotation: a new token, the two new keys registered, the old token revoked and both old keys removed. `publish` adopts the existing fork branch.
+  - The publish's push to the fork goes over SSH, and a CI change from `main` (or the bot's) is not refused.
 - [ ] **Step 7: The report.** Post it on moroine/agent-forge#103, as for part 1.
 
 ## Calls made in this plan (for the maintainer's review)

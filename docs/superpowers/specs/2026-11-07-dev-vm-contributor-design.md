@@ -89,9 +89,10 @@ and so did handing laptop work in progress to an agent
   agent's VM to GitHub (§5.4).
 - **The bot's credentials live only on the relay**, set up by hand once; a
   relay rebuild means rotating them (§5.7).
-- **The bot's token has the `workflow` scope**, so that the maintainer's CI
-  changes on `main` never block the bot's branches; the bot may then change CI
-  in its pull requests, under review (§5.4).
+- **The maintainer's CI changes on `main` never block the bot's branches**;
+  the bot may then change CI in its pull requests, under review (§5.4). This
+  was first the token's `workflow` scope; since 2026-11-09 it is the bot's
+  pushes over SSH, which no token scope limits (below).
 - **The maintainer never commits to the bot's branches**: they comment, the
   bot changes (§5.4).
 - **Tools:** OpenTofu for the cloud infrastructure, Ansible for the machines'
@@ -119,6 +120,19 @@ text below where they differ):
   VMs, held by the OpenTofu configuration and Ansible.
 - **Egress stays open on both VMs** (§9). A filtering proxy outside the dev VM,
   possibly on the relay, is left for later (moroine/agent-forge#117).
+- **The bot pushes over SSH, with an authentication key made on the relay**
+  (the push key). Its private half never leaves the relay; the maintainer
+  registers its public half on the bot's account, and it does not expire.
+  The relay's ssh to GitHub accepts only GitHub's host keys, pinned in the
+  relay's role.
+- **The token is for GitHub's API only: `public_repo` alone, without
+  expiry.** It opens pull requests, comments and replies, creates the fork
+  and reads CI. The `workflow` scope is no longer needed: a push over SSH is
+  not limited by token scopes, so changes to `.github/workflows/`, from `main`
+  or from the bot, reach the fork either way. The bot may still change CI in
+  its pull requests, as the maintainer decided; the review and the approval of
+  every workflow run (§5.8) stay the gate. Without an expiry, the token is
+  replaced only after a revocation.
 
 ## 4. Goals, non-goals, anti-goals
 
@@ -338,6 +352,8 @@ the dev VM to GitHub other than anonymous reads.
        upstream `main`, never those of the branch. It refuses on a finding and
        reports it redacted. This settles #102 for this model;
      - pushes to the fork, fast-forward only: no force push, no deletion.
+       It pushes over SSH with the push key, never with the token
+       (2026-11-09).
 
      The relay answers with the published head, and the client aligns the
      agent's local branch on it (same trees), so the next publish replays only
@@ -371,28 +387,39 @@ the dev VM to GitHub other than anonymous reads.
   repository, the fork, the bot's login, the trusted logins.
 - **Audit:** every request and its outcome is logged on the relay. The dev VM
   cannot read the log.
-- **Credentials:** the bot's token in a `0600` file of the service user; an
-  SSH signing key generated on the relay, whose private part never leaves it.
+- **Credentials:** the bot's token in a file the service reads and cannot
+  change; two SSH keys generated on the relay, whose private parts never
+  leave it: the push key, registered on the bot's account as an
+  authentication key, and the signing key, registered as a signing key.
 - **The token is a classic personal access token with only the
-  `public_repo` and `workflow` scopes, and an expiry date.** A fine-grained token cannot do
-  the job: GitHub's docs list "contribute to public repos where the user is
-  not a member" among their gaps, and "only personal access tokens (classic)
-  have write access for public repositories that are not owned by you"
+  `public_repo` scope, and no expiry** (2026-11-09; it first had the
+  `workflow` scope too, and an expiry date). It is for GitHub's API only:
+  pull requests, comments and replies, the fork, CI. A fine-grained token
+  cannot do the job: GitHub's docs list "contribute to public repos where the
+  user is not a member" among their gaps, and "only personal access tokens
+  (classic) have write access for public repositories that are not owned by
+  you"
   ([managing personal access tokens](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens),
   checked 2026-11-07). A GitHub App would have to be installed on the
   upstream repository. `public_repo` is broad: with it the bot can comment,
-  open issues and pull requests anywhere on public GitHub, and create or fork
-  public repositories. The relay's operation list is what narrows it, which is
-  why the token never leaves the relay. **The `workflow` scope is the
-  maintainer's decision:** without it, GitHub refuses a push that brings
-  changes to `.github/workflows/`, even the maintainer's own commits coming
-  from `main` (the fork's `main` is never synced), so every change to CI would
-  block the bot's branches. With it, the bot may change CI in its pull
-  requests; the maintainer's review and the approval of every workflow run
-  (§5.8) stay the gate, and those runs get a read-only token and no secrets.
-  Actions stay disabled on the fork: the relay never enables them, and the
-  setup checks it. If fine-grained tokens gain this ability, the relay
-  switches to one.
+  open issues and pull requests anywhere on public GitHub, create or fork
+  public repositories, and push to them over HTTPS, though the relay never
+  pushes with it. The relay's operation list is what narrows it, which is why
+  the token never leaves the relay.
+- **Pushes go over SSH, with the push key** (2026-11-09), to
+  `git@github.com:<fork>.git`, with GitHub's host keys pinned in the relay's
+  role (`StrictHostKeyChecking=yes`, never learned at run time). The setup
+  checks that GitHub authenticates the key as the bot. **The bot may change
+  CI in its pull requests, the maintainer's decision:** a push with a token
+  that lacks the `workflow` scope is refused when it brings changes to
+  `.github/workflows/`, even the maintainer's own commits coming from `main`
+  (the fork's `main` is never synced), so every change to CI would block the
+  bot's branches. A push over SSH is not limited by token scopes, so neither
+  the maintainer's changes nor the bot's are refused. The maintainer's review
+  and the approval of every workflow run (§5.8) stay the gate, and those runs
+  get a read-only token and no secrets. Actions stay disabled on the fork:
+  the relay never enables them, and the setup checks it. If fine-grained
+  tokens gain this ability, the relay switches to one for the API.
 - **The maintainer never commits to the bot's branches** (the maintainer's
   decision): no "Commit suggestion", no "Update branch". They comment; the bot
   makes the change, or merges `main` when asked. The relay opens pull requests
@@ -459,22 +486,28 @@ so the commands need no AWS CLI. The builder chooses.
 
 | Credential | Where | How it gets there | Worth if stolen | Revoke |
 |---|---|---|---|---|
-| Bot's GitHub token | relay only | pasted once by the maintainer, not echoed | acting as the bot anywhere on public GitHub (`public_repo`, §5.4) | on the bot's GitHub account |
-| Bot's signing key | relay only | generated there; public key registered on the bot's account | signing as the bot | remove the key from the bot's account |
+| Bot's GitHub token | relay only | pasted once by the maintainer, not echoed; no expiry | acting as the bot anywhere on public GitHub (`public_repo`, §5.4) | on the bot's GitHub account |
+| Bot's push key | relay only | generated there; public key registered on the bot's account as an authentication key | pushing as the bot, over SSH, to every repository it can write to: its fork and its own repositories, workflows included | remove the key from the bot's account |
+| Bot's signing key | relay only | generated there; public key registered on the bot's account as a signing key | signing as the bot | remove the key from the bot's account |
 | Claude credential | dev VM only | pasted by the maintainer (§5.3) | model requests on their subscription | see §5.3 |
 | AWS credentials | the Mac only | their AWS CLI profile | the dedicated account | AWS IAM |
 | Maintainer's SSH key | the Mac (a hardware key) | never forwarded | — | — |
 
 - **Bot account setup** (manual, documented): create the GitHub account
-  (two-factor on), create the token, register the relay's signing key, note
-  its no-reply email for the git identity. Never add it as a collaborator. The
-  fork is no longer a manual step: the relay creates it (2026-11-09).
+  (two-factor on), create the token (`public_repo` only, no expiry), register
+  the relay's two keys (the push key as an authentication key, the signing
+  key as a signing key), note its no-reply email for the git identity. Never
+  add it as a collaborator. The fork is no longer a manual step: the relay
+  creates it (2026-11-09).
+- **Token renewal:** the token has no expiry, so it is replaced only after a
+  revocation: the maintainer pastes a new one through the laptop's install
+  update (`forge cloud create --host`), which runs the relay's setup again.
 - **Suspected dev VM compromise:** stop it, revoke the Claude credential,
   rebuild it; look at the bot's recent activity on GitHub and the relay's
   audit log. The bot's credentials were never on it.
 - **Suspected relay compromise, or relay rebuild:** revoke the token and
-  remove the signing key on GitHub, rebuild the relay, redo the setup with a
-  new token and a new key.
+  remove both keys (push and signing) on GitHub, rebuild the relay, redo the
+  setup with a new token and register the two new keys.
 
 ### 5.8 GitHub settings (layer 3)
 
@@ -587,7 +620,9 @@ reported Lima or Incus VMs on EC2's nested virtualization yet.
 - The Claude credential is the narrower `setup-token` when it can be revoked,
   the regular login otherwise (§5.3).
 - The bot's token is a classic token (fine-grained tokens cannot contribute
-  to a repository the bot does not own) with an expiry date (§5.4).
+  to a repository the bot does not own) with an expiry date (§5.4). The
+  maintainer replaced the expiry on 2026-11-09: no expiry, `public_repo`
+  only, and pushes over SSH (§3).
 - The dev VM gets no `forge setup` and no image build at install; the agent
   builds `agent-base` when its tests need it (§5.3).
 - No stacked tasks: every branch starts from upstream `main`, and the relay

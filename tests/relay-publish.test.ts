@@ -89,6 +89,8 @@ beforeEach(() => {
 afterEach(() => fs.rmSync(root, { recursive: true, force: true }));
 
 // A relay as the role lays it out: its mirror, state, signing key and token.
+// The push key is never made: git ignores GIT_SSH_COMMAND for a fork that is
+// a local path, as pushBase makes it here, so the push never needs it.
 function relay(name = "relay"): RelayDeps {
   const dir = path.join(root, name);
   const stateDir = path.join(dir, "state");
@@ -103,7 +105,10 @@ function relay(name = "relay"): RelayDeps {
   fs.writeFileSync(token, `${TOKEN}\n`, { mode: 0o600 });
   return {
     ctx, cfg, github,
-    paths: { ...RELAY_PATHS, token, signingKey, mirror, stateDir, audit: path.join(dir, "audit.log"), githubBase },
+    paths: {
+      ...RELAY_PATHS, token, signingKey, mirror, stateDir, audit: path.join(dir, "audit.log"), githubBase,
+      pushKey: path.join(dir, "push-key"), githubKnownHosts: path.join(dir, "github-known-hosts"), pushBase: `${githubBase}/`,
+    },
     sleep: async () => {},
     now: () => Date.now(),
   };
@@ -186,14 +191,25 @@ test("publishes a new branch: signed commits on the fork, the agent's tree, reco
   assert.equal(git(dev, "rev-parse", "refs/remotes/fork/agent/t"), res.head);
   assert.equal(git(dev, "status", "--porcelain"), "");
 
-  // The token reached git only through its environment, and only for the push.
-  assert.ok(!ctx.calls.some((argv) => argv.join(" ").includes(TOKEN)));
-  const withHeader = ctx.execOptions.flatMap((o, i) => (o?.env?.GIT_CONFIG_VALUE_0 ? [ctx.calls[i]] : []));
-  assert.deepEqual(withHeader.map((argv) => argv.includes("push")), [true]);
+  // The token never reaches git: in no argv and no environment, and no git
+  // configuration through the environment either.
+  const basic = Buffer.from(`x-access-token:${TOKEN}`).toString("base64");
+  assert.ok(!ctx.calls.some((argv) => argv.join(" ").includes(TOKEN) || argv.join(" ").includes(basic)));
+  for (const o of ctx.execOptions) {
+    for (const [k, v] of Object.entries(o?.env ?? {})) {
+      assert.ok(!k.startsWith("GIT_CONFIG_") && !v.includes(TOKEN) && !v.includes(basic), k);
+    }
+  }
+  // The push goes to pushBase over SSH, with the push key and GitHub's pinned
+  // host keys only.
   const push = ctx.calls.findIndex((argv) => argv.includes("push"));
-  assert.equal(ctx.execOptions[push]?.env?.GIT_CONFIG_KEY_0, "http.https://github.com/.extraheader");
-  assert.equal(ctx.execOptions[push]?.env?.GIT_CONFIG_VALUE_0, `AUTHORIZATION: basic ${Buffer.from(`x-access-token:${TOKEN}`).toString("base64")}`);
+  assert.equal(ctx.calls[push].at(-2), `${githubBase}/bot/widgets.git`);
   assert.ok(!ctx.calls[push].some((a) => a.startsWith("+") || a === "--force" || a === "-f"));
+  assert.equal(ctx.execOptions[push]?.env?.GIT_SSH_COMMAND, [
+    "ssh", "-F", "/dev/null", "-i", d.paths.pushKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+    "-o", `UserKnownHostsFile=${d.paths.githubKnownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+  ].map((a) => `'${a}'`).join(" "));
+  assert.equal(RELAY_PATHS.pushBase, "git@github.com:");
 });
 
 test("a second publish replays only the new commits and fast-forwards", async () => {
@@ -425,7 +441,7 @@ test("a branch that names a blob is refused and leaves nothing that breaks the n
 });
 
 test("a push GitHub refuses gives its reason and records nothing", async () => {
-  // As push protection or a workflow change without the workflow scope would.
+  // As GitHub's push protection would.
   const d = relay();
   fs.writeFileSync(path.join(fork, "hooks", "pre-receive"), "#!/bin/sh\necho 'push declined: a secret was found' >&2\nexit 1\n", { mode: 0o755 });
   work("t", "a.txt");

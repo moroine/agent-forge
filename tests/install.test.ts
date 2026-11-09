@@ -1274,8 +1274,8 @@ test("a re-run of a finished cloud host applies OpenTofu, the playbooks and the 
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
 });
 
-// The bot's token must expire: a finished host's update is how it is replaced.
-test("a re-run of a finished cloud host replaces an expired bot token, then checks it", async () => {
+// The bot's token has no expiry; a revoked one is replaced by a finished host's update.
+test("a re-run of a finished cloud host replaces a revoked bot token, then checks it", async () => {
   await newCloud();
   const renewed = `ghp_${"Cd4".repeat(12)}`;
   const ctx = cloudLaptop({ rules: [BOT_TOKEN_STORED], answers: [2, renewed, 2, 2] });

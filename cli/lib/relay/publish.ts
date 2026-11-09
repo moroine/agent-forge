@@ -1,16 +1,17 @@
 // The relay's publish: the agent's branch arrives from the dev VM as a git
 // bundle. The relay checks it, replays its new commits as the bot's signed
 // commits, scans them with Betterleaks against upstream main's ignore file,
-// and pushes them to the bot's fork, fast-forward only. Nothing is pushed or
-// recorded unless every step before passed.
+// and pushes them to the bot's fork over SSH, fast-forward only. Nothing is
+// pushed or recorded unless every step before passed.
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { ForgeError, mustSucceed, type Context } from "../context.ts";
 import { printable } from "../printable.ts";
+import { shellQuote } from "../shell.ts";
 import { RelayError, type RelayConfig } from "./config.ts";
 import { ensureFork, type GitHub } from "./github.ts";
-import { readToken, type RelayPaths } from "./paths.ts";
+import { githubSsh, type RelayPaths } from "./paths.ts";
 import { checkAuthorship, checkCommits, validTask } from "./policy.ts";
 import { gitIn, readCommit, replaySigned, shortSha } from "./replay.ts";
 import { fileAt, scanCommits, UPSTREAM_MAIN } from "./scan.ts";
@@ -67,8 +68,8 @@ async function isAncestor(ctx: Context, repo: string, ancestor: string, of: stri
 // The refusal of a push, from git's --porcelain output, which marks a refused
 // ref with `!` (`!\t<src>:<dst>\t[rejected] (non-fast-forward)`): null when
 // the push was not refused but failed. Only a fork that moved is reported as
-// such; any other refusal (GitHub's push protection, a workflow change
-// without the workflow scope) gives GitHub's reason.
+// such; any other refusal (GitHub's push protection, say) gives GitHub's
+// reason.
 function pushRefusal(porcelain: string, t: string): string | null {
   const summary = /^!\t[^\t]*\t(.*)$/m.exec(porcelain)?.[1];
   if (summary === undefined) return null;
@@ -246,16 +247,12 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
         await save();
 
         // No `+` and no --force: GitHub refuses anything but a fast-forward or
-        // the branch's creation. The token goes to git in its environment only.
-        const token = readToken(paths.token);
-        const basic = Buffer.from(`x-access-token:${token}`).toString("base64");
-        const pushed = await ctx.exec(gitIn(repo, "push", "--porcelain", `${paths.githubBase}/${cfg.fork}.git`, `${head}:refs/heads/agent/${t}`), {
-          env: {
-            ...NO_PROMPT,
-            GIT_CONFIG_COUNT: "1",
-            GIT_CONFIG_KEY_0: "http.https://github.com/.extraheader",
-            GIT_CONFIG_VALUE_0: `AUTHORIZATION: basic ${basic}`,
-          },
+        // the branch's creation. Over SSH, with the bot's push key: the token
+        // is for the API only and never reaches git. GIT_SSH_COMMAND is a
+        // shell string, hence the quoting; git ignores it for a pushBase that
+        // is a local path (the tests').
+        const pushed = await ctx.exec(gitIn(repo, "push", "--porcelain", `${paths.pushBase}${cfg.fork}.git`, `${head}:refs/heads/agent/${t}`), {
+          env: { ...NO_PROMPT, GIT_SSH_COMMAND: githubSsh(paths).map(shellQuote).join(" ") },
         });
         if (pushed.code !== 0) {
           const refusal = pushRefusal(pushed.stdout, t);
@@ -265,9 +262,7 @@ export async function publish(d: RelayDeps, req: { branch: string; bundle: Buffe
             throw new RelayError(refusal);
           }
           // Not refused, failed: the push may have landed, so pending stays.
-          // git does not print the header; redacted all the same, in both forms.
-          const detail = oneLine(pushed.stderr).split(token).join("***").split(basic).join("***");
-          throw new ForgeError(`pushing agent/${t} to the fork failed: ${detail}`);
+          throw new ForgeError(`pushing agent/${t} to the fork failed: ${oneLine(pushed.stderr)}`);
         }
         // Recorded at once: whatever fails after this, the fork's head is the relay's.
         s.published[t] = head;

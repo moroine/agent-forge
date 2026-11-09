@@ -60,8 +60,8 @@ export async function main(io: MainIo): Promise<number> {
   if (cmd === "setup") {
     try {
       const d = buildDeps(io);
-      const pub = readFileSync(`${io.paths.signingKey}.pub`, "utf8");
-      return await relaySetup(d.ctx, d.github, d.cfg, pub, sleep);
+      const pub = (key: string) => readFileSync(`${key}.pub`, "utf8");
+      return await relaySetup(d, { push: pub(io.paths.pushKey), signing: pub(io.paths.signingKey) });
     } catch (e) {
       io.stderr(`Error: ${e instanceof RelayError ? e.message : e instanceof Error ? e.message : String(e)}`);
       return 1;

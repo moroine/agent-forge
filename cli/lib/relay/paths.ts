@@ -17,24 +17,44 @@ export function readToken(file: string): string {
 }
 
 // Where the relay keeps its files on the relay VM, as the role forge_relay lays
-// them out. The tests point each one at a temporary directory, and githubBase
-// at local bare repositories laid out as <owner>/<repo>.git.
+// them out. Fetches are anonymous, over HTTPS (githubBase); pushes go over
+// SSH with the push key (pushBase). The tests point each file at a temporary
+// directory, githubBase at local bare repositories laid out as
+// <owner>/<repo>.git, and pushBase at the same directory: a push URL is
+// `${pushBase}${fork}.git` either way.
 export type RelayPaths = {
   config: string;
   token: string;
   signingKey: string;
+  pushKey: string;
+  githubKnownHosts: string;
   mirror: string;
   stateDir: string;
   audit: string;
   githubBase: string;
+  pushBase: string;
 };
 
 export const RELAY_PATHS: RelayPaths = {
   config: "/etc/forge-relay/config.json",
   token: "/etc/forge-relay/github-token",
   signingKey: "/var/lib/forge-relay/signing-key",
+  pushKey: "/var/lib/forge-relay/push-key",
+  githubKnownHosts: "/var/lib/forge-relay/github-known-hosts",
   mirror: "/var/lib/forge-relay/mirror.git",
   stateDir: "/var/lib/forge-relay",
   audit: "/var/log/forge-relay/audit.log",
   githubBase: "https://github.com",
+  pushBase: "git@github.com:",
 };
+
+// How the relay reaches github.com over SSH as the bot, for its pushes and its
+// setup check: with the push key alone (no agent, no other identity), no user
+// or system configuration, never a prompt, and only the GitHub host keys the
+// role pinned: a key not in that file is refused, never learned.
+export function githubSsh(paths: Pick<RelayPaths, "pushKey" | "githubKnownHosts">): string[] {
+  return [
+    "ssh", "-F", "/dev/null", "-i", paths.pushKey, "-o", "IdentitiesOnly=yes", "-o", "IdentityAgent=none",
+    "-o", `UserKnownHostsFile=${paths.githubKnownHosts}`, "-o", "StrictHostKeyChecking=yes", "-o", "BatchMode=yes",
+  ];
+}

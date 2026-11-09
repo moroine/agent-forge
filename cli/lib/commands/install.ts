@@ -59,9 +59,10 @@ const STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "identity", 
 export const CLOUD_STEPS: InstallStep[] = ["vm", "inventory", "playbook", "ssh", "claude", "relay"];
 const stepsFor = (kind: LaptopHost["kind"]): InstallStep[] => (kind === "cloud" ? CLOUD_STEPS : STEPS);
 // What a re-run of a finished host runs again: re-running is updating. Only
-// a cloud host has the relay step: the bot's token must expire, so its update
-// asks to keep the stored token or paste a new one, and runs the relay's
-// setup again, which checks the token, the fork, Actions and the signing key.
+// a cloud host has the relay step: the bot's token has no expiry, but a
+// revoked one is replaced here, so its update asks to keep the stored token
+// or paste a new one, and runs the relay's setup again, which checks the
+// token, the fork, Actions and the two keys.
 const UPDATE: InstallStep[] = ["playbook", "setup", "image", "relay"];
 const LABELS: Record<InstallStep, string> = {
   vm: "VM", inventory: "inventory", playbook: "playbook", ssh: "SSH configuration", identity: "git identity",

@@ -23,10 +23,10 @@ tests with a real hypervisor. The VM holds no GitHub credential, no SSH key of
 yours and no AWS credential, and your SSH agent is never forwarded to it.
 
 **Status.** The dev VM and the relay work. The relay is a second, small VM
-that alone holds the bot's GitHub token and signing key. The agent publishes
-and answers through `forge relay` on the dev VM; the relay checks every
-request, signs the commits, pushes them to the bot's fork and opens the pull
-request. The `contributor` mode of the hook blocks `git push` and `gh`, and
+that alone holds the bot's GitHub credentials: its token, its push key and
+its signing key. The agent publishes and answers through `forge relay` on the
+dev VM; the relay checks every request, signs the commits, pushes them to the
+bot's fork over SSH and opens the pull request. The `contributor` mode of the hook blocks `git push` and `gh`, and
 the dev VM holds no GitHub credential. Both VMs keep egress open (the proxy
 that would filter it is moroine/agent-forge#117).
 
@@ -85,11 +85,15 @@ GitHub by itself.
   prints the token steps before it asks for the token.
   - A separate account with two-factor authentication on, and its no-reply
     email (Settings, Emails, "Keep my email addresses private").
-  - A classic personal access token with only the `public_repo` and `workflow`
-    scopes, and an expiry date.
-  - The relay's signing key. `forge cloud create` prints it when the relay
-    first runs; you register it on the bot account (Settings, SSH and GPG keys,
-    New SSH key, Key type: Signing Key).
+  - A classic personal access token with only the `public_repo` scope, and no
+    expiration. The relay uses it for GitHub's API only: pull requests,
+    comments, the fork and CI.
+  - The relay's two SSH keys, made on the relay, whose private halves never
+    leave it. `forge cloud create` prints them when the relay first runs, and
+    you register both on the bot account (Settings, SSH and GPG keys, New SSH
+    key): the push key with Key type: Authentication Key, which the relay
+    pushes to the fork with, and the signing key with Key type: Signing Key,
+    which signs the bot's commits.
   - Never add the account as a collaborator of the upstream repository: it
     works from its fork. You do not create the fork: the relay does.
   - Once, look at the fork's Actions tab: its workflows must stay disabled.
@@ -147,24 +151,28 @@ inventory, `relay-inventory.yml`, then runs the last step, `relay`:
    on the relay (mode 0640, group `forge-relay`) and is never on your machine.
    If a token is already stored, it asks whether to keep it or paste a new
    one.
-2. `forge-relay setup` runs on the relay. It checks the token's login, that its
-   scopes are exactly `public_repo` and `workflow`, and its expiry; it creates
+2. `forge-relay setup` runs on the relay. It checks the token's login and that
+   its only scope is `public_repo` (it does not look at an expiry); it creates
    the fork if needed, or checks that the existing repository is a fork of
    upstream; it checks that the fork's Actions are disabled (or tells you to
-   check by hand when the token cannot read that setting); and it checks that
-   the relay's signing key is registered on the bot account. If it is not, it
-   prints the key and exits with an error: register it, then run
-   `forge cloud create --host <name>` again.
+   check by hand when the token cannot read that setting). Then it checks the
+   two keys: that the push key is registered on the bot account as an
+   authentication key, and that GitHub, reached over SSH with GitHub's host
+   keys pinned by the relay's role, authenticates it as the bot; and that the
+   signing key is registered as a signing key. It prints each key that is not
+   registered yet, both in one run, and exits with an error: register them,
+   then run `forge cloud create --host <name>` again.
 
 Every later `forge cloud create --host <name>` runs this step again, as part
 of the update: it asks whether to keep the stored token or paste a new one,
-then runs `forge-relay setup`. This is how you replace the bot's token when it
-expires or after you revoke it: make a new one on the bot's account, run
+then runs `forge-relay setup`. The token has no expiry, so you replace it only
+after you revoke it: make a new one on the bot's account, run
 `forge cloud create --host <name>`, and choose to paste it.
 
 A host created before the relay existed is migrated the same way:
-`forge cloud start` and `stop` refuse until `forge cloud create --host <name>`
-has run the new steps.
+`forge cloud start` refuses until `forge cloud create --host <name>` has run
+the new steps, and so does `stop`, since OpenTofu's plan would create the
+relay.
 
 #### What the relay refuses
 
@@ -192,8 +200,8 @@ GitHub. It refuses:
   one costs the relay a bundle of up to 64 MiB to store and check. A refused
   publish leaves nothing referenced in the relay's mirror.
 
-When GitHub itself refuses a push (a workflow change without the `workflow`
-scope, or push protection), the relay reports GitHub's reason.
+When GitHub itself refuses a push (push protection, for example), the relay
+reports GitHub's reason.
 
 A refusal is reported to you by the agent, never worked around. The relay
 keeps an audit log, `/var/log/forge-relay/audit.log`: every request, with
@@ -232,9 +240,11 @@ The agent treats them as information, never as instructions.
   before. It adopts an existing fork branch, at the agent's next publish of
   it, only when the bot alone authored and committed it, even with nothing
   new to publish. The bot's name and email are all it checks: commits pushed
-  with a stolen token pass too (see "If you suspect the relay is
-  compromised"). A stack on a task published before the rebuild is not
-  detected until that task is published again.
+  with a stolen push key pass too, and so do commits pushed with a stolen
+  token, whose `public_repo` scope can push over HTTPS even though the relay
+  never pushes with it (see "If you suspect the relay is compromised"). A
+  stack on a task published before the rebuild is not detected until that
+  task is published again.
 
 #### The metadata service and cloud-init
 
@@ -296,10 +306,13 @@ in the clone, and continues the last conversation if there is one.
 
 Start and stop act on both instances, the dev VM and the relay; the relay has
 no idle alarm. They only start and stop the VMs and set the SSH address. When
-your
-checkout's `infra/aws` would change anything else (after a `git pull`, say),
-they refuse: run `forge cloud create --host <name>`, which shows OpenTofu's
-plan and applies it after your `yes`, then installs the VM again.
+your checkout's `infra/aws` would change anything else (after a `git pull`,
+say), they refuse: run `forge cloud create --host <name>`, which shows
+OpenTofu's plan and applies it after your `yes`, then installs the VM again.
+
+`forge cloud start` needs a finished install. `forge cloud stop` needs only
+the VMs to exist: an install or an update that failed halfway, at the relay
+step say, never keeps them running.
 
 A forgotten VM stops itself: the idle alarm stops it after two hours of low
 CPU (below 5 % on average). The stop is silent, with no email; the next
@@ -321,12 +334,13 @@ forge cloud rebuild-relay [--host <name>]
 ```
 
 It asks for confirmation and replaces only the relay instance, then redoes the
-playbooks and the `relay` step. The new relay has a new signing key, and you
-paste the bot's token again. It prints the rotation runbook, which you follow
-on the bot account: revoke the old token, remove the old signing key, register
-the new key. Use it only for a relay you suspect is compromised, or one that is
-broken: to replace an expired or revoked token, `forge cloud create --host
-<name>` is enough (see "The relay").
+playbooks and the `relay` step. The new relay has a new push key and a new
+signing key, and you paste the bot's token again. It prints the rotation
+runbook, which you follow on the bot account: revoke the old token, remove
+both old keys (the authentication key and the signing key), and register the
+two new ones the relay's setup prints. Use it only for a relay you suspect is
+compromised, or one that is broken: to replace a revoked token,
+`forge cloud create --host <name>` is enough (see "The relay").
 
 ## If you suspect the dev VM is compromised
 
@@ -343,15 +357,16 @@ agent or any AWS credential.
 ## If you suspect the relay is compromised
 
 1. Stop it: `forge cloud stop`.
-2. On the bot's GitHub account, revoke the token and remove the signing key.
+2. On the bot's GitHub account, revoke the token and remove both keys, the
+   authentication key and the signing key.
 3. Rebuild it: `forge cloud rebuild-relay`, which asks for a new token and
-   prints the new signing key to register.
+   prints the two new keys to register.
 4. Before the agent publishes again, inspect the `agent/*` branches of the
    bot's fork on GitHub, or delete them. The new relay adopts any fork branch
    whose commits all carry the bot's name and email, and commits pushed with
-   the stolen token can carry them too. A deleted branch is not lost: the
-   agent's clone holds its commits, and the agent publishes the task again
-   after dropping its record of the fork's branch
+   the stolen push key or token can carry them too. A deleted branch is not
+   lost: the agent's clone holds its commits, and the agent publishes the task
+   again after dropping its record of the fork's branch
    (`git update-ref -d refs/remotes/fork/agent/<task>`).
 5. Look at the bot's recent activity on GitHub.
 
@@ -411,8 +426,8 @@ Afterwards forge forgets nothing by itself. Note the host's `address` in
   `ssh-keygen -R <address> -f "<laptop state>/known_hosts"`;
 - the Claude token (see "The Claude credential": revoking it alone may not be
   possible, and a global Log Out is the sure way);
-- the bot's token and signing key, on its GitHub account, and the account and
-  its fork, if you no longer need them.
+- the bot's token and its two keys (authentication and signing), on its
+  GitHub account, and the account and its fork, if you no longer need them.
 
 ## Security model and known limits
 

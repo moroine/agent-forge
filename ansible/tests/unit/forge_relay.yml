@@ -74,6 +74,32 @@
         unit_config: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/config.json') | from_json }}"
         unit_keys: [upstream, fork, botLogin, botName, botEmail, trustedLogins, coAuthorEmails, writesPerHour]
 
+    # The pinned host keys are GitHub's, as its documentation fingerprints
+    # them: a key mistyped or split wrong in the defaults would make every
+    # push fail on the relay.
+    - name: Render github-known-hosts
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/forge_relay/templates/github-known-hosts.j2"
+        dest: "{{ unit_tmp.path }}/github-known-hosts"
+        mode: "0644"
+
+    - name: Fingerprint github-known-hosts
+      ansible.builtin.command:
+        argv: [ssh-keygen, -l, -E, sha256, -f, "{{ unit_tmp.path }}/github-known-hosts"]
+      register: unit_fingerprints
+      changed_when: false
+
+    - name: Check they are GitHub's documented fingerprints, for github.com
+      ansible.builtin.assert:
+        that:
+          - unit_fingerprints.stdout_lines | sort == unit_documented | sort
+        fail_msg: "github-known-hosts: {{ unit_fingerprints.stdout }}"
+      vars:
+        unit_documented:
+          - 256 SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU github.com (ED25519)
+          - 256 SHA256:p2QAMXNIC1TJYWeIOttrVc98/R1BUFWu3/LiyKgUfQM github.com (ECDSA)
+          - 3072 SHA256:uNiVztksCsDhcc0u9e8BujQXVUpKZIDTMczCvj3tD2s github.com (RSA)
+
     - name: Remove the scratch directory
       ansible.builtin.file:
         path: "{{ unit_tmp.path }}"

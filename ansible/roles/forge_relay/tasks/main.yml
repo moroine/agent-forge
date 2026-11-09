@@ -73,8 +73,9 @@
     # terminal for, and refuse every request.
     password_expire_max: -1
 
-# The state directory too (state.json and its lock, the signing key, the
-# mirror). os_hardening sets existing homes to 0700 on every run.
+# The state directory too (state.json and its lock, the push and signing
+# keys, GitHub's host keys, the mirror). os_hardening sets existing homes to
+# 0700 on every run.
 - name: Keep forge-relay's home private
   ansible.builtin.file:
     path: /var/lib/forge-relay
@@ -121,6 +122,38 @@
   ansible.builtin.command:
     argv: [ssh-keygen, -q, -t, ed25519, -N, "", -C, forge-relay-signing, -f, /var/lib/forge-relay/signing-key]
     creates: /var/lib/forge-relay/signing-key
+
+# The bot pushes to its fork over SSH with this key, never with its token; the
+# maintainer registers its public half on the bot's account as an
+# Authentication Key (forge-relay setup says so). Made once, like the signing
+# key, and its private half never leaves the relay.
+- name: Create the push key
+  become: true
+  become_user: forge-relay
+  ansible.builtin.command:
+    argv: [ssh-keygen, -q, -t, ed25519, -N, "", -C, forge-relay-push, -f, /var/lib/forge-relay/push-key]
+    creates: /var/lib/forge-relay/push-key
+
+# ssh-keygen writes them so; held here, since ssh and ssh-keygen refuse a
+# private key others can read.
+- name: Keep the private keys private
+  ansible.builtin.file:
+    path: "/var/lib/forge-relay/{{ item }}"
+    state: file
+    mode: "0600"
+    owner: forge-relay
+    group: forge-relay
+  loop: [signing-key, push-key]
+
+# The only host keys the relay's ssh to github.com accepts (cli/lib/relay/
+# paths.ts): GitHub's, from the role's defaults, never learned at run time.
+- name: Pin GitHub's SSH host keys
+  ansible.builtin.template:
+    src: github-known-hosts.j2
+    dest: /var/lib/forge-relay/github-known-hosts
+    mode: "0644"
+    owner: forge-relay
+    group: forge-relay
 
 # The relay's own repository: upstream main, the fork's branches and the
 # dev VM's bundles are fetched into it. Every object fetched is checked

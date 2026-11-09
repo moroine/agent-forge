@@ -59,8 +59,11 @@
     # even try the admin's. And 4 sessions per connection at most (devsec's
     # default is 10): each request is one session, the client multiplexes
     # them over one connection, and a publish holds up to 64 MiB in the
-    # relay's memory. Separate connections are bounded by sshd's MaxStartups
-    # and by the relay's own cap on publish attempts.
+    # relay's memory. MaxSessions bounds the sessions of one connection
+    # only, and sshd's MaxStartups limits only connections not yet
+    # authenticated: nothing here bounds how many authenticated connections
+    # the dev VM opens at once. The relay's cap on publish attempts bounds
+    # how many it checks an hour, not how many it holds at once.
     hardening_ssh_match_address:
       - address: "{{ forge_relay_client_cidr }}"
         rules: ["AllowUsers forge-relay", "MaxSessions 4"]

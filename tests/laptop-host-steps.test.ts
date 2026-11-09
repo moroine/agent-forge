@@ -136,8 +136,8 @@ test("the relay step refuses a token that is not a classic one, and never prints
   assert.equal(ctx.attachCalls.length, 0);
 });
 
-// A stored token may be one the relay's setup refused (wrong scopes, no
-// expiry, another account): the next run offers to replace it.
+// A stored token may be one the relay's setup refused (wrong scopes, another
+// account) or one revoked since: the next run offers to replace it.
 test("a token already on the relay can be replaced: the new one goes on stdin, neither is printed", async () => {
   const cloud: LaptopHost = { ...host, name: "forge-dev", kind: "cloud", relayAddress: "203.0.113.21" };
   const fresh = `ghp_${"Cd4".repeat(12)}`;
@@ -151,6 +151,11 @@ test("a token already on the relay can be replaced: the new one goes on stdin, n
   assert.ok(!ctx.calls.some((c) => c.join(" ").includes(fresh) || c.join(" ").includes("cat /etc/forge-relay")));
   assert.ok(![...ctx.out_lines, ...ctx.err_lines].some((l) => l.includes(fresh)));
   assert.match(ctx.attachCalls[0].argv.join(" "), /'\/usr\/local\/bin\/forge-relay' 'setup'$/);
+  // The steps ask for the token the relay's setup takes, and name both keys it prints.
+  const steps = ctx.out_lines.join("\n");
+  assert.match(steps, /token with only the public_repo scope, and no expiration/);
+  assert.doesNotMatch(steps, /workflow/);
+  assert.match(steps, /Authentication Key.*\n?.*Signing Key/);
 });
 
 test("runSetup attaches forge setup and fails on a non-zero code", async () => {

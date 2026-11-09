@@ -217,9 +217,10 @@ test("rebuild-relay replaces only the relay and redoes the playbook and the rela
   assert.ok(called(ctx).some((c) => c.includes("cat > /etc/forge-relay/github-token.new")), called(ctx).join("\n"));
   assert.deepEqual(loadHosts()[0].done, CLOUD_ALL);
   // Last, the rotation runbook: the old credentials still work on GitHub.
-  const runbook = ctx.out_lines.slice(-4).join("\n");
+  const runbook = ctx.out_lines.slice(-5).join("\n");
   assert.match(runbook, /revoke the old token/);
-  assert.match(runbook, /remove the old signing key/);
+  assert.match(runbook, /remove both old keys, the authentication key and the signing key/);
+  assert.match(runbook, /register the two new keys/);
 });
 
 test("create --host updates the listed cloud host, create alone starts a new one", async () => {
@@ -233,7 +234,7 @@ test("create --host updates the listed cloud host, create alone starts a new one
   assert.ok(apply < attached(ctx).findIndex((a) => a.includes("contributor.yml")), attached(ctx).join("\n"));
   // No first connection again.
   assert.ok(!attached(ctx).some((a) => /ubuntu@\S+ true$/.test(a)), attached(ctx).join("\n"));
-  // The relay step runs again: the bot's token expires, and this is how it is replaced.
+  // The relay step runs again: this is how a revoked bot token is replaced.
   assert.ok(ctx.err_lines.some((l) => l.startsWith("A bot token is already stored on the relay> ")), ctx.err_lines.join("\n"));
   assert.ok(attached(ctx).some((a) => a.endsWith("ubuntu@203.0.113.21 -- 'sudo' '-u' 'forge-relay' '/usr/local/bin/forge-relay' 'setup'")),
     attached(ctx).join("\n"));
@@ -260,16 +261,25 @@ test("no cloud host: start fails, and a remote host is never offered", async () 
   assert.ok(!existsSync(join(hostDir("forge-acme"), "tofu.tfvars.json")));
 });
 
-// An unfinished install (the token never pasted, say) has nothing start or
-// stop should touch on their own: the install resumes first.
-test("start and stop refuse a host whose install is not finished, before any command", async () => {
-  install(host({ done: ["vm", "inventory", "playbook", "ssh"] }));
-  for (const sub of ["start", "stop"]) {
+// An unfinished install (the token never pasted, say) has nothing start
+// should touch on its own: the install resumes first. Stop needs only the
+// instances, in OpenTofu's state once the `vm` step is done.
+test("start refuses a host whose install is not finished, stop one without its VM, before any command", async () => {
+  for (const [sub, done] of [["start", ["vm", "inventory", "playbook", "ssh"]], ["stop", []]] as const) {
+    install(host({ done: [...done] }));
     const ctx = fakeContext({ rules: RULES });
     await assert.rejects(cmdCloud(ctx, sub, { checkout: CHECKOUT, sleep: noWait }), (e: Error) =>
       e instanceof ForgeError && /forge cloud create --host forge-dev/.test(e.message), sub);
     assert.deepEqual(ctx.calls, [], sub);
   }
+});
+
+// A failed update, its relay step included, never keeps the machines running.
+test("stop: a host whose relay step did not finish is stopped", async () => {
+  install(host({ done: ["vm", "inventory", "playbook", "ssh", "claude"] }));
+  const ctx = fakeContext({ rules: RULES });
+  assert.equal(await cmdCloud(ctx, "stop", { checkout: CHECKOUT, sleep: noWait }), 0);
+  assert.equal(tfvars().running, false);
 });
 
 // Installed before the relay existed: forge cloud create --host adds it first.
