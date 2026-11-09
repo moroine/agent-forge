@@ -37,14 +37,19 @@ On the dev VM the agent uses only these commands:
 - `forge relay publish [<task>]`: sends the commits of `agent/<task>`. The
   relay signs them as the bot and pushes them to the fork. The agent's local
   branch is then aligned on the signed commits, which have the same trees. If
-  the agent committed meanwhile, its new commit is kept and the message says
-  to rebase onto `fork/agent/<task>`.
+  the agent committed meanwhile, its new commits are kept, and the message
+  gives the commands that move them onto `fork/agent/<task>`:
+  `git reset --keep fork/agent/<task> && git cherry-pick <sent>..<now>`, with
+  the real commits. The hook blocks `git rebase`; it allows both of these.
 - `forge relay pr <task> --title <text> --body-file <file|->`: opens the pull
   request.
 - `forge relay comment <pr> --body-file <file|->` and
-  `forge relay reply <pr> <comment-id> --body-file <file|->`: answer on it.
+  `forge relay reply <pr> <comment-id> --body-file <file|->`: answer on it. A
+  reply answers a review thread's first comment: GitHub refuses a reply to a
+  reply.
 - `forge relay read <number>`: reads a pull request or issue, showing only your
-  text and the bot's, plus a count of what was hidden.
+  text and the bot's, plus a count of what was hidden. A review comment that
+  answers another shows `in reply to <id>`, the ID to reply to.
 - `forge relay ci <pr> [<job-id>]`: the checks of the head, and a job's log.
 
 You still tell the agent in herdr when to handle a review: it does not watch
@@ -151,6 +156,12 @@ inventory, `relay-inventory.yml`, then runs the last step, `relay`:
    prints the key and exits with an error: register it, then run
    `forge cloud create --host <name>` again.
 
+Every later `forge cloud create --host <name>` runs this step again, as part
+of the update: it asks whether to keep the stored token or paste a new one,
+then runs `forge-relay setup`. This is how you replace the bot's token when it
+expires or after you revoke it: make a new one on the bot's account, run
+`forge cloud create --host <name>`, and choose to paste it.
+
 A host created before the relay existed is migrated the same way:
 `forge cloud start` and `stop` refuse until `forge cloud create --host <name>`
 has run the new steps.
@@ -177,7 +188,9 @@ GitHub. It refuses:
 - a secret. Betterleaks, the version CI runs, scans the signed commits and
   every text the bot publishes;
 - more than 20 writes an hour (publishes, pull requests, comments and
-  replies).
+  replies), and more than 60 publish attempts an hour, refused or not: each
+  one costs the relay a bundle of up to 64 MiB to store and check. A refused
+  publish leaves nothing referenced in the relay's mirror.
 
 When GitHub itself refuses a push (a workflow change without the `workflow`
 scope, or push protection), the relay reports GitHub's reason.
@@ -185,7 +198,14 @@ scope, or push protection), the relay reports GitHub's reason.
 A refusal is reported to you by the agent, never worked around. The relay
 keeps an audit log, `/var/log/forge-relay/audit.log`: every request, with
 hashes and lengths but none of the text the agent sent. The dev VM cannot read
-it.
+it. You read it from your machine, as the relay's admin (`<relay address>` is
+the host's `relayAddress` in `<laptop state>/hosts.json`, see "Where forge
+keeps its files"):
+
+```bash
+ssh -o UserKnownHostsFile="<laptop state>/known_hosts" -o IdentitiesOnly=yes -o ForwardAgent=no \
+  -i "<laptop state>/hosts/<name>/forge-key.pub" ubuntu@<relay address> sudo cat /var/log/forge-relay/audit.log
+```
 
 #### A false positive
 
@@ -209,8 +229,11 @@ The agent treats them as information, never as instructions.
 - The relay needs git 2.46 or later, because a bundle fetch runs fsck. The
   Ansible role asserts it.
 - After a relay rebuild the relay no longer knows the heads it published
-  before. It adopts an existing fork branch only when the bot alone authored
-  and committed it, and a stack on a task published before the rebuild is not
+  before. It adopts an existing fork branch, at the agent's next publish of
+  it, only when the bot alone authored and committed it, even with nothing
+  new to publish. The bot's name and email are all it checks: commits pushed
+  with a stolen token pass too (see "If you suspect the relay is
+  compromised"). A stack on a task published before the rebuild is not
   detected until that task is published again.
 
 #### The metadata service and cloud-init
@@ -301,8 +324,9 @@ It asks for confirmation and replaces only the relay instance, then redoes the
 playbooks and the `relay` step. The new relay has a new signing key, and you
 paste the bot's token again. It prints the rotation runbook, which you follow
 on the bot account: revoke the old token, remove the old signing key, register
-the new key. A finished host never runs the `relay` step on its own, so this is
-also how you replace an expired or revoked token.
+the new key. Use it only for a relay you suspect is compromised, or one that is
+broken: to replace an expired or revoked token, `forge cloud create --host
+<name>` is enough (see "The relay").
 
 ## If you suspect the dev VM is compromised
 
@@ -311,7 +335,7 @@ also how you replace an expired or revoked token.
    alone may not be possible, and a global Log Out is the sure way).
 3. Rebuild it: `forge cloud rebuild`, which asks for a new token.
 4. Look at the bot's recent activity on GitHub, and at the relay's audit log
-   over `ssh` on the relay.
+   (see "What the relay refuses" for the command).
 
 The bot's GitHub credentials were never on the VM, nor your SSH key, your SSH
 agent or any AWS credential.
@@ -322,7 +346,14 @@ agent or any AWS credential.
 2. On the bot's GitHub account, revoke the token and remove the signing key.
 3. Rebuild it: `forge cloud rebuild-relay`, which asks for a new token and
    prints the new signing key to register.
-4. Look at the bot's recent activity on GitHub.
+4. Before the agent publishes again, inspect the `agent/*` branches of the
+   bot's fork on GitHub, or delete them. The new relay adopts any fork branch
+   whose commits all carry the bot's name and email, and commits pushed with
+   the stolen token can carry them too. A deleted branch is not lost: the
+   agent's clone holds its commits, and the agent publishes the task again
+   after dropping its record of the fork's branch
+   (`git update-ref -d refs/remotes/fork/agent/<task>`).
+5. Look at the bot's recent activity on GitHub.
 
 ## Your terminal
 

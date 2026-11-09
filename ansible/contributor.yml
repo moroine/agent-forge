@@ -2,10 +2,19 @@
 # Turns an agent-forge host into the contributor's dev VM: site.yml first
 # (hardening, firewall, Incus, the forge user), then the forge_contributor
 # role (clone, toolchain, bot identity, `contributor` mode, launcher).
-# `forge cloud create` runs it. By hand, from a checkout:
+# `forge cloud create` runs it, before relay.yml. By hand, from a checkout:
 #   ansible-galaxy collection install -r ansible/requirements.yml
-#   ansible-playbook -i inventory.yml ansible/contributor.yml
+#   ansible-playbook -i inventory.yml ansible/contributor.yml -e @relay-link.json
 # The inventory also sets the forge_contributor_* inputs (see the role).
+# relay-link.json, which forge writes next to the inventory, holds the three
+# inputs about the relay:
+#   forge_contributor_relay_address          the relay's private IPv4 address
+#   forge_contributor_relay_host_key         the relay's host key, "ssh-ed25519 <base64>",
+#                                            the only key the dev VM trusts for it
+#   forge_contributor_relay_client_pub_dest  where, on the controller, the play
+#                                            puts the public half of the dev VM's
+#                                            relay key, for relay.yml's
+#                                            forge_relay_client_key_file
 - name: Provision the host
   ansible.builtin.import_playbook: site.yml
 
