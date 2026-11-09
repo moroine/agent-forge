@@ -4,37 +4,61 @@
 import type { RelayConfig } from "./config.ts";
 import { RelayError } from "./config.ts";
 
-// Les blocs de code et les spans de code : ce qu'ils contiennent ne notifie
-// personne, on n'y touche pas.
-const CODE = /```[\s\S]*?```|`[^`\n]+`/g;
+// Les spans de code selon CommonMark : une suite de N guillemets inversés
+// ouvre un span, qui se ferme à la prochaine suite d'exactement N (il peut
+// couvrir des lignes). Une suite sans fermeture est du texte. Ce qu'un span
+// contient ne notifie personne, on n'y touche pas. Rend les spans [début, fin[.
+function codeSpans(text: string): [number, number][] {
+  const runs = [...text.matchAll(/`+/g)].map((m) => ({ at: m.index, len: m[0].length }));
+  const spans: [number, number][] = [];
+  for (let i = 0; i < runs.length; i++) {
+    const close = runs.findIndex((r, j) => j > i && r.len === runs[i].len);
+    if (close === -1) continue;
+    spans.push([runs[i].at, runs[close].at + runs[close].len]);
+    i = close;
+  }
+  return spans;
+}
 
-// Un `@` ni précédé d'un caractère de mot (une adresse e-mail) ni d'un
-// guillemet inversé, suivi d'un login ou de `org/team`.
-const MENTION = /(?<![\w`])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9_.-]+)?)/g;
+// Un `@` qui n'est pas précédé d'un caractère de mot (une adresse e-mail),
+// suivi d'un login ou de `org/team`. Un guillemet inversé avant lui ne le
+// protège pas : seul un vrai span (codeSpans) le fait.
+const MENTION = /(?<!\w)@([A-Za-z0-9](?:[A-Za-z0-9-]{0,38})(?:\/[A-Za-z0-9_.-]+)?)/g;
 
 // Les mentions hors code d'inconnus (et toute équipe) passent dans un span de
 // code, qui ne notifie pas. `allowed` est en minuscules.
 export function neutralizeMentions(text: string, allowed: readonly string[]): string {
-  const fix = (s: string) =>
-    s.replace(MENTION, (m, name: string) => (!name.includes("/") && allowed.includes(name.toLowerCase()) ? m : `\`${m}\``));
+  // Une suite de guillemets plus longue que toutes celles du texte ne peut se
+  // fermer sur aucune autre : le span qu'on ajoute reste un span.
+  const fence = "`".repeat(Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length)) + 1);
+  // Entre deux spans, `after` dit si un span suit : une mention collée à un
+  // guillemet inversé reçoit une espace, sinon sa clôture se fondrait dans la suite.
+  const fix = (s: string, spanBefore: boolean, spanAfter: boolean) =>
+    s.replace(MENTION, (m, name: string, at: number) => {
+      if (!name.includes("/") && allowed.includes(name.toLowerCase())) return m;
+      const prev = at > 0 ? s[at - 1] : spanBefore ? "`" : "";
+      const next = at + m.length < s.length ? s[at + m.length] : spanAfter ? "`" : "";
+      return `${prev === "`" ? " " : ""}${fence}${m}${fence}${next === "`" ? " " : ""}`;
+    });
   let out = "";
   let last = 0;
-  for (const code of text.matchAll(CODE)) {
-    out += fix(text.slice(last, code.index)) + code[0];
-    last = code.index + code[0].length;
+  for (const [start, end] of codeSpans(text)) {
+    out += fix(text.slice(last, start), last > 0, true) + text.slice(start, end);
+    last = end;
   }
-  return out + fix(text.slice(last));
+  return out + fix(text.slice(last), last > 0, false);
 }
 
 // owner/repo#N, owner/repo@sha, et les URL github.com vers un ticket, une PR,
-// une discussion ou un commit. Le lookbehind évite de relire l'intérieur d'une
-// URL ou d'un chemin.
+// une discussion ou un commit, avec ou sans schéma ni `www.` (GitHub transforme
+// aussi ces formes en liens), en toute casse. Un `.` ou un `-` avant une
+// référence ne la cache pas : on refuse dans le doute, l'agent reformule.
 const REFERENCE = new RegExp(
   [
-    String.raw`https://github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/(?:issues|pull|discussions|commit)/\w+`,
-    String.raw`(?<![\w/.-])([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)(?:#\d+|@[0-9a-f]{7,40}(?!\w))`,
+    String.raw`(?:https?://)?(?:www\.)?github\.com/([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)/(?:issues|pull|discussions|commit)/\w+`,
+    String.raw`(?<![\w/])([A-Za-z0-9-]+)/([A-Za-z0-9._-]+)(?:#\d+|@[0-9a-f]{7,40}(?!\w))`,
   ].join("|"),
-  "g",
+  "gi",
 );
 
 // Les références à un dépôt autre que `upstream` (insensible à la casse), dans
@@ -54,8 +78,10 @@ export function crossReferences(text: string, upstream: string): string[] {
 // Refuse un texte trop long ou qui pointe vers un autre dépôt ; rend le texte
 // avec les mentions neutralisées (autorisés : les logins de confiance et le bot).
 export function checkPublicText(text: string, cfg: RelayConfig, max: number, what: string): string {
-  if (text.length > max) throw new RelayError(`${what} is longer than ${max} characters`);
   const refs = crossReferences(text, cfg.upstream);
   if (refs.length > 0) throw new RelayError(`${what} refers to another repository (${refs.join(", ")}): only ${cfg.upstream} may be referenced`);
-  return neutralizeMentions(text, [...cfg.trustedLogins, cfg.botLogin].map((l) => l.toLowerCase()));
+  // La longueur compte le texte publié, après neutralisation : elle l'allonge.
+  const out = neutralizeMentions(text, [...cfg.trustedLogins, cfg.botLogin].map((l) => l.toLowerCase()));
+  if (out.length > max) throw new RelayError(`${what} is longer than ${max} characters`);
+  return out;
 }

@@ -39,3 +39,35 @@ test("checkPublicText refuses a cross-reference and an over-long text", () => {
 });
 
 test("printableText keeps lines and drops escapes", () => assert.equal(printableText("a\n\tb\x1b[2Jc\x07"), "a\n\tb[2Jc"));
+
+const allowed = ["maint", "bot"];
+
+test("a mention after an unpaired backtick is still neutralized, and its wrapper cannot pair with the stray one", () =>
+  assert.equal(neutralizeMentions("`@evil", allowed), "` ``@evil``"));
+
+test("a mention touching a code span does not merge with it", () =>
+  assert.equal(neutralizeMentions("@evil`c`", allowed), "``@evil`` `c`"));
+
+test("code spans follow CommonMark: matching runs, newlines, unclosed runs are text", () => {
+  for (const t of ["``x`@evil``", "`a\n@evil`"]) assert.equal(neutralizeMentions(t, allowed), t);
+});
+
+test("references through any spelling of a github.com URL are found, upstream ones are not", () => {
+  for (const u of ["http://github.com/o/r/pull/1", "HTTPS://GITHUB.COM/o/r/pull/1", "https://www.github.com/o/r/issues/1",
+    "github.com/o/r/issues/1", "www.github.com/o/r/issues/1", "[x](http://github.com/o/r/pull/1)"]) {
+    const found = crossReferences(u, "acme/widgets");
+    assert.equal(found.length, 1, u);
+    assert.match(found[0], /o\/r\/(pull|issues)\/1$/i, u);
+  }
+  for (const u of ["http://github.com/acme/widgets/pull/1", "www.GitHub.com/ACME/widgets/issues/1", "[x](https://github.com/acme/widgets/pull/1)"]) {
+    assert.deepEqual(crossReferences(u, "acme/widgets"), [], u);
+  }
+});
+
+test("a reference glued to a dot or a dash is found", () => {
+  assert.deepEqual(crossReferences("see.o/r#1", "acme/widgets"), ["o/r#1"]);
+  assert.equal(crossReferences("see-o/r#1", "acme/widgets").length, 1);
+});
+
+test("checkPublicText measures the text it returns", () =>
+  assert.throws(() => checkPublicText("@evil", cfg, 6, "the comment"), /longer than 6/));
