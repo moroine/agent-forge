@@ -1,0 +1,123 @@
+<svg viewBox="0 0 1100 690" xmlns="http://www.w3.org/2000/svg" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif">
+  <style>
+    .bg { fill: #ffffff; }
+    .zone { fill: #f2f2f5; stroke: #d1d1d6; }
+    .box { fill: #ffffff; stroke: #c7c7cc; }
+    .api { fill: #e8f4fd; stroke: #0071e3; stroke-width: 1.5; }
+    text { fill: #1d1d1f; font-size: 12px; }
+    .ztitle { font-size: 14px; font-weight: 600; fill: #6e6e73; }
+    .t { font-size: 14px; font-weight: 600; }
+    .s { fill: #6e6e73; font-size: 12px; }
+    .call { stroke: #0071e3; stroke-width: 2; fill: none; }
+    .ssh { stroke: #6e6e73; stroke-width: 1.5; stroke-dasharray: 6 4; fill: none; }
+    .mk-call { fill: #0071e3; }
+    .mk-ssh { fill: #6e6e73; }
+    @media (prefers-color-scheme: dark) {
+      .bg { fill: #1d1d1f; }
+      .zone { fill: #2d2d2f; stroke: #424245; }
+      .box { fill: #1d1d1f; stroke: #48484a; }
+      .api { fill: #0a2540; stroke: #0a84ff; }
+      text { fill: #f5f5f7; }
+      .ztitle, .s { fill: #98989d; }
+      .call { stroke: #0a84ff; }
+      .ssh { stroke: #98989d; }
+      .mk-call { fill: #0a84ff; }
+      .mk-ssh { fill: #98989d; }
+    }
+  </style>
+  <defs>
+    <marker id="mc" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-call"/></marker>
+    <marker id="ms" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" class="mk-ssh"/></marker>
+  </defs>
+  <rect x="0" y="0" width="1100" height="690" class="bg"/>
+
+  <!-- The human's Mac -->
+  <rect x="20" y="10" width="1060" height="110" rx="12" class="zone"/>
+  <text x="36" y="32" class="ztitle">The human's Mac</text>
+  <rect x="36" y="44" width="330" height="62" rx="8" class="box"/>
+  <text x="50" y="68" class="t">Herdr App</text>
+  <text x="50" y="90" class="s">one terminal per agent, to watch or to talk to</text>
+  <rect x="385" y="44" width="330" height="62" rx="8" class="box"/>
+  <text x="399" y="68" class="t">Basic display (forge)</text>
+  <text x="399" y="90" class="s">the team, each agent's state, the Inbox</text>
+  <rect x="734" y="44" width="330" height="62" rx="8" class="box"/>
+  <text x="748" y="68" class="t">forge fetch → review → forge ship</text>
+  <text x="748" y="90" class="s">re-signs (hardware key), pushes, one PR per sub-task</text>
+
+  <!-- The human's VM -->
+  <rect x="20" y="160" width="1060" height="520" rx="12" class="zone"/>
+  <text x="36" y="182" class="ztitle">The human's VM (forge host)</text>
+  <text x="247" y="199" class="s">Team of the repository web: its size is set in the human's config</text>
+
+  <rect x="40" y="210" width="190" height="190" rx="8" class="box"/>
+  <text x="54" y="236" class="t">pilot</text>
+  <text x="54" y="256" class="s">one per VM, the human's contact</text>
+  <text x="54" y="282">• no repository</text>
+  <text x="54" y="304">• talk to: the Leads</text>
+  <text x="54" y="326">• assign</text>
+  <text x="54" y="348">• tickets (optional)</text>
+
+  <rect x="247" y="210" width="190" height="190" rx="8" class="box"/>
+  <text x="261" y="236" class="t">web-lead</text>
+  <text x="261" y="256" class="s">one ticket at a time</text>
+  <text x="261" y="282">• repository web</text>
+  <text x="261" y="304">• talk to: pilot, team</text>
+  <text x="261" y="326">• assign</text>
+  <text x="261" y="348">• read the team</text>
+  <text x="261" y="370">• ask the human</text>
+
+  <rect x="461" y="204" width="190" height="190" rx="8" class="box"/>
+  <rect x="458" y="207" width="190" height="190" rx="8" class="box"/>
+  <rect x="455" y="210" width="190" height="190" rx="8" class="box"/>
+  <text x="469" y="236" class="t">web-dev-1 · 2 · 3</text>
+  <text x="469" y="256" class="s">one sub-task at a time</text>
+  <text x="469" y="282">• repository web</text>
+  <text x="469" y="304">• publish</text>
+  <text x="469" y="326">• Docker services</text>
+  <text x="469" y="348">• talk to: Lead</text>
+
+  <rect x="662" y="210" width="190" height="190" rx="8" class="box"/>
+  <text x="676" y="236" class="t">web-reviewer</text>
+  <text x="676" y="256" class="s">fresh session per review</text>
+  <text x="676" y="282">• repository web</text>
+  <text x="676" y="304">• read the team</text>
+  <text x="676" y="326">• talk to: Lead</text>
+
+  <rect x="870" y="210" width="190" height="190" rx="8" class="box"/>
+  <text x="884" y="236" class="t">web-qa-1</text>
+  <text x="884" y="256" class="s">QA team, one to start</text>
+  <text x="884" y="282">• repository web</text>
+  <text x="884" y="304">• read the team</text>
+  <text x="884" y="326">• Docker services</text>
+  <text x="884" y="348">• talk to: Lead</text>
+
+  <line x1="135" y1="400" x2="135" y2="438" class="call" marker-start="url(#mc)" marker-end="url(#mc)"/>
+  <line x1="342" y1="400" x2="342" y2="438" class="call" marker-start="url(#mc)" marker-end="url(#mc)"/>
+  <line x1="550" y1="400" x2="550" y2="438" class="call" marker-start="url(#mc)" marker-end="url(#mc)"/>
+  <line x1="757" y1="400" x2="757" y2="438" class="call" marker-start="url(#mc)" marker-end="url(#mc)"/>
+  <line x1="965" y1="400" x2="965" y2="438" class="call" marker-start="url(#mc)" marker-end="url(#mc)"/>
+
+  <rect x="40" y="440" width="1020" height="65" rx="8" class="api"/>
+  <text x="56" y="466" class="t">forge API on the host: message · assign a sub-task · ask the human · status</text>
+  <text x="56" y="490" class="s">checks each call against the caller's capabilities, writes the journal; no container sees the host or its hc core</text>
+
+  <line x1="550" y1="505" x2="550" y2="558" class="call" marker-end="url(#mc)"/>
+  <text x="560" y="538" class="s">the host copies the devs' agent/* branches</text>
+
+  <rect x="40" y="560" width="300" height="100" rx="8" class="box"/>
+  <text x="54" y="586" class="t">origin mirror</text>
+  <text x="54" y="608" class="s">read-only: git fetch origin, then rebase</text>
+  <text x="54" y="630" class="s">refreshed at the human's gestures:</text>
+  <text x="54" y="648" class="s">forge sync, with the forwarded SSH agent</text>
+  <rect x="360" y="560" width="700" height="100" rx="8" class="box"/>
+  <text x="374" y="586" class="t">team mirror</text>
+  <text x="374" y="608" class="s">read-only: the devs' agent/* branches</text>
+  <text x="374" y="630" class="s">read by the Lead, the reviewer, the QA, and by forge fetch from the Mac</text>
+
+  <line x1="200" y1="106" x2="200" y2="206" class="ssh" marker-end="url(#ms)"/>
+  <text x="208" y="146" class="s">terminals (ssh + incus exec)</text>
+  <line x1="446" y1="106" x2="446" y2="436" class="ssh" marker-end="url(#ms)"/>
+  <text x="454" y="146" class="s">status, journal, Inbox (ssh)</text>
+  <path d="M1060 610 L1070 610 L1070 140 L900 140 L900 110" class="ssh" marker-end="url(#ms)"/>
+  <text x="910" y="134" class="s">forge fetch (ssh)</text>
+</svg>
