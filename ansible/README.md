@@ -18,8 +18,11 @@ On the controller (your machine), from a git checkout of this repository.
 ```bash
 ansible-galaxy collection install -r ansible/requirements.yml
 cp ansible/inventory.example.yml ~/forge-inventory.yml   # then edit it
-ansible-playbook -i ~/forge-inventory.yml ansible/site.yml
+ANSIBLE_PIPELINING=True ansible-playbook -i ~/forge-inventory.yml ansible/site.yml
 ```
+
+`ANSIBLE_PIPELINING=True` is optional and makes the run much faster on a remote host
+(one SSH session per task); `forge install` sets it.
 
 - **Requirements.** The controller needs ansible-core 2.20 or newer and git.
 - **Account.** Ansible connects as the machine's existing sudo account
@@ -121,7 +124,7 @@ your copy of `inventory.example.yml` to `-i` instead:
 
 ```bash
 ansible-galaxy collection install -r ansible/requirements.yml
-ansible-playbook -i ~/forge-local-inventory.yml ansible/site.yml
+ANSIBLE_PIPELINING=True ansible-playbook -i ~/forge-local-inventory.yml ansible/site.yml
 ```
 
 A second run must report `changed=0`.

@@ -570,9 +570,13 @@ async function firstConnection(ctx: Context, host: LaptopHost, address: string):
 // ansible.cfg wherever forge was run from is never read); the collections
 // live in forge's data directory. A cloud host's playbook is site.yml plus the
 // agent's role, then its relay's.
+// Pipelining sends each task's module through one SSH session instead of
+// several (temporary directory, copy, run, cleanup): on a remote host it cut a
+// task looping over 54 sysctl keys from ~15 s per key to a few seconds for the
+// whole play. It needs sudo without `requiretty`, as Ubuntu has it.
 async function playbook(ctx: Context, host: LaptopHost, checkout: string): Promise<void> {
   const collections = join(laptopDataDir(), "collections");
-  const opts = { env: { ANSIBLE_COLLECTIONS_PATH: collections }, cwd: checkout };
+  const opts = { env: { ANSIBLE_COLLECTIONS_PATH: collections, ANSIBLE_PIPELINING: "True" }, cwd: checkout };
   const requirements = join(checkout, "ansible", "requirements.yml");
   const galaxy = await ctx.attach(["ansible-galaxy", "collection", "install", "-r", requirements, "-p", collections], opts);
   if (galaxy !== 0) throw new ForgeError(`ansible-galaxy collection install failed (exit code ${galaxy})`);

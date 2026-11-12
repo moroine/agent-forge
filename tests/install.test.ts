@@ -151,9 +151,10 @@ test("a first local install runs every step in order and ends in herdr", async (
     ["ssh", "-o", "ForwardAgent=no", "-t", "forge-local", "--", "'forge' 'image' 'build'"],
     HERDR_LOCAL,
   ]);
-  // From the checkout: an ansible.cfg in the developer's current directory is never read.
+  // From the checkout: an ansible.cfg in the developer's current directory is
+  // never read. Pipelining: one SSH session per task instead of several.
   for (const a of ctx.attachCalls.filter((c) => c.argv[0].startsWith("ansible"))) {
-    assert.deepEqual(a.opts, { env: { ANSIBLE_COLLECTIONS_PATH: collections }, cwd: CHECKOUT });
+    assert.deepEqual(a.opts, { env: { ANSIBLE_COLLECTIONS_PATH: collections, ANSIBLE_PIPELINING: "True" }, cwd: CHECKOUT });
   }
   // A hand-defined Host is looked for before anything is created, and again
   // at the SSH step, after the playbook, before the host's account steps.
