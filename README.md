@@ -146,7 +146,9 @@ did not create, and says what to remove.
 With a touch-to-use hardware key, a first install asks for about a dozen
 touches: one per SSH connection. Once installed, one touch opens a connection
 that every later command reuses for 8 hours after its last use
-(`forge install --ssh-persist 2h` changes the duration).
+(`forge install --ssh-persist 2h` changes the duration). `forge team up` and
+`forge team sync`, which forward your agent, open their own connection: one
+touch each.
 
 #### What `forge install` changes on your machine
 
@@ -201,7 +203,10 @@ Host forge-local
   lives, a program running under your account can open sessions on the host
   without a touch. Signatures with your forwarded agent still ask for one each.
 - `ForwardAgent yes`: the host clones and fetches your repositories with your
-  agent. Containers never get it.
+  agent. Containers never get it. forge's own commands turn it off, except
+  `forge team up` and `forge team sync`, which keep out of the shared
+  connection: OpenSSH forwards the agent through it only if the command that
+  opened it did.
 
 The tools write their own files: Lima keeps the VM in `~/.lima/forge-local`
 (and its SSH key, which the inventory uses, in `~/.lima/_config`), and

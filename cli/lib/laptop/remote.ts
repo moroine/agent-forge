@@ -29,9 +29,13 @@ export function remoteAttach(ctx: Context, host: LaptopHost, argv: string[], tty
 // The agent forwarded, for the host commands that reach GitHub with it (the
 // team's origin mirror): `forge team up` and `forge team sync`. A cloud host
 // never gets it: its VM holds no key of the developer's.
+// Outside the shared connection (ControlPath=none): OpenSSH forwards the agent
+// to a multiplexed session only if the master connection does, and the master
+// is often opened by a command without it (NO_AGENT). This costs one key touch
+// per command, which suits a deliberate gesture.
 export function remoteAttachForwarding(ctx: Context, host: LaptopHost, argv: string[]): Promise<number> {
   if (host.kind === "cloud") throw new ForgeError(`${host.name} is a cloud host: it never gets your SSH agent, so this command is not for it.`);
-  return ctx.attach(["ssh", "-A", host.name, "--", remoteCommand(argv)]);
+  return ctx.attach(["ssh", "-A", "-o", "ControlPath=none", host.name, "--", remoteCommand(argv)]);
 }
 
 // The admin's `ssh … <command>` to `address` (the host's, or its relay's),

@@ -65,7 +65,7 @@ test("a failing clone surfaces git's stderr and names the forwarded agent", asyn
   const ctx = fakeContext({ rules: [{ match: "clone --bare", code: 128, stderr: "Permission denied (publickey)" }] });
   const err = await ensureMirror(ctx, mirror, "o/r").then(() => null, (e: Error) => e);
   assert.match(err?.message ?? "", /create mirror failed: Permission denied/);
-  assert.match(err?.message ?? "", /ForwardAgent yes/);
+  assert.match(err?.message ?? "", /forge team up/);
 });
 
 test("refreshMirror fetches heads and tags with the URL on the command line", async () => {

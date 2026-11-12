@@ -46,7 +46,10 @@ test("up checks hc, converges with the agent forwarded, then registers the machi
     { match: "hc machine ls --json", stdout: JSON.stringify({ machines: [] }) },
   ] });
   assert.equal(await cmdTeamLaptop(ctx, ["up"]), 0);
-  assert.deepEqual(ctx.attachCalls[0].argv, ["ssh", "-A", "forge-local", "--", "'forge' 'team' 'converge'"]);
+  // Hors de la connexion partagée : une connexion maître ouverte sans agent ne
+  // transmettrait pas l'agent à cette session.
+  assert.deepEqual(ctx.attachCalls[0].argv,
+    ["ssh", "-A", "-o", "ControlPath=none", "forge-local", "--", "'forge' 'team' 'converge'"]);
   const adds = ctx.calls.filter((c) => c[0] === "hc" && c[2] === "add");
   assert.deepEqual(adds.map((c) => c[4]), ["forge-local-web-lead", "forge-local-web-dev-1"]);
   assert.equal(adds[0][6], viaCommand("forge-local", "agent-web-lead"));

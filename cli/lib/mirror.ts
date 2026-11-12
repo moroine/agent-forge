@@ -75,7 +75,7 @@ export async function ensureMirror(
   if (r.code !== 0) {
     throw new ForgeError(
       `create mirror failed: ${r.stderr.trim() || `exit code ${r.code}`}\n` +
-      "Is your SSH agent forwarded? Attach with ForwardAgent yes and run the command again.");
+      "Did your SSH agent reach the host? Run forge team up from your machine: it forwards the agent.");
   }
   return "created";
 }

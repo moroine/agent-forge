@@ -185,7 +185,7 @@ async function sync(ctx: Context, cfg: ForgeConfig, team: string | undefined): P
   const origin = await refreshMirror(ctx, originMirrorPath(name), cfg.teams[name].repo);
   if (origin.code !== 0) {
     throw new ForgeError(`refreshing the mirror of ${cfg.teams[name].repo} failed: ${origin.stderr.trim() || `exit code ${origin.code}`}\n` +
-      "Is your SSH agent forwarded? Attach with ForwardAgent yes and run the command again.");
+      `Did your SSH agent reach the host? Run forge team sync ${name} from your machine: it forwards the agent.`);
   }
   const r = await refreshTeamMirror(ctx, cfg, name);
   for (const failed of r.failed) ctx.err(`WARNING: could not refresh the team mirror from ${failed}.`);
