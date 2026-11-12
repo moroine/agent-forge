@@ -25,6 +25,9 @@ export type Context = {
   prompt: Prompt;
   out(line: string): void;
   err(line: string): void;
+  // Une attente courte entre deux regards sur un état ; les tests la rendent
+  // immédiate. Absente : setTimeout.
+  sleep?(ms: number): Promise<void>;
 };
 
 // Erreur métier : le message est affiché tel quel par forge.ts, préfixé une
@@ -135,5 +138,6 @@ export function createContext(): Context {
     prompt: createPrompt(),
     out: (line) => process.stdout.write(line + "\n"),
     err: (line) => process.stderr.write(line + "\n"),
+    sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   };
 }

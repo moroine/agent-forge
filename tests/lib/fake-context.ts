@@ -92,6 +92,7 @@ export function fakeContext(opts: FakeOptions = {}): FakeContext {
 
   const fake: FakeContext = {
     exec,
+    sleep: async () => {},
     attach: async (argv, attachOpts) => {
       calls.push(argv);
       attachCalls.push({ argv, opts: attachOpts });

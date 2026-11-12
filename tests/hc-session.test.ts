@@ -75,6 +75,12 @@ test("startSession's forge-agent arguments are the ones the launcher reads: the 
   }
 });
 
+test("startSession refuses a session whose agent stops as soon as it starts", async () => {
+  const { ctx } = setup([{ match: "hc get agent", stdout: '{"state":"finished","reason":"exited","exit_code":1,"status":null}' }]);
+  await assert.rejects(startSession(ctx, memberNamed(cfg, DEV), "fix-login", "Corrige"),
+    /agent-web-dev-1's agent stopped as soon as it started \(exit code 1\)/);
+});
+
 test("startSession: a task without a branch is marked <container>-session; a failing kill is ignored", async () => {
   const { ctx } = setup([{ match: "hc kill agent", code: 1 }, { match: "hc rm agent", code: 1 }]);
   await startSession(ctx, memberNamed(cfg, DEV), "-", "Relis");

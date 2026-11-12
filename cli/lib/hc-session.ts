@@ -2,7 +2,7 @@
 // (DX 5, §5.8) : forge les pilote par `incus exec` avec un argv, jamais par un
 // shell. Le texte d'une consigne arrive comme fichier, jamais dans un argv.
 import type { Context } from "./context.ts";
-import { mustSucceed } from "./context.ts";
+import { ForgeError, mustSucceed } from "./context.ts";
 import { incus, pushText } from "./incus.ts";
 import { egressAfterStart, egressBeforeStart } from "./strict.ts";
 import type { Member } from "./team.ts";
@@ -32,15 +32,40 @@ export type SessionState = "none" | "idle" | "working" | "done" | "exited" | "un
 // terminal dont le programme est sorti reste listé par hc (`"state":"finished"`,
 // sans statut) : c'est une session morte, `exited`, pas un état inconnu.
 export async function sessionState(ctx: Context, container: string): Promise<SessionState> {
+  return (await sessionInfo(ctx, container)).state;
+}
+
+async function sessionInfo(ctx: Context, container: string): Promise<{ state: SessionState; exitCode: unknown }> {
   const r = await ctx.exec(hcArgv(container, ["get", SESSION]));
-  if (r.code !== 0) return "none";
+  if (r.code !== 0) return { state: "none", exitCode: null };
   try {
-    const t = JSON.parse(r.stdout) as { state?: unknown; status?: { state?: unknown } | null };
-    if (t.state === "finished") return "exited";
+    const t = JSON.parse(r.stdout) as { state?: unknown; exit_code?: unknown; status?: { state?: unknown } | null };
+    if (t.state === "finished") return { state: "exited", exitCode: t.exit_code };
     const state = t.status?.state;
-    return state === "idle" || state === "working" || state === "done" ? state : "unknown";
+    return { state: state === "idle" || state === "working" || state === "done" ? state : "unknown", exitCode: null };
   } catch {
-    return "unknown";
+    return { state: "unknown", exitCode: null };
+  }
+}
+
+// Un agent qui meurt au démarrage (une option refusée, un token absent) se dit
+// tout de suite, plutôt qu'un « Assigned » trompeur : quelques regards pendant
+// environ 3 s. Un statut (OSC 7501) montre que l'agent a démarré ; sans statut
+// ni sortie au bout du délai, rien ne prouve un échec.
+const STARTUP_LOOKS = 6;
+const STARTUP_STEP_MS = 500;
+
+async function requireStarted(ctx: Context, container: string): Promise<void> {
+  const sleep = ctx.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let i = 0; i < STARTUP_LOOKS; i++) {
+    await sleep(STARTUP_STEP_MS);
+    const s = await sessionInfo(ctx, container);
+    if (s.state === "exited") {
+      const code = typeof s.exitCode === "number" ? String(s.exitCode) : "unknown";
+      throw new ForgeError(`${container}'s agent stopped as soon as it started (exit code ${code}). ` +
+        "Read its screen in the forge space of its Herdr App machine, or with hc read <machine>/agent from your machine.");
+    }
+    if (s.state === "idle" || s.state === "working" || s.state === "done") return;
   }
 }
 
@@ -69,4 +94,5 @@ export async function startSession(ctx: Context, m: Member, task: string, instru
     // les arguments de claude.
     "forge-agent", "--forge-task", marker, "--instruction-file", INSTRUCTION_PATH, "--permission-mode", "auto",
   ])));
+  await requireStarted(ctx, m.name);
 }

@@ -4,6 +4,7 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
+import type { ExecOptions } from "../cli/lib/context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { cmdTeam } from "../cli/lib/commands/team.ts";
 
@@ -74,12 +75,37 @@ test("converge starts the pilot's session again when it has exited", async () =>
   const fake = FakeIncus.withRuntime();
   fake.addInstance("agent-forge", "agent-pilot", { status: "Running" });
   fake.addInstance("agent-forge", "agent-web-dev-1", { status: "Running" });
-  const ctx = fakeContext({ incus: fake, rules: [...RULES,
-    { match: "agent-pilot --user", stdout: '{"state":"finished","reason":"exited","exit_code":1,"status":null}' }] });
+  // La session du pilote est morte jusqu'au `hc run` qui la relance, puis vivante.
+  const base = fakeContext({ incus: fake, rules: RULES });
+  let ran = false;
+  const ctx = { ...base, exec: async (argv: string[], o?: ExecOptions) => {
+    const line = argv.join(" ");
+    if (line.includes("agent-pilot") && line.endsWith("-- hc get agent")) {
+      return { code: 0, stderr: "", stdout: ran ? '{"state":"live","status":{"state":"idle"}}'
+        : '{"state":"finished","reason":"exited","exit_code":1,"status":null}' };
+    }
+    if (line.includes("agent-pilot") && line.includes("-- hc run ")) ran = true;
+    return base.exec(argv, o);
+  } };
   await cmdTeam(ctx, ["converge"]);
-  const runs = ctx.calls.map((c) => c.join(" ")).filter((c) => c.includes("hc run"));
+  const runs = base.calls.map((c) => c.join(" ")).filter((c) => c.includes("hc run"));
   assert.equal(runs.length, 1, runs.join("\n"));
   assert.ok(runs[0].includes("agent-pilot") && runs[0].includes("--forge-task agent-pilot-session"), runs[0]);
+});
+
+test("converge starts the session of a pilot it has just created", async () => {
+  writeFileSync(join(home, "agent-forge", "config.json"), JSON.stringify({
+    pilot: { capabilities: ["assign"], talkTo: ["web"] },
+    teams: { web: { repo: "o/web", roles: { dev: { count: 1, capabilities: ["repo", "publish"] } } } },
+  }));
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "agent-web-dev-1", { status: "Running" });
+  const ctx = fakeContext({ incus: fake, rules: [...RULES, { match: "-- hc get agent", code: 1 }] });
+  await cmdTeam(ctx, ["converge"]);
+  const calls = ctx.calls.map((c) => c.join(" "));
+  const launch = calls.findIndex((c) => c.includes("launch") && c.includes("agent-pilot"));
+  const run = calls.findIndex((c) => c.includes("hc run") && c.includes("--forge-task agent-pilot-session"));
+  assert.ok(launch >= 0 && run > launch, calls.join("\n"));
 });
 
 test("status --json prints one JSON array and nothing else on stdout", async () => {

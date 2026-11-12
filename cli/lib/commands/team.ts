@@ -83,13 +83,12 @@ async function converge(ctx: Context, cfg: ForgeConfig, team: string | undefined
     const instance = existing.get(m.name);
     if (!instance) {
       await provisionMember(ctx, cfg, m);
-      continue;
-    }
-    if (await provisioningMarker(ctx, m.name) !== null) {
+    } else if (await provisioningMarker(ctx, m.name) !== null) {
       ctx.err(`WARNING: ${m.name} is half-provisioned: left as is. Delete it (incus --project ${forgeProject()} delete ${m.name} --force) and run converge again.`);
       continue;
+    } else if (instance.status !== "Running") {
+      await ensureRunning(ctx, m.name);
     }
-    if (instance.status !== "Running") await ensureRunning(ctx, m.name);
     // Le Pilote a une session permanente : elle repart si elle manque ou si elle
     // est morte (startSession retire d'abord l'ancien terminal).
     if (m.role === "pilot" && ["none", "exited"].includes(await sessionState(ctx, m.name))) {
