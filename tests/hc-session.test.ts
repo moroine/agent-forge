@@ -84,5 +84,7 @@ test("sessionState maps hc get to a state", async () => {
   assert.equal(await get({ match: "hc get agent", stdout: '{"status":{"app":"claude-code","state":"working"}}' }), "working");
   assert.equal(await get({ match: "hc get agent", stdout: '{"status":{"state":"done"}}' }), "done");
   assert.equal(await get({ match: "hc get agent", code: 1 }), "none");
+  // Un terminal dont le programme est sorti : hc le garde, sans statut.
+  assert.equal(await get({ match: "hc get agent", stdout: '{"state":"finished","reason":"exited","exit_code":1,"status":null}' }), "exited");
   assert.equal(await get({ match: "hc get agent", stdout: "not json" }), "unknown");
 });

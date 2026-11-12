@@ -90,8 +90,11 @@ async function converge(ctx: Context, cfg: ForgeConfig, team: string | undefined
       continue;
     }
     if (instance.status !== "Running") await ensureRunning(ctx, m.name);
-    // Le Pilote a une session permanente : elle repart si elle manque.
-    if (m.role === "pilot" && await sessionState(ctx, m.name) === "none") await startSession(ctx, m, "-", "");
+    // Le Pilote a une session permanente : elle repart si elle manque ou si elle
+    // est morte (startSession retire d'abord l'ancien terminal).
+    if (m.role === "pilot" && ["none", "exited"].includes(await sessionState(ctx, m.name))) {
+      await startSession(ctx, m, "-", "");
+    }
   }
   for (const t of Object.keys(cfg.teams).filter((x) => team === undefined || x === team)) {
     const r = await refreshTeamMirror(ctx, cfg, t);

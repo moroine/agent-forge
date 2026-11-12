@@ -22,14 +22,18 @@ export function hcArgv(container: string, args: string[]): string[] {
     "--", "hc", ...args);
 }
 
-export type SessionState = "none" | "idle" | "working" | "done" | "unknown";
+export type SessionState = "none" | "idle" | "working" | "done" | "exited" | "unknown";
 
-// `hc get agent` : un code non nul veut dire qu'il n'y a pas de terminal.
+// `hc get agent` : un code non nul veut dire qu'il n'y a pas de terminal. Un
+// terminal dont le programme est sorti reste listé par hc (`"state":"finished"`,
+// sans statut) : c'est une session morte, `exited`, pas un état inconnu.
 export async function sessionState(ctx: Context, container: string): Promise<SessionState> {
   const r = await ctx.exec(hcArgv(container, ["get", SESSION]));
   if (r.code !== 0) return "none";
   try {
-    const state = (JSON.parse(r.stdout) as { status?: { state?: unknown } }).status?.state;
+    const t = JSON.parse(r.stdout) as { state?: unknown; status?: { state?: unknown } | null };
+    if (t.state === "finished") return "exited";
+    const state = t.status?.state;
     return state === "idle" || state === "working" || state === "done" ? state : "unknown";
   } catch {
     return "unknown";

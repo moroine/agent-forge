@@ -66,6 +66,22 @@ test("converge launches only the missing members and reports a stray one without
   assert.ok(!ctx.calls.some((c) => c.includes("delete")));
 });
 
+test("converge starts the pilot's session again when it has exited", async () => {
+  writeFileSync(join(home, "agent-forge", "config.json"), JSON.stringify({
+    pilot: { capabilities: ["assign"], talkTo: ["web"] },
+    teams: { web: { repo: "o/web", roles: { dev: { count: 1, capabilities: ["repo", "publish"] } } } },
+  }));
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "agent-pilot", { status: "Running" });
+  fake.addInstance("agent-forge", "agent-web-dev-1", { status: "Running" });
+  const ctx = fakeContext({ incus: fake, rules: [...RULES,
+    { match: "agent-pilot --user", stdout: '{"state":"finished","reason":"exited","exit_code":1,"status":null}' }] });
+  await cmdTeam(ctx, ["converge"]);
+  const runs = ctx.calls.map((c) => c.join(" ")).filter((c) => c.includes("hc run"));
+  assert.equal(runs.length, 1, runs.join("\n"));
+  assert.ok(runs[0].includes("agent-pilot") && runs[0].includes("--forge-task agent-pilot-session"), runs[0]);
+});
+
 test("status --json prints one JSON array and nothing else on stdout", async () => {
   const { ctx } = setup();
   await cmdTeam(ctx, ["status"], { json: true });
