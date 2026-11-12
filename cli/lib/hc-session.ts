@@ -52,6 +52,8 @@ export async function startSession(ctx: Context, m: Member, task: string, instru
   const marker = `${m.name}-${task === "-" ? "session" : task}`;
   await mustSucceed("hc run", ctx.exec(hcArgv(m.name, [
     "run", "--bg", "--name", SESSION, "--cwd", "/workspace",
-    "forge-agent", "--forge-task", marker, "--permission-mode", "auto", "--instruction-file", INSTRUCTION_PATH,
+    // L'ordre que forge-agent lit : --forge-task, puis --instruction-file, puis
+    // les arguments de claude.
+    "forge-agent", "--forge-task", marker, "--instruction-file", INSTRUCTION_PATH, "--permission-mode", "auto",
   ])));
 }

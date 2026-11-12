@@ -4,7 +4,11 @@ import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { parseConfig } from "../cli/lib/config.ts";
 import { memberNamed } from "../cli/lib/team.ts";
-import { hcArgv, sessionState, startSession } from "../cli/lib/hc-session.ts";
+import { hcArgv, INSTRUCTION_PATH, sessionState, startSession } from "../cli/lib/hc-session.ts";
+import { spawnSync } from "node:child_process";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const cfg = parseConfig("/c.json", {
   teams: { web: { repo: "o/web", roles: { dev: { count: 1, capabilities: ["repo", "publish"] } } } },
@@ -38,11 +42,35 @@ test("startSession: old session removed, instruction pushed as a file, then hc r
   const push = calls.findIndex((c) => c.includes("file push") && c.includes("/home/aiuser/.forge/instruction.md"));
   const run = calls.findIndex((c) => c.includes("-- hc run --bg --name agent --cwd /workspace forge-agent"));
   assert.ok(kill >= 0 && rm > kill && push > rm && run > push, calls.join("\n"));
-  assert.ok(calls[run].endsWith(
-    `forge-agent --forge-task ${DEV}-fix-login --permission-mode auto --instruction-file /home/aiuser/.forge/instruction.md`));
+  assert.ok(calls[run].includes(`forge-agent --forge-task ${DEV}-fix-login `), calls[run]);
   const file = fake.files.get(`agent-forge/${DEV}/home/aiuser/.forge/instruction.md`)!;
   assert.deepEqual([file.content, file.uid, file.mode], [text, "1001", "600"]);
   assert.ok(!ctx.calls.some((c) => c.some((a) => a.includes("Corrige"))));
+});
+
+// Le lien entre les deux côtés : l'argv que startSession donne à forge-agent est
+// lu par le vrai lanceur (le fichier de consigne remplacé par un fichier local),
+// devant un faux claude qui affiche ce qu'il reçoit.
+test("startSession's forge-agent arguments are the ones the launcher reads: the instruction reaches claude", async () => {
+  const { ctx } = setup();
+  await startSession(ctx, memberNamed(cfg, DEV), "fix-login", "unused");
+  const run = ctx.calls.find((c) => c.includes("forge-agent"))!;
+  const dir = mkdtempSync(join(tmpdir(), "forge-agent-"));
+  try {
+    mkdirSync(join(dir, "bin"));
+    writeFileSync(join(dir, "bin", "claude"), '#!/bin/bash\necho "$*"\n', { mode: 0o755 });
+    writeFileSync(join(dir, "token"), "tok\n");
+    writeFileSync(join(dir, "instruction"), "Fais X");
+    const args = run.slice(run.indexOf("forge-agent") + 1)
+      .map((a) => (a === INSTRUCTION_PATH ? join(dir, "instruction") : a));
+    const r = spawnSync("bash", [join(import.meta.dirname, "..", "container", "forge-agent"), ...args], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${join(dir, "bin")}:${process.env.PATH}`, FORGE_TOKEN_FILE: join(dir, "token") },
+    });
+    assert.equal(r.stdout.trim(), "--permission-mode auto Fais X", r.stderr);
+  } finally {
+    rmSync(dir, { recursive: true });
+  }
 });
 
 test("startSession: a task without a branch is marked <container>-session; a failing kill is ignored", async () => {
