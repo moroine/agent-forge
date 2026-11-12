@@ -40,9 +40,11 @@ test("startSession: old session removed, instruction pushed as a file, then hc r
   const kill = calls.findIndex((c) => c.endsWith("-- hc kill agent"));
   const rm = calls.findIndex((c) => c.endsWith("-- hc rm agent"));
   const push = calls.findIndex((c) => c.includes("file push") && c.includes("/home/aiuser/.forge/instruction.md"));
-  const run = calls.findIndex((c) => c.includes("-- hc run --bg --name agent --cwd /workspace forge-agent"));
+  const run = calls.findIndex((c) => c.includes("-- hc run --bg --name agent "));
   assert.ok(kill >= 0 && rm > kill && push > rm && run > push, calls.join("\n"));
   assert.ok(calls[run].includes(`forge-agent --forge-task ${DEV}-fix-login `), calls[run]);
+  // Herdr App ne montre que les terminaux qui portent ces deux étiquettes.
+  assert.ok(calls[run].includes("--label herdr.space=forge --label herdr.tab=agent "), calls[run]);
   const file = fake.files.get(`agent-forge/${DEV}/home/aiuser/.forge/instruction.md`)!;
   assert.deepEqual([file.content, file.uid, file.mode], [text, "1001", "600"]);
   assert.ok(!ctx.calls.some((c) => c.some((a) => a.includes("Corrige"))));

@@ -10,6 +10,10 @@ import type { Member } from "./team.ts";
 // Le nom du terminal hc de l'agent, le même dans chaque container.
 export const SESSION = "agent";
 export const INSTRUCTION_PATH = "/home/aiuser/.forge/instruction.md";
+// Les étiquettes par lesquelles Herdr App range un terminal (guide de l'app,
+// `~/.config/herdr-app/AGENTS.md`, « The model »).
+const HERDR_SPACE_LABEL = "herdr.space";
+const HERDR_TAB_LABEL = "herdr.tab";
 
 // `hc` en tant qu'aiuser, dans /workspace, avec ce qu'il faut pour joindre son
 // core (le bus de session de l'utilisateur) sans passer par un shell de login.
@@ -56,6 +60,11 @@ export async function startSession(ctx: Context, m: Member, task: string, instru
   const marker = `${m.name}-${task === "-" ? "session" : task}`;
   await mustSucceed("hc run", ctx.exec(hcArgv(m.name, [
     "run", "--bg", "--name", SESSION, "--cwd", "/workspace",
+    // Herdr App ne montre que les terminaux étiquetés par un espace et un
+    // onglet ; des ids qu'il ne connaît pas deviennent un espace et un onglet
+    // neufs. Les mêmes ids à chaque tâche : la session suivante retombe au
+    // même endroit.
+    "--label", `${HERDR_SPACE_LABEL}=forge`, "--label", `${HERDR_TAB_LABEL}=agent`,
     // L'ordre que forge-agent lit : --forge-task, puis --instruction-file, puis
     // les arguments de claude.
     "forge-agent", "--forge-task", marker, "--instruction-file", INSTRUCTION_PATH, "--permission-mode", "auto",
