@@ -1,0 +1,70 @@
+---
+- name: Memory watchdog unit
+  hosts: render
+  gather_facts: false
+  vars_files:
+    - ../../roles/forge_memory_watchdog/defaults/main.yml
+  vars:
+    forge_user: {name: forge, ssh_keys: [ssh-ed25519 AAAA]}
+  tasks:
+    - name: Create a scratch directory
+      ansible.builtin.tempfile:
+        state: directory
+      register: unit_tmp
+
+    - name: Render the unit
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/forge_memory_watchdog/templates/forge-memory-watchdog.service.j2"
+        dest: "{{ unit_tmp.path }}/forge-memory-watchdog.service"
+        mode: "0644"
+
+    - name: Check the unit runs the installed script as the forge user, not as root
+      ansible.builtin.assert:
+        that:
+          - "'User=forge\n' in unit_text"
+          - "'ExecStart=/usr/bin/node /usr/local/lib/agent-forge/memory-watchdog.ts\n' in unit_text"
+          - "'Environment=FORGE_WATCHDOG_THRESHOLD=20\n' in unit_text"
+          - "'Environment=FORGE_WATCHDOG_SECONDS=15\n' in unit_text"
+          - "'Environment=FORGE_WATCHDOG_INTERVAL=1\n' in unit_text"
+          - "'Environment=FORGE_WATCHDOG_PREFIX=lxc.payload.agent-forge_\n' in unit_text"
+          - "'User=root' not in unit_text"
+          - "'NoNewPrivileges=yes' in unit_text"
+          - "'CapabilityBoundingSet=CAP_SYS_PTRACE\n' in unit_text"
+          - "'AmbientCapabilities=CAP_SYS_PTRACE\n' in unit_text"
+          - "'Restart=on-failure' in unit_text"
+      vars:
+        unit_text: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/forge-memory-watchdog.service') }}"
+
+    - name: Render the unit with other settings
+      ansible.builtin.template:
+        src: "{{ playbook_dir }}/../../roles/forge_memory_watchdog/templates/forge-memory-watchdog.service.j2"
+        dest: "{{ unit_tmp.path }}/custom.service"
+        mode: "0644"
+      vars:
+        forge_memory_watchdog_threshold: 35
+        forge_memory_watchdog_seconds: 30
+
+    - name: Check the threshold and the duration are variables of the role
+      ansible.builtin.assert:
+        that:
+          - "'Environment=FORGE_WATCHDOG_THRESHOLD=35\n' in unit_text"
+          - "'Environment=FORGE_WATCHDOG_SECONDS=30\n' in unit_text"
+      vars:
+        unit_text: "{{ lookup('ansible.builtin.file', unit_tmp.path ~ '/custom.service') }}"
+
+    # The script's own default and the role's are the same numbers: one place
+    # to change would not be enough otherwise.
+    - name: Check the script's defaults are the role's
+      ansible.builtin.assert:
+        that:
+          - "'FORGE_WATCHDOG_THRESHOLD\", ' ~ forge_memory_watchdog_threshold in script"
+          - "'FORGE_WATCHDOG_SECONDS\", ' ~ forge_memory_watchdog_seconds in script"
+          - "'FORGE_WATCHDOG_INTERVAL\", ' ~ forge_memory_watchdog_interval in script"
+          - "forge_memory_watchdog_cgroup_prefix in script"
+      vars:
+        script: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../../roles/forge_memory_watchdog/files/memory-watchdog.ts') }}"
+
+    - name: Remove the scratch directory
+      ansible.builtin.file:
+        path: "{{ unit_tmp.path }}"
+        state: absent

@@ -3,7 +3,8 @@
 `site.yml` provisions an agent-forge host: a fresh Ubuntu 26.04 machine, VM or
 bare metal. It hardens the OS (devsec.hardening), installs a native nftables
 firewall, fail2ban, and Incus 7.0 LTS with a btrfs storage pool. It also sets
-up one forge user with Node 24, Claude Code, Ansible and `forge`. On a machine
+up one forge user with Node 24, Claude Code, Ansible and `forge`, and a memory
+watchdog for the containers. On a machine
 that already has Ubuntu's Node, it replaces it with NodeSource's Node 24,
 which removes Ubuntu's `npm` and the packages that depend on it (NodeSource's
 `nodejs` ships its own `npm`). Everything inside Incus (project, bridge,
@@ -341,6 +342,38 @@ Linux, it also needs QEMU and a writable `/dev/kvm`: be in the `kvm` group.
   controller and writes them into the forge user's `~/.ssh/known_hosts`,
   replacing older `github.com` entries, so the first clone never asks to trust
   a key. A failed fetch stops the run.
+
+## Memory watchdog
+
+A container at its memory limit does not always get an OOM kill: the kernel
+frees the file pages of its own programs, which are read back from disk at
+once, and the container thrashes for hours (#126). `roles/forge_memory_watchdog`
+installs `forge-memory-watchdog.service`, which watches the cgroups of the
+`agent-forge` project's containers (`lxc.payload.agent-forge_*`) and, when
+`memory.pressure`'s `full avg10` stays at or above a threshold for a while,
+kills the container's process with the biggest RSS. It spares the container's
+PID 1 and `claude`, and what it kills goes to the journal:
+
+```bash
+journalctl -u forge-memory-watchdog
+```
+
+It reads the cgroups and `/proc` and sends `SIGKILL`; it configures nothing in
+Incus. It runs as the forge user, not root: with forge's `raw.idmap`, the
+container's `aiuser` is that user on the host. Under `hidepid=2` (see Hardening
+choices) the host hides those processes, so the unit holds `CAP_SYS_PTRACE`
+and nothing else.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `forge_memory_watchdog_threshold` | `20` | `full avg10`, in percent, to reach |
+| `forge_memory_watchdog_seconds` | `15` | how long it must hold |
+| `forge_memory_watchdog_interval` | `1` | seconds between two looks |
+| `forge_memory_watchdog_cgroup_prefix` | `lxc.payload.agent-forge_` | which cgroups |
+
+`vm-test.sh` reproduces the saturation (a process that keeps growing in a
+container whose `memory.high` is lower, which stalls without ever being
+OOM-killed), then checks that the watchdog killed it and the container answers.
 
 ## Incus storage pool
 

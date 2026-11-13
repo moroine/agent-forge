@@ -1,0 +1,38 @@
+# Managed by Ansible (role forge_memory_watchdog).
+[Unit]
+Description=agent-forge memory watchdog: kills the biggest process of a container stuck at its memory limit
+
+[Service]
+# The forge user, not root: with raw.idmap the container's aiuser is this user
+# on the host, so its processes can be killed without any privilege.
+User={{ forge_user.name }}
+Environment=FORGE_WATCHDOG_THRESHOLD={{ forge_memory_watchdog_threshold }}
+Environment=FORGE_WATCHDOG_SECONDS={{ forge_memory_watchdog_seconds }}
+Environment=FORGE_WATCHDOG_INTERVAL={{ forge_memory_watchdog_interval }}
+Environment=FORGE_WATCHDOG_PREFIX={{ forge_memory_watchdog_cgroup_prefix }}
+ExecStart={{ forge_memory_watchdog_node }} {{ forge_memory_watchdog_dir }}/memory-watchdog.ts
+Restart=on-failure
+RestartSec=5
+# It reads /sys/fs/cgroup and /proc and sends a signal to processes of its own
+# user: nothing else. Writing nowhere, no new privilege.
+#
+# The one capability: the host mounts /proc with hidepid=2 (devsec's
+# hardening), under which a process only sees the processes it may ptrace, and
+# the container's processes, which changed user and so are not dumpable, are not
+# among them: without it the watchdog sees none, so it can neither rank them by
+# RSS nor tell PID 1 and claude. CAP_SYS_PTRACE lifts that, for this unit only.
+# The forge user is already in incus-admin, which is root on the host.
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_SYS_PTRACE
+CapabilityBoundingSet=CAP_SYS_PTRACE
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+
+[Install]
+WantedBy=multi-user.target

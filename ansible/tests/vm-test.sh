@@ -333,7 +333,7 @@ fi
 verify() {  # $1 = true|false: run the deliberate authentication failures
   playbook "$REPO/ansible/tests/verify.yml" \
     -e "ansible_port=$SSH_PORT" -e "verify_ssh_port=$SSH_PORT" \
-    -e "verify_work=$WORK" -e "verify_negative_auth=$1"
+    -e "verify_work=$WORK" -e "verify_negative_auth=$1" -e "verify_saturation=$1"
 }
 echo "vm-test: verify"
 verify true

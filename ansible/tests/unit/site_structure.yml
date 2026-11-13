@@ -22,7 +22,7 @@
           in this order, with ansible.builtin.import_role tasks and no roles:
           section (got {{ unit_provision.roles | default(unit_imported) }}).
       loop:
-        - {file: site.yml, play: Provision the host, roles: [base, hardening, firewall, fail2ban, incus, forge_users]}
+        - {file: site.yml, play: Provision the host, roles: [base, hardening, firewall, fail2ban, incus, forge_users, forge_memory_watchdog]}
         - {file: relay.yml, play: Provision the relay, roles: [base, hardening, firewall, fail2ban, forge_relay]}
       loop_control:
         label: "{{ item.file }}"

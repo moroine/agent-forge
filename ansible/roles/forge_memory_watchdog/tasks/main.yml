@@ -1,0 +1,55 @@
+---
+# The watchdog reads the cgroups and /proc of the host and sends SIGKILL; it
+# configures nothing in Incus (the boundary rule: Ansible never configures the
+# inside of Incus, and forge never touches the host OS).
+- name: Check the watchdog's settings
+  ansible.builtin.assert:
+    that:
+      - forge_memory_watchdog_threshold | int(-1) in range(1, 101)
+      - forge_memory_watchdog_seconds | int(0) > 0
+      - forge_memory_watchdog_interval | float(0) > 0
+      - forge_memory_watchdog_cgroup_prefix is match('^[A-Za-z0-9._-]+$')
+    fail_msg: >-
+      forge_memory_watchdog_threshold must be a percentage (1 to 100),
+      forge_memory_watchdog_seconds and forge_memory_watchdog_interval positive
+      numbers, and forge_memory_watchdog_cgroup_prefix a cgroup name prefix.
+    quiet: true
+
+- name: Create the watchdog's directory
+  ansible.builtin.file:
+    path: "{{ forge_memory_watchdog_dir }}"
+    state: directory
+    mode: "0755"
+    owner: root
+    group: root
+
+# Owned by root and not writable by the forge user, whose service runs it: the
+# agent's side of the host (the forge user's home) cannot change what runs.
+- name: Install the watchdog
+  ansible.builtin.copy:
+    src: memory-watchdog.ts
+    dest: "{{ forge_memory_watchdog_dir }}/memory-watchdog.ts"
+    mode: "0644"
+    owner: root
+    group: root
+  register: forge_memory_watchdog_script
+
+- name: Install the watchdog's unit
+  ansible.builtin.template:
+    src: forge-memory-watchdog.service.j2
+    dest: /etc/systemd/system/forge-memory-watchdog.service
+    mode: "0644"
+    owner: root
+    group: root
+  register: forge_memory_watchdog_unit
+
+# Not handlers: site.yml's handlers are ordered so that sshd and the firewall
+# move together (tests/unit/site_structure.yml), and a flush here would run
+# them early. A changed script or unit restarts the service; otherwise it is
+# only kept started.
+- name: Run the watchdog, now and at boot
+  ansible.builtin.systemd_service:
+    name: forge-memory-watchdog
+    enabled: true
+    daemon_reload: "{{ forge_memory_watchdog_unit.changed }}"
+    state: "{{ 'restarted' if (forge_memory_watchdog_script.changed or forge_memory_watchdog_unit.changed) else 'started' }}"

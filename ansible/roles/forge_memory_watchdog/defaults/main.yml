@@ -1,0 +1,22 @@
+---
+# A container at its memory limit that never OOMs is thrashing: its cgroup's
+# memory.pressure shows it (#126). The watchdog kills the container's biggest
+# process when `full avg10` (percent of time every task waited for memory)
+# holds at the threshold for this many seconds.
+#
+# 20 % sits well above what a busy but healthy container reaches (a build that
+# swaps its page cache stays in single digits) and far below a thrashing one
+# (50 % and more in the field). 15 s outlasts the 10 s window of avg10, so
+# that the pressure of a process just killed has fallen before a second kill
+# can be decided.
+forge_memory_watchdog_threshold: 20
+forge_memory_watchdog_seconds: 15
+# How often it looks, in seconds: reading a few cgroup files is cheap.
+forge_memory_watchdog_interval: 1
+# Incus names a container's cgroup "lxc.payload.<project>_<container>": the
+# containers of the agent-forge project.
+forge_memory_watchdog_cgroup_prefix: lxc.payload.agent-forge_
+# Where the script goes, and the node that runs it (NodeSource's, installed by
+# the forge_users role, which comes first in site.yml).
+forge_memory_watchdog_dir: /usr/local/lib/agent-forge
+forge_memory_watchdog_node: /usr/bin/node

@@ -9,6 +9,8 @@
 #                         on forge_ssh_port (default: forge_ssh_port)
 #   verify_work           the harness's temporary directory (keys, known_hosts)
 #   verify_negative_auth  true to run the deliberate authentication failures
+#   verify_saturation     true to run the memory watchdog's saturation test (it
+#                         creates and removes the agent-forge Incus project)
 - name: Verify the provisioned host
   hosts: all
   become: true
@@ -41,3 +43,5 @@
       ansible.builtin.import_tasks: verify/incus.yml
     - name: Forge user
       ansible.builtin.import_tasks: verify/forge_users.yml
+    - name: Memory watchdog
+      ansible.builtin.import_tasks: verify/forge_memory_watchdog.yml

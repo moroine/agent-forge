@@ -55,3 +55,6 @@
     - name: Forge user
       ansible.builtin.import_role:
         name: forge_users
+    - name: Memory watchdog
+      ansible.builtin.import_role:
+        name: forge_memory_watchdog

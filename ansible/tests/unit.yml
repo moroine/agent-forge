@@ -16,6 +16,8 @@
   ansible.builtin.import_playbook: unit/incus.yml
 - name: Forge users
   ansible.builtin.import_playbook: unit/forge_users.yml
+- name: Memory watchdog
+  ansible.builtin.import_playbook: unit/forge_memory_watchdog.yml
 - name: Site playbook structure
   ansible.builtin.import_playbook: unit/site_structure.yml
 - name: Forge contributor

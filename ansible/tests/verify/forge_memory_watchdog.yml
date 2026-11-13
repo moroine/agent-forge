@@ -1,0 +1,155 @@
+---
+# A read-only query: the systemd module has no way to read these properties.
+- name: Read the watchdog's unit  # noqa: command-instead-of-module
+  ansible.builtin.command:
+    cmd: systemctl show forge-memory-watchdog --property=ActiveState,UnitFileState,User,MainPID
+  register: verify_wd_unit
+  changed_when: false
+
+- name: Check the watchdog runs, at boot, as the forge user and not as root
+  ansible.builtin.assert:
+    that:
+      - "'ActiveState=active' in verify_wd_unit.stdout"
+      - "'UnitFileState=enabled' in verify_wd_unit.stdout"
+      - "'User=' ~ forge_users[0].name in verify_wd_unit.stdout.split('\n')"
+
+- name: Read who runs the watchdog's process
+  ansible.builtin.command:
+    cmd: "ps -o user= -p {{ verify_wd_unit.stdout | regex_search('MainPID=(\\d+)', '\\1') | first }}"
+  register: verify_wd_ps
+  changed_when: false
+
+- name: Check the process belongs to the forge user
+  ansible.builtin.assert:
+    that:
+      - verify_wd_ps.stdout | trim == forge_users[0].name
+
+- name: Read the watchdog's journal
+  ansible.builtin.command:
+    cmd: journalctl -u forge-memory-watchdog --no-pager -o cat
+  register: verify_wd_journal
+  changed_when: false
+
+- name: Check it says what it watches, with the settings of the inventory
+  ansible.builtin.assert:
+    that:
+      - verify_wd_says in verify_wd_journal.stdout
+  vars:
+    verify_wd_says: >-
+      kills the biggest process when memory.pressure full avg10 stays at
+      {{ forge_memory_watchdog_threshold | default(20) }} or above for
+      {{ forge_memory_watchdog_seconds | default(15) }} s
+
+# The saturation of #126, reproduced: a container whose memory.high is below
+# what its process wants never OOMs, and stalls on memory instead. The
+# watchdog must kill that process and the container must answer again.
+#
+# memory.high (Incus's limits.memory.enforce=soft) and not a hard limit just
+# below the process's size: at memory.max the kernel kills either at once or
+# thrashes by chance, depending on the byte, while memory.high throttles
+# without ever killing, so the test does not depend on luck. Only on a throwaway
+# machine, and never in an existing agent-forge project.
+- name: Run the saturation test
+  when: verify_saturation | default(false) | bool
+  block:
+    - name: Look for an agent-forge project
+      ansible.builtin.command:
+        cmd: runuser -u {{ forge_users[0].name }} -- incus project show agent-forge
+        chdir: /
+      register: verify_wd_project
+      changed_when: false
+      failed_when: false
+
+    - name: Say the test is skipped, rather than touch an existing project
+      ansible.builtin.debug:
+        msg: >-
+          The agent-forge project exists on this machine, which is not a fresh
+          one: saturation test skipped.
+      when: verify_wd_project.rc == 0
+
+    - name: Reproduce the saturation, then check the watchdog's work
+      when: verify_wd_project.rc != 0
+      block:
+        - name: Write the process that never stops growing
+          ansible.builtin.copy:
+            dest: /tmp/verify-grow.py
+            mode: "0644"
+            content: |
+              import time
+              chunks = []
+              while True:
+                  chunks.append(bytearray(b"\x01") * (4 * 1024 * 1024))
+                  time.sleep(0.02)
+
+        - name: Create the test project, its container and its process
+          ansible.builtin.command:
+            cmd: runuser -u {{ forge_users[0].name }} -- bash -s
+            chdir: /
+            stdin: |
+              set -e
+              # incus reads its standard input, which here is this script.
+              incus() { command incus "$@" </dev/null; }
+              incus project create agent-forge -c features.images=false
+              # The forge user's ids, mapped to aiuser's 1001 as forge's profile
+              # does: the container's aiuser is the forge user on the host.
+              IDMAP="uid $(id -u) 1001"$'\n'"gid $(id -g) 1001"
+              incus launch images:ubuntu/26.04 wdtest --project agent-forge -s default \
+                -c limits.memory=160MiB -c limits.memory.enforce=soft -c limits.memory.swap=false \
+                -c raw.idmap="$IDMAP"
+              incus exec wdtest --project agent-forge -- cat /proc/1/comm --wait || true
+              incus exec wdtest --project agent-forge -- useradd -u 1001 -m aiuser
+              incus file push --mode 0644 /tmp/verify-grow.py wdtest/tmp/grow.py --project agent-forge
+              incus exec wdtest --project agent-forge -- su -s /bin/sh aiuser -c 'nohup python3 /tmp/grow.py >/dev/null 2>&1 &'
+          changed_when: true
+
+        - name: Wait for the watchdog to kill it
+          ansible.builtin.command:
+            cmd: journalctl -u forge-memory-watchdog --no-pager -o cat --since "-10min"
+          register: verify_wd_kill
+          until: "'wdtest: killed pid' in verify_wd_kill.stdout"
+          retries: 40
+          delay: 3
+          changed_when: false
+
+        - name: Check what the watchdog said
+          ansible.builtin.assert:
+            that:
+              - verify_wd_kill.stdout is search(verify_wd_killed)
+          vars:
+            verify_wd_killed: >-
+              wdtest: killed pid \d+ \(python3, \d+ MiB RSS\), the biggest of its
+              processes: memory.pressure full avg10=[\d.]+ has been
+              {{ forge_memory_watchdog_threshold | default(20) }} or above for \d+ s
+
+        # The container answers again, and the process is gone: the kill, not
+        # luck, freed it. Generous timeouts: a container just out of a stall is
+        # slow for a few seconds.
+        - name: Check the container answers, and the process is gone
+          ansible.builtin.command:
+            cmd: runuser -u {{ forge_users[0].name }} -- bash -s
+            chdir: /
+            stdin: |
+              set -e
+              timeout -k 5 60 incus exec wdtest --project agent-forge -- true </dev/null
+              ! timeout -k 5 60 incus exec wdtest --project agent-forge -- pgrep -f grow.py </dev/null
+          changed_when: false
+
+        - name: Check nothing else was killed
+          ansible.builtin.command:
+            cmd: runuser -u {{ forge_users[0].name }} -- bash -s
+            chdir: /
+            stdin: |
+              set -e
+              test "$(timeout -k 5 60 incus exec wdtest --project agent-forge -- cat /proc/1/comm </dev/null)" = systemd
+          changed_when: false
+      always:
+        - name: Remove the test container and project
+          ansible.builtin.command:
+            cmd: runuser -u {{ forge_users[0].name }} -- bash -s
+            chdir: /
+            stdin: |
+              incus() { command incus "$@" </dev/null; }
+              incus delete -f wdtest --project agent-forge || true
+              incus project delete agent-forge
+          changed_when: true
+          failed_when: false
