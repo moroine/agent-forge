@@ -141,7 +141,9 @@
     dest: "{{ forge_users_install_root }}/current"
     state: link
     force: true
-  notify: Regenerate forge's bash completion
+  notify:
+    - Regenerate forge's bash completion
+    - Restart forge-api
 
 - name: Put forge on the PATH
   ansible.builtin.file:

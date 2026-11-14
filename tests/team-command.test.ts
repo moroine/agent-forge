@@ -148,3 +148,23 @@ test("upload-pack writes nothing to stdout, then attaches git upload-pack on the
   assert.ok(argv[4].endsWith("team-web.agents.git") && argv.length === 5, argv.join(" "));
   await assert.rejects(() => cmdTeam(setup().ctx, ["upload-pack", "nope"]), /not a declared team/);
 });
+
+test("converge gives an existing member its API channel, then restarts the service; a failing restart only warns", async () => {
+  writeFileSync(join(home, "agent-forge", "config.json"), JSON.stringify({
+    teams: { web: { repo: "o/web", roles: {
+      lead: { capabilities: ["repo", "assign"], talkTo: ["team"] },
+      dev: { capabilities: ["repo", "publish"], talkTo: ["lead"] },
+    } } },
+  }));
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", "agent-web-lead", { status: "Running" });
+  fake.addInstance("agent-forge", "agent-web-dev", { status: "Running" });
+  const ctx = fakeContext({ incus: fake, rules: [...RULES, { match: "systemctl", code: 1, stderr: "no bus\n" }] });
+  assert.equal(await cmdTeam(ctx, ["converge"]), 0);
+  const calls = ctx.calls.map((c) => c.join(" "));
+  const adds = calls.flatMap((c, i) => (c.includes("config device add") && c.includes("forge-api") ? [i] : []));
+  const restart = calls.indexOf("systemctl --user try-restart forge-api.service");
+  assert.equal(adds.length, 2);
+  assert.ok(restart > Math.max(...adds), calls.join("\n"));
+  assert.ok(ctx.err_lines.some((l) => l.startsWith("WARNING: could not restart forge-api.service")));
+});

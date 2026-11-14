@@ -1,9 +1,9 @@
 // Les sessions d'un membre d'équipe tournent dans le core hc de son container
 // (DX 5, §5.8) : forge les pilote par `incus exec` avec un argv, jamais par un
 // shell. Le texte d'une consigne arrive comme fichier, jamais dans un argv.
-import type { Context } from "./context.ts";
+import type { Context, ExecResult } from "./context.ts";
 import { ForgeError, mustSucceed } from "./context.ts";
-import { incus, pushText } from "./incus.ts";
+import { execAsAgentArgv, incus, pushText } from "./incus.ts";
 import { egressAfterStart, egressBeforeStart } from "./strict.ts";
 import type { Member } from "./team.ts";
 
@@ -80,6 +80,7 @@ export async function startSession(ctx: Context, m: Member, task: string, instru
   // Leur échec est sans importance : il n'y avait peut-être pas de session.
   await ctx.exec(hcArgv(m.name, ["kill", SESSION]));
   await ctx.exec(hcArgv(m.name, ["rm", SESSION]));
+  await clearMessages(ctx, m.name);
   await mustSucceed("push the instruction",
     pushText(ctx, m.name, INSTRUCTION_PATH, instruction, { uid: 1001, gid: 1001, mode: "600" }));
   const marker = `${m.name}-${task === "-" ? "session" : task}`;
@@ -95,4 +96,75 @@ export async function startSession(ctx: Context, m: Member, task: string, instru
     "forge-agent", "--forge-task", marker, "--instruction-file", INSTRUCTION_PATH, "--permission-mode", "auto",
   ])));
   await requireStarted(ctx, m.name);
+}
+
+export const MESSAGES_DIR = "/home/aiuser/.forge/messages";
+// hc refuse un envoi tant que la sortie du terminal n'a pas fini de bouger :
+// une dizaine de regards d'une seconde, puis un refus clair.
+const SEND_ATTEMPTS = 10;
+const SEND_WAIT_MS = 1000;
+
+// Les messages ne valent que pour la session qui les a reçus : `assign` et
+// `release` vident le dossier. Un échec est sans importance (il peut ne pas
+// exister) : il ne doit pas arrêter une assignation.
+export async function clearMessages(ctx: Context, container: string): Promise<void> {
+  await execAsAgentArgv(ctx, container, ["find", MESSAGES_DIR, "-mindepth", "1", "-delete"]);
+}
+
+// Un message de l'API (DX 5, §5.4) : le corps, s'il y en a un, devient un
+// fichier du container du destinataire ; la session ne reçoit qu'une ligne, que
+// forge seul écrit : son préfixe, un identifiant de journal, le nom de
+// l'expéditeur (tiré de la socket) et le résumé, que le protocole a vérifié
+// contre sa liste de caractères. Aucun corps ne passe par un argv ni par un
+// terminal. L'avis est tapé tout de suite, même pendant un tour : Claude Code
+// le reçoit à sa prochaine frontière d'outil, dans le tour en cours.
+export async function deliverMessage(
+  ctx: Context, container: string, from: string, id: number, summary: string, body: string | null,
+): Promise<{ turn: number }> {
+  const path = `${MESSAGES_DIR}/${id}.md`;
+  if (body !== null) {
+    const pushed = await pushText(ctx, container, path, body, { uid: 1001, gid: 1001, mode: "600" });
+    if (pushed.code !== 0) {
+      throw new ForgeError(`delivery to ${container} failed: ${firstLine(pushed.stderr) || `exit code ${pushed.code}`}`);
+    }
+  }
+  const notice = `[forge] message ${id} from ${from}: ${summary}${body === null ? "" : ` (detail: ${path})`}`;
+  const sleep = ctx.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 1; ; attempt++) {
+    const r = await ctx.exec(hcArgv(container, ["send", "--json", SESSION, notice]));
+    if (r.code === 0) return { turn: sentTurn(container, r.stdout) };
+    const why = hcError(r);
+    if (why.includes("has finished")) throw new ForgeError(`${container} has no live session`);
+    if (why.includes("is still starting") && attempt < SEND_ATTEMPTS) {
+      await sleep(SEND_WAIT_MS);
+      continue;
+    }
+    throw new ForgeError(`delivery to ${container} failed: ${why || `exit code ${r.code}`}`);
+  }
+}
+
+const firstLine = (s: string) => s.trim().split("\n")[0];
+
+// Avec --json, hc écrit son erreur sur stdout, en JSON
+// (`{"error":{"kind":"finished","message":"t2 has finished"}}`, code 11) ; sans,
+// c'est une ligne sur stderr. Le message se lit des deux façons.
+function hcError(r: ExecResult): string {
+  try {
+    const message = (JSON.parse(r.stdout) as { error?: { message?: unknown } }).error?.message;
+    if (typeof message === "string") return firstLine(message);
+  } catch {
+    // Pas du JSON : la ligne de stderr.
+  }
+  return firstLine(r.stderr);
+}
+
+// La réponse de `hc send --json` (`hc schema`, SendResult) : le numéro de tour.
+function sentTurn(container: string, stdout: string): number {
+  try {
+    const turn = (JSON.parse(stdout) as { turn?: unknown }).turn;
+    if (typeof turn === "number") return turn;
+  } catch {
+    // Traité comme une réponse illisible, plus bas.
+  }
+  throw new ForgeError(`delivery to ${container} failed: hc send answered something forge cannot read`);
 }

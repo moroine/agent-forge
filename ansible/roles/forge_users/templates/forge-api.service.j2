@@ -1,0 +1,12 @@
+[Unit]
+Description=agent-forge API between containers
+
+[Service]
+# The current release, so that a new release is the one that runs after a
+# restart. It reads the config at start: `forge team converge` restarts it.
+ExecStart={{ forge_users_install_root }}/current/cli/forge api serve
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

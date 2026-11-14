@@ -1,0 +1,58 @@
+---
+# The API between containers (DX 5, part 2): `forge api serve`, a systemd *user*
+# service of the forge user, not root's. forge, run by that user, restarts it
+# (`forge team converge`, to give a new member its socket) without any
+# privilege, and the service holds exactly the access the forge user has: Incus
+# and its own files. Ansible installs the unit (host OS); forge keeps the code
+# and the Incus objects.
+#
+# Tasks run as the forge user (become_user): Ansible hands them its temporary
+# files with setfacl, which Ubuntu 26.04's cloud image lacks (the rest of this
+# role runs as root and sets owners instead).
+- name: Install acl, for the tasks run as the forge user
+  ansible.builtin.apt:
+    name: acl
+    state: present
+
+# Lingering starts the user's service manager at boot and keeps it without a
+# login: the API runs between SSH sessions and comes back after a reboot.
+- name: Keep the forge user's service manager running without a login
+  ansible.builtin.command:
+    cmd: "loginctl enable-linger {{ forge_user.name }}"
+    creates: "/var/lib/systemd/linger/{{ forge_user.name }}"
+
+- name: Create the forge user's systemd user directory
+  become: true
+  become_user: "{{ forge_user.name }}"
+  ansible.builtin.file:
+    path: "{{ forge_users_account.home }}/.config/systemd/user"
+    state: directory
+    mode: "0755"
+
+- name: Install the forge-api unit
+  become: true
+  become_user: "{{ forge_user.name }}"
+  ansible.builtin.template:
+    src: forge-api.service.j2
+    dest: "{{ forge_users_account.home }}/.config/systemd/user/forge-api.service"
+    mode: "0644"
+  notify: Restart forge-api
+
+# enable-linger starts user@<uid>.service in the background: its runtime
+# directory appears a moment later.
+- name: Wait for the forge user's service manager
+  ansible.builtin.wait_for:
+    path: "/run/user/{{ forge_users_account.uid }}/systemd/private"
+    timeout: 60
+
+- name: Enable and start forge-api
+  become: true
+  become_user: "{{ forge_user.name }}"
+  ansible.builtin.systemd_service:
+    name: forge-api.service
+    scope: user
+    enabled: true
+    state: started
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ forge_users_account.uid }}"

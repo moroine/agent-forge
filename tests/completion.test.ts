@@ -69,7 +69,7 @@ test("the completion script offers --force where it applies", () => {
 });
 
 test("the completion script offers setup", () => {
-  assert.match(completionScript("/x/forge"), /compgen -W "setup stop delete list egress image team completion"/);
+  assert.match(completionScript("/x/forge"), /compgen -W "setup stop delete list egress image team api completion"/);
 });
 
 // Lance la fonction émise dans un vrai bash, contre un forge factice qui

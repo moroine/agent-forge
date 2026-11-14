@@ -3,6 +3,8 @@
 // forge ; chaque membre est un container, que `converge` provisionne.
 import type { Context } from "../context.ts";
 import { ForgeError } from "../context.ts";
+import { ensureApiAccess, restartApiService } from "../api/access.ts";
+import { INSTRUCTION_MAX } from "../api/protocol.ts";
 import type { ForgeConfig } from "../config.ts";
 import { loadConfig } from "../config.ts";
 import { baseKey, provisioningMarker } from "../containers.ts";
@@ -26,8 +28,6 @@ const USAGE = `Usage: forge team converge [<team>]
        forge team sync <team>
        forge team for-repo <owner/repo> | task-base <team> | upload-pack <team>   (read by forge fetch and forge ship)`;
 
-// Une consigne ne dépasse pas ceci : c'est du texte, pas un fichier.
-const MAX_INSTRUCTION = 64 * 1024;
 
 export type TeamOptions = { json?: boolean; stdin?: () => Promise<string> };
 
@@ -38,7 +38,7 @@ async function readStdin(): Promise<string> {
   let size = 0;
   for await (const chunk of process.stdin) {
     size += (chunk as Buffer).length;
-    if (size > MAX_INSTRUCTION) throw new ForgeError(`the instruction is longer than ${MAX_INSTRUCTION} bytes.`);
+    if (size > INSTRUCTION_MAX) throw new ForgeError(`the instruction is longer than ${INSTRUCTION_MAX} bytes.`);
     chunks.push(chunk as Buffer);
   }
   return Buffer.concat(chunks).toString("utf8");
@@ -86,8 +86,11 @@ async function converge(ctx: Context, cfg: ForgeConfig, team: string | undefined
     } else if (await provisioningMarker(ctx, m.name) !== null) {
       ctx.err(`WARNING: ${m.name} is half-provisioned: left as is. Delete it (incus --project ${forgeProject()} delete ${m.name} --force) and run converge again.`);
       continue;
-    } else if (instance.status !== "Running") {
-      await ensureRunning(ctx, m.name);
+    } else {
+      if (instance.status !== "Running") await ensureRunning(ctx, m.name);
+      // Un container déjà là reçoit son canal d'API (et la version courante de
+      // forge-team) comme un neuf ; le sien a été posé par provisionMember.
+      await ensureApiAccess(ctx, m);
     }
     // Le Pilote a une session permanente : elle repart si elle manque ou si elle
     // est morte (startSession retire d'abord l'ancien terminal).
@@ -95,6 +98,8 @@ async function converge(ctx: Context, cfg: ForgeConfig, team: string | undefined
       await startSession(ctx, m, "-", "");
     }
   }
+  // Le service ne connaît que les membres de la config qu'il a lue au démarrage.
+  await restartApiService(ctx);
   for (const t of Object.keys(cfg.teams).filter((x) => team === undefined || x === team)) {
     const r = await refreshTeamMirror(ctx, cfg, t);
     for (const name of r.failed) ctx.err(`WARNING: could not refresh the team mirror from ${name}.`);

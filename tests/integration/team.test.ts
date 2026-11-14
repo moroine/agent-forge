@@ -95,7 +95,7 @@ test("a small team: converge, assign, publish through the team mirror, read it, 
   must("assign dev-1", team(["assign", DEV1, "it-task"], "Réponds ok."));
   const state = incus(PROJECT, ["config", "get", DEV1, "user.forge.task"]).stdout.trim();
   assert.equal(state, "it-task");
-  const session = run(hcArgv(DEV1, ["get", "agent"])[0], hcArgv(DEV1, ["get", "agent"]).slice(1));
+  const session = run("incus", hcArgv(DEV1, ["get", "agent"]).slice(1));
   assert.equal(session.status, 0, raw("hc get agent in dev-1", session));
 
   // Herdr App's transport, host end: `su - aiuser -c <line>` must reach the same

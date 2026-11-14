@@ -122,3 +122,18 @@
         verify_github_known.stdout_lines
         | reject('match', '^#') | map('regex_replace', '^\S+ ', '')
         | sort == verify_github_meta.json.ssh_keys | sort
+
+# The API between containers is a user service: it runs without a login
+# session (lingering) and after a reboot. It may still be starting just after a
+# boot.
+- name: Read the forge-api service's state
+  ansible.builtin.command:
+    cmd: "{{ verify_ssh_forge }} 'systemctl --user is-active forge-api.service'"
+  delegate_to: localhost
+  become: false
+  register: verify_forge_api
+  changed_when: false
+  until: verify_forge_api.stdout == 'active'
+  retries: 10
+  delay: 3
+  failed_when: verify_forge_api.stdout != 'active'

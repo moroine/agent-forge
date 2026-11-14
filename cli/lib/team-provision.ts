@@ -25,6 +25,7 @@ import { egressNames, PROFILE } from "./objects.ts";
 import { mirrorPath, repoRoot, workspacesDir } from "./paths.ts";
 import { applyStrictSettings, requireStrictRuntime, strictLaunchArgs } from "./strict.ts";
 import type { Member } from "./team.ts";
+import { ensureApiAccess } from "./api/access.ts";
 
 const MODE = "supervised";
 // Le seul marché de plugins que forge sait ajouter (comme Superpowers l'était
@@ -136,6 +137,7 @@ export async function provisionMember(ctx: Context, cfg: ForgeConfig, m: Member)
     rolePrompt === "" ? instructions : `${instructions}\n${rolePrompt}`, { uid: 1001, gid: 1001, mode: "644" }));
   await pushFile(ctx, "push forge-agent", join(repoRoot(), "container", "forge-agent"),
     m.name, "/usr/local/bin/forge-agent", 0, "755");
+  await ensureApiAccess(ctx, m);
 
   // Le hook et les réglages appartiennent à root : l'agent ne peut pas les
   // réécrire en place.

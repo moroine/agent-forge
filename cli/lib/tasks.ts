@@ -8,7 +8,7 @@ import { ForgeError, mustSucceed } from "./context.ts";
 import type { ForgeConfig } from "./config.ts";
 import { baseKey } from "./containers.ts";
 import { configGet, configSet, configUnset, execAsAgentArgv } from "./incus.ts";
-import { startSession } from "./hc-session.ts";
+import { clearMessages, startSession } from "./hc-session.ts";
 import { ensureRunning } from "./session.ts";
 import { members, memberNamed, type Member } from "./team.ts";
 import { validateTaskName } from "./validate.ts";
@@ -109,4 +109,5 @@ export async function release(ctx: Context, cfg: ForgeConfig, req: { to: string;
   }
   await mustSucceed("clear the task", configUnset(ctx, m.name, TASK_KEY));
   await mustSucceed("clear who assigned it", configUnset(ctx, m.name, ASSIGNED_BY_KEY));
+  await clearMessages(ctx, m.name);
 }

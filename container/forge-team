@@ -1,0 +1,118 @@
+#!/usr/bin/env node
+// forge-team : la façon dont un agent parle à ses coéquipiers et à l'humain
+// (DX 5, §5.4). Une requête JSON sur une ligne vers la socket de l'API de
+// l'hôte, une réponse sur une ligne ; l'hôte sait qui appelle par la socket, pas
+// par ce que ce script dit. Aucune dépendance.
+//
+//   forge-team message <container> <résumé>     le corps : stdin, s'il n'est pas un terminal et pas vide
+//   forge-team assign <container> [<tâche>]     la consigne : stdin
+//   forge-team release <container>
+//   forge-team ask <résumé>                     une question pour l'humain ; le corps comme pour message
+//   forge-team status
+//
+// Sorties : 0 accepté ; 1 refusé par l'API (la raison sur stderr) ; 2 socket
+// injoignable ; 64 mauvais usage.
+"use strict";
+const net = require("node:net");
+
+const SOCKET = process.env.FORGE_API_SOCKET || "/var/lib/forge/api.sock";
+const USAGE = `usage: forge-team message <container> <summary>   (the body, if any, on stdin)
+       forge-team assign <container> [<task>]    (the instruction on stdin)
+       forge-team release <container>
+       forge-team ask <summary>                  (the body, if any, on stdin)
+       forge-team status`;
+
+function usage(message) {
+  process.stderr.write(`forge-team: ${message}\n${USAGE}\n`);
+  process.exit(64);
+}
+
+// Tout stdin, ou "" quand c'est un terminal : rien à attendre alors.
+async function stdinText() {
+  if (process.stdin.isTTY) return "";
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+
+// Le corps d'un message ou d'une question : absent s'il est vide.
+async function optionalBody() {
+  const body = await stdinText();
+  return body.trim() === "" ? {} : { body };
+}
+
+async function request() {
+  const [command, ...args] = process.argv.slice(2);
+  const arity = (min, max) => {
+    if (args.length < min || args.length > max) usage(`${command} takes ${min === max ? min : `${min} to ${max}`} argument(s)`);
+  };
+  switch (command) {
+    case "message":
+      arity(2, 2);
+      return { op: "message", to: args[0], summary: args[1], ...(await optionalBody()) };
+    case "assign": {
+      arity(1, 2);
+      const text = await stdinText();
+      if (text.trim() === "") usage("assign reads the instruction from stdin");
+      return { op: "assign", to: args[0], ...(args[1] === undefined ? {} : { task: args[1] }), text };
+    }
+    case "release":
+      arity(1, 1);
+      return { op: "release", to: args[0] };
+    case "ask":
+      arity(1, 1);
+      return { op: "ask-human", summary: args[0], ...(await optionalBody()) };
+    case "status":
+      arity(0, 0);
+      return { op: "status" };
+    default:
+      return usage(command === undefined ? "a command is required" : `unknown command ${command}`);
+  }
+}
+
+// La requête part sans fermer l'écriture : le device proxy d'Incus prend la fin
+// du flux d'un côté pour la fin de la connexion, et la réponse serait perdue.
+// La réponse est une ligne, que l'on attend jusqu'à son saut de ligne.
+function call(req) {
+  return new Promise((resolve) => {
+    const socket = net.connect(SOCKET);
+    let out = "";
+    socket.setEncoding("utf8");
+    socket.on("connect", () => socket.write(`${JSON.stringify(req)}\n`));
+    socket.on("data", (chunk) => {
+      out += chunk;
+      if (out.includes("\n")) socket.destroy();
+    });
+    socket.on("error", (e) => {
+      process.stderr.write(`forge-team: cannot reach the forge API at ${SOCKET}: ${e.code || e.message}\n`);
+      process.exit(2);
+    });
+    socket.on("close", () => resolve(out));
+  });
+}
+
+(async () => {
+  const req = await request();
+  const out = await call(req);
+  let reply;
+  try {
+    reply = JSON.parse(out.split("\n")[0]);
+  } catch {
+    process.stderr.write("forge-team: the forge API sent an answer that is not JSON\n");
+    process.exit(2);
+  }
+  if (!reply.ok) {
+    process.stderr.write(`forge-team: ${reply.error}\n`);
+    process.exit(1);
+  }
+  if (reply.warning) process.stderr.write(`forge-team: warning: ${reply.warning}\n`);
+  if (req.op === "status") {
+    process.stdout.write("ok\n");
+    for (const r of reply.team) {
+      process.stdout.write(`${r.name} role=${r.role} ${r.busy ? `task=${r.task === null ? "(no branch)" : r.task}` : "free"} ` +
+        `session=${r.session}${r.waitingOn ? ` waiting-on=${r.waitingOn}` : ""}\n`);
+    }
+  } else {
+    process.stdout.write(`ok ${reply.id}\n`);
+  }
+})();

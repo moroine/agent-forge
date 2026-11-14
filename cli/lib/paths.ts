@@ -76,6 +76,18 @@ function dataDir(): string {
   return join(base, "agent-forge");
 }
 
+// Le journal de l'API entre containers y vit (DX 5, §5.4).
+export function apiDataDir(): string {
+  return join(dataDir(), "api");
+}
+
+// Les sockets de l'API sur l'hôte : un chemin court (une socket Unix tient en
+// 107 octets), dans un dossier que seul l'utilisateur forge peut lire.
+// FORGE_API_RUNTIME ne sert qu'aux tests.
+export function apiRuntimeDir(): string {
+  return process.env.FORGE_API_RUNTIME ?? `/run/user/${process.getuid!()}/forge-api`;
+}
+
 // FORGE_MIRRORS ne sert qu'aux tests.
 export function mirrorsDir(): string {
   return process.env.FORGE_MIRRORS ?? join(dataDir(), "mirrors");

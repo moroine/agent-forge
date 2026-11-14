@@ -10,6 +10,12 @@ which removes Ubuntu's `npm` and the packages that depend on it (NodeSource's
 profiles, image) is `forge setup`'s job. Design:
 `docs/superpowers/specs/2026-10-15-v2-host-ansible-design.md`.
 
+The forge user also gets a systemd user service, `forge-api.service` (`forge api
+serve`, the API the team containers call, see the main README), with lingering
+on so that it runs without a login and after a reboot. A new release restarts
+it, and so does `forge team converge`: the unit is the forge user's, not
+root's, for that reason.
+
 ## Running it
 
 On the controller (your machine), from a git checkout of this repository.

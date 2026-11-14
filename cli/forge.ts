@@ -18,6 +18,7 @@ import { cmdOpen } from "./lib/commands/open.ts";
 import { cmdFetch } from "./lib/commands/fetch.ts";
 import { cmdShip } from "./lib/commands/ship.ts";
 import { cmdRelay } from "./lib/commands/relay.ts";
+import { cmdApi } from "./lib/commands/api.ts";
 import { cmdTeam } from "./lib/commands/team.ts";
 import { cmdTeamLaptop } from "./lib/commands/team-laptop.ts";
 import { cmdHcVia } from "./lib/commands/hc-via.ts";
@@ -52,6 +53,7 @@ On the forge host:
                                     Comment on a pull request, or reply to one of its comments
   relay read <number>               Read an issue or pull request thread (trusted accounts only)
   relay ci <pr> [<job-id>]          List a pull request's CI runs, or print one job's log
+  api serve                         Answer the team containers' requests (the forge-api user service runs it)
   image build                       Build the agent-base image (Ansible, through Incus)
   image commit                      Print the commit agent-base was built from (nothing if no image)
   completion bash                   Print a bash completion function (eval it in ~/.bashrc)
@@ -100,6 +102,7 @@ function dispatch(
     case "team": return currentSide() === "laptop"
       ? cmdTeamLaptop(ctx, positionals.slice(1), { host: laptop.host, json: relay.json })
       : cmdTeam(ctx, positionals.slice(1), { json: relay.json });
+    case "api": return cmdApi(ctx, a);
     case "hc-via": return cmdHcVia(ctx, a, b, positionals[3]);
     case "hc-exec": return cmdHcExec(ctx, a, b);
     case "image": return cmdImage(ctx, a, b);

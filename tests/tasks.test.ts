@@ -37,6 +37,7 @@ test("a free developer gets a new branch from origin/main, the keys, then a sess
   const order = ["git -C /workspace status --porcelain", "git -C /workspace fetch origin",
     "git -C /workspace switch -c agent/fix-login origin/main", "-- hc run --bg --name agent"].map((s) => calls.findIndex((c) => c.includes(s)));
   assert.ok(order.every((i) => i >= 0) && order.every((i, k) => k === 0 || i > order[k - 1]), calls.join("\n"));
+  assert.ok(calls.some((c) => c.includes("find /home/aiuser/.forge/messages -mindepth 1 -delete")), "the messages are cleared");
   assert.deepEqual(
     [keys(DEV1)["user.forge.base.fix-login"], keys(DEV1)["user.forge.task"], keys(DEV1)["user.forge.assigned_by"]],
     ["origin/main", "fix-login", HUMAN]);
@@ -92,6 +93,7 @@ test("release: by the human or by who assigned; not by anyone else, not when fre
   const mine = setup({ [DEV1]: busy });
   await release(mine.ctx, cfg, { to: DEV1, by: "agent-web-lead" });
   assert.equal(await busyState(mine.ctx, DEV1), null);
+  assert.ok(mine.flat().some((c) => c.includes("find /home/aiuser/.forge/messages -mindepth 1 -delete")), "the messages are cleared");
   const human = setup({ [DEV1]: busy });
   await release(human.ctx, cfg, { to: DEV1, by: HUMAN });
   assert.equal(await busyState(human.ctx, DEV1), null);

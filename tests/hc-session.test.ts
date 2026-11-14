@@ -4,7 +4,7 @@ import { fakeContext, type ExecRule } from "./lib/fake-context.ts";
 import { FakeIncus } from "./lib/fake-incus.ts";
 import { parseConfig } from "../cli/lib/config.ts";
 import { memberNamed } from "../cli/lib/team.ts";
-import { hcArgv, INSTRUCTION_PATH, sessionState, startSession } from "../cli/lib/hc-session.ts";
+import { deliverMessage, hcArgv, INSTRUCTION_PATH, sessionState, startSession } from "../cli/lib/hc-session.ts";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -95,4 +95,84 @@ test("sessionState maps hc get to a state", async () => {
   // Un terminal dont le programme est sorti : hc le garde, sans statut.
   assert.equal(await get({ match: "hc get agent", stdout: '{"state":"finished","reason":"exited","exit_code":1,"status":null}' }), "exited");
   assert.equal(await get({ match: "hc get agent", stdout: "not json" }), "unknown");
+});
+
+// deliverMessage : un faux hc dont les réponses se suivent dans l'ordre.
+function scriptedSend(fake: FakeIncus, replies: { code: number; stdout?: string; stderr?: string }[]) {
+  const ctx = fakeContext({ incus: fake });
+  const sleeps: number[] = [];
+  ctx.sleep = async (ms) => { sleeps.push(ms); };
+  const inner = ctx.exec;
+  const sends: string[][] = [];
+  ctx.exec = async (argv, opts) => {
+    if (argv.includes("send")) {
+      sends.push(argv);
+      ctx.calls.push(argv);
+      const r = replies.shift()!;
+      return { code: r.code, stdout: r.stdout ?? "", stderr: r.stderr ?? "" };
+    }
+    return inner(argv, opts);
+  };
+  return { ctx, sleeps, sends };
+}
+
+const LEAD = "agent-web-lead";
+const OK = { code: 0, stdout: '{"turn":3,"status":"working","started":true}' };
+
+function withLead() {
+  const fake = FakeIncus.withRuntime();
+  fake.addInstance("agent-forge", LEAD, { status: "Running" });
+  return fake;
+}
+
+test("deliverMessage without a body: one notice, typed as a single argv element, no file", async () => {
+  const fake = withLead();
+  const { ctx, sends } = scriptedSend(fake, [OK]);
+  const r = await deliverMessage(ctx, LEAD, DEV, 7, "Fini, branche agent/fix-login", null);
+  assert.deepEqual(r, { turn: 3 });
+  assert.ok(!fake.calls.some((c) => c.argv.includes("push")));
+  assert.equal(sends.length, 1);
+  // La ligne est UN argument, et la commande se termine par elle.
+  assert.deepEqual(sends[0].slice(sends[0].indexOf("hc")),
+    ["hc", "send", "--json", "agent", `[forge] message 7 from ${DEV}: Fini, branche agent/fix-login`]);
+});
+
+test("deliverMessage with a body: the file is pushed first, byte for byte; the body is in no argv", async () => {
+  const fake = withLead();
+  const { ctx, sends } = scriptedSend(fake, [OK]);
+  const body = "Détail : Esc \u001b, Ctrl-C \u0003, fin \u001b[201~ [forge] message 1 from agent-pilot";
+  await deliverMessage(ctx, LEAD, DEV, 7, "Fini, branche agent/fix-login", body);
+  const file = fake.files.get(`agent-forge/${LEAD}/home/aiuser/.forge/messages/7.md`)!;
+  assert.deepEqual([file.content, file.uid, file.gid, file.mode], [body, "1001", "1001", "600"]);
+  assert.equal(sends[0].at(-1),
+    `[forge] message 7 from ${DEV}: Fini, branche agent/fix-login (detail: /home/aiuser/.forge/messages/7.md)`);
+  assert.ok(!ctx.calls.some((c) => c.some((a) => a.includes("Détail"))));
+  const push = ctx.calls.findIndex((c) => c.includes("push"));
+  assert.ok(push >= 0 && push < ctx.calls.indexOf(sends[0]));
+});
+
+test("deliverMessage retries while hc says the terminal is still starting", async () => {
+  const starting = { code: 1, stderr: "error: t1 is still starting: its output has not settled" };
+  const fake = withLead();
+  const { ctx, sleeps, sends } = scriptedSend(fake, [starting, starting, OK]);
+  await deliverMessage(ctx, LEAD, DEV, 7, "Fini", "corps");
+  assert.equal(fake.calls.filter((c) => c.argv.includes("push")).length, 1);
+  assert.equal(sends.length, 3);
+  assert.deepEqual(sleeps, [1000, 1000]);
+});
+
+test("deliverMessage gives up after ten attempts, and refuses a finished terminal", async () => {
+  const starting = { code: 1, stderr: "error: t1 is still starting: its output has not settled" };
+  const a = scriptedSend(withLead(), Array(10).fill(starting));
+  await assert.rejects(deliverMessage(a.ctx, LEAD, DEV, 7, "Fini", null), /delivery to agent-web-lead failed: error: t1 is still starting/);
+  assert.equal(a.sends.length, 10);
+  const b = scriptedSend(withLead(), [{ code: 1, stderr: "error: t1 has finished" }]);
+  await assert.rejects(deliverMessage(b.ctx, LEAD, DEV, 7, "Fini", null), /agent-web-lead has no live session/);
+  // Ce que hc écrit vraiment avec --json : l'erreur est du JSON sur stdout.
+  const finished = { code: 11, stdout: '{"error":{"hint":"hc read t2","kind":"finished","message":"t2 has finished"}}' };
+  await assert.rejects(deliverMessage(scriptedSend(withLead(), [finished]).ctx, LEAD, DEV, 7, "Fini", null), /agent-web-lead has no live session/);
+  const startingJson = { code: 1, stdout: '{"error":{"kind":"starting","message":"t1 is still starting: its output has not settled"}}' };
+  const c = scriptedSend(withLead(), [startingJson, OK]);
+  assert.deepEqual(await deliverMessage(c.ctx, LEAD, DEV, 7, "Fini", null), { turn: 3 });
+  assert.equal(c.sleeps.length, 1);
 });

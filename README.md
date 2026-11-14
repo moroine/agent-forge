@@ -282,8 +282,10 @@ A role's **capabilities** decide what its containers get:
   brings to your machine;
 - `read-team`: a read-only remote `team` with the branches of the developers,
   to read and compare;
-- `assign`, `ask-human`, `tickets`, `services`: recorded for the next parts of
-  the work, and not acted on yet.
+- `assign`, `ask-human`: what the agent may ask of the team through
+  [`forge-team`](#agents-talk-to-each-other);
+- `tickets`, `services`: recorded for the next parts of the work, and not
+  acted on yet.
 
 Other role settings: `count`, `talkTo`, `strict` (the container's egress is
 [strict](#strict-egress-mode)), `memory`, `cpu`, `plugins`. A team also takes
@@ -459,6 +461,38 @@ them. A host set up before keeps its single-agent containers, which `forge list`
 `stop`, `delete` and `egress` still manage; `forge setup` removes the old
 key-bindings block once from the host's herdr config.
 
+### Agents talk to each other
+
+An agent whose role has a `talkTo` list, or the capability `assign` or
+`ask-human`, gets a channel to the host: a Unix socket, `/var/lib/forge/api.sock`
+in its container, which only `aiuser` can open and root's directory protects.
+The command `forge-team` (pushed with the container's files) speaks on it. The
+host side is `forge api serve`, a systemd user service of the forge user that
+Ansible installs and `forge team converge` restarts.
+
+| Command | What it does |
+|---|---|
+| `forge-team message <container> "<summary>"` | Send a message to a container of the agent's `talkTo`; the body, if any, on stdin |
+| `forge-team assign <container> [<task>]` | Give a task, the instruction on stdin; the agent needs `assign`, and the same rules as `forge team assign` apply (free target, owned task) |
+| `forge-team release <container>` | Free an agent: only the one that gave the task (or you) can |
+| `forge-team ask "<summary>"` | A question for you, the detail on stdin; the agent needs `ask-human` |
+| `forge-team status` | The agents it may talk to: task, session state, and what each waits on |
+
+A message has a **summary** and an optional **body**. The summary is one line of
+200 characters at most, made of letters, digits and common punctuation: it is
+typed into the recipient's terminal, after forge's own prefix, so Herdr App
+shows `[forge] message 7 from agent-web-dev-1: Done, branch agent/fix-login`.
+Anything else goes in the body, which is written to a file of the recipient's
+container (`/home/aiuser/.forge/messages/<id>.md`, named at the end of the line)
+and never reaches a terminal. A message is refused when the recipient has no
+live session; it is delivered at once, even in the middle of the recipient's
+turn.
+
+The host knows who calls by the socket the request arrived on, never by what
+it says. Every request, accepted or refused with its reason, is a line of
+`~/.local/share/agent-forge/api/journal.jsonl` (readable by the forge user
+only). A text that holds the Claude token is refused.
+
 ### Rules for getting work back
 
 - **Never run git yourself in `~/workspaces/<container>` on the host,** and do
@@ -591,6 +625,7 @@ Both files live on the host and are optional; `forge setup` reads them.
 | An agent sends code or tokens out | Accepted in the default open mode. Strict mode limits egress to your allowlist |
 | An agent publishes to GitHub | No GitHub credential in containers, and `origin` is a read-only mirror; only `forge ship`, on your machine, pushes |
 | An agent drives other agents' terminals | Each container has its own `hc` core; the host's `forge hc-exec` serves only the containers the configuration declares, from your SSH session, never from a container |
+| An agent abuses the channel to the host | Five verbs and no more, each checked against the capabilities of the container whose socket the request came through; a summary from a short list of characters, so it cannot imitate forge's prefix or press a key; a body only as a file, never in a terminal or an argv of the host; a text that holds the Claude token refused; every call in a journal |
 | An agent reads your Claude token | The token is a file in the agent's own container (mode 600, a directory only the agent can read) and in your host's home, exported to the agent's process alone; it covers model requests only and is revocable in claude.ai. An agent can use it, so treat it as the agent's |
 | SSH brute force on the host | Keys only, fail2ban (not in local mode), a connection rate limit (`public`), an optional source restriction |
 | Your forwarded agent is abused on the host | Containers never receive it; a hardware key asks for a touch per use |

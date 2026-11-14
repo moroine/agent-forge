@@ -13,3 +13,14 @@
     mode: "0644"
     owner: root
     group: root
+
+- name: Restart forge-api
+  become: true
+  become_user: "{{ forge_user.name }}"
+  ansible.builtin.systemd_service:
+    name: forge-api.service
+    scope: user
+    state: restarted
+    daemon_reload: true
+  environment:
+    XDG_RUNTIME_DIR: "/run/user/{{ forge_users_account.uid }}"
